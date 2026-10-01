@@ -1,7 +1,9 @@
 # Terraform 실행 Role (03 §3-C.4, §3-F.4.2, §3-F.15)
 # - Root(bootstrap / foundation / rosa)별 실행 Role을 bootstrap이 소유
 # - 사람 IAM User + MFA 조건으로만 AssumeRole 허용
-# - State 접근 범위는 버킷 정책(main.tf)에서 Role별 key 접두사로 제한
+# - 현재 단계: foundation / rosa Role은 자기 State/Lock 접근만 허용
+#   AWS 서비스·IAM·PassRole 권한은 각 Root 구현 PR에서 필요한 Action/Resource만 이 파일에 추가
+#   (PassRole은 대상 Role ARN + iam:PassedToService 조건으로 제한, bootstrap apply 후 해당 Root 실행)
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
@@ -16,12 +18,8 @@ locals {
     rosa       = { state_prefix = "phase2/rosa", max_session = 14400 }
   }
 
-  # foundation / rosa Role이 생성·관리할 수 있는 IAM 이름 접두사
-  # 초기값이며 각 Root 구현 시 실제 Role 이름에 맞춰 조정 (PR로 리뷰)
-  tf_iam_prefixes = {
-    foundation = ["seokpan-fnd-", "seokpan-acct-"]
-    rosa       = ["seokpan-op-"]
-  }
+  # State 버킷 관리 권한이 없는 Root Role
+  tf_workload_roles = { for k, v in local.tf_roles : k => v if k != "bootstrap" }
 }
 
 # 신뢰 정책: 지정 사람 IAM User가 MFA 인증한 경우에만 AssumeRole
@@ -57,7 +55,8 @@ resource "aws_iam_role" "tf" {
 }
 
 # ---------------------------------------------------------------------------
-# bootstrap Role: State 버킷 관리 + TF 실행 Role 자체 관리
+# bootstrap Role: State 버킷 설정 관리 + TF 실행 Role 관리
+# 객체 접근 범위(자기 접두사), State/Version/버킷 삭제 금지는 버킷 정책(main.tf)에서 제한
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "tf_bootstrap" {
   statement {
@@ -81,8 +80,6 @@ data "aws_iam_policy_document" "tf_bootstrap" {
       "iam:GetRolePolicy",
       "iam:DeleteRolePolicy",
       "iam:ListRolePolicies",
-      "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
       "iam:ListAttachedRolePolicies",
       "iam:ListInstanceProfilesForRole",
     ]
@@ -97,111 +94,45 @@ resource "aws_iam_role_policy" "tf_bootstrap" {
 }
 
 # ---------------------------------------------------------------------------
-# foundation / rosa Role: AWS 서비스 권한(PowerUserAccess) + 접두사로 제한한 IAM 권한
-# PowerUserAccess는 IAM·Organizations를 제외하므로, IAM은 아래 범위만 추가 허용
-# State 버킷의 다른 key·버킷 설정 변경은 버킷 정책에서 차단 (main.tf)
+# foundation / rosa Role: 자기 Root의 backend 접근만 허용 (03 §3-F.15.1)
+# - State(*.tfstate): Get / Put
+# - Lock(*.tflock): Get / Put / Delete
+# - List: 자기 접두사만 (backend의 workspace_key_prefix도 자기 접두사 안에 둠)
 # ---------------------------------------------------------------------------
-resource "aws_iam_role_policy_attachment" "tf_poweruser" {
-  for_each = local.tf_iam_prefixes
-
-  role       = aws_iam_role.tf[each.key].name
-  policy_arn = "arn:aws:iam::aws:policy/PowerUserAccess"
-}
-
-data "aws_iam_policy_document" "tf_iam_scoped" {
-  for_each = local.tf_iam_prefixes
+data "aws_iam_policy_document" "tf_backend" {
+  for_each = local.tf_workload_roles
 
   statement {
-    sid = "ManageScopedRoles"
-    actions = [
-      "iam:GetRole",
-      "iam:CreateRole",
-      "iam:DeleteRole",
-      "iam:UpdateRole",
-      "iam:UpdateAssumeRolePolicy",
-      "iam:TagRole",
-      "iam:UntagRole",
-      "iam:ListRoleTags",
-      "iam:PutRolePolicy",
-      "iam:GetRolePolicy",
-      "iam:DeleteRolePolicy",
-      "iam:ListRolePolicies",
-      "iam:AttachRolePolicy",
-      "iam:DetachRolePolicy",
-      "iam:ListAttachedRolePolicies",
-      "iam:ListInstanceProfilesForRole",
-      "iam:PassRole",
-    ]
-    resources = [for p in each.value : "arn:aws:iam::${local.account_id}:role/${p}*"]
+    sid       = "ListOwnStatePrefix"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.tfstate.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${each.value.state_prefix}/*"]
+    }
   }
 
   statement {
-    sid = "ManageScopedInstanceProfiles"
-    actions = [
-      "iam:GetInstanceProfile",
-      "iam:CreateInstanceProfile",
-      "iam:DeleteInstanceProfile",
-      "iam:AddRoleToInstanceProfile",
-      "iam:RemoveRoleFromInstanceProfile",
-      "iam:TagInstanceProfile",
-      "iam:UntagInstanceProfile",
-    ]
-    resources = [for p in each.value : "arn:aws:iam::${local.account_id}:instance-profile/${p}*"]
+    sid       = "ReadWriteOwnState"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.tfstate.arn}/${each.value.state_prefix}/*.tfstate"]
   }
 
   statement {
-    sid = "ManageScopedPolicies"
-    actions = [
-      "iam:GetPolicy",
-      "iam:GetPolicyVersion",
-      "iam:ListPolicyVersions",
-      "iam:CreatePolicy",
-      "iam:DeletePolicy",
-      "iam:CreatePolicyVersion",
-      "iam:DeletePolicyVersion",
-      "iam:TagPolicy",
-      "iam:UntagPolicy",
-    ]
-    resources = [for p in each.value : "arn:aws:iam::${local.account_id}:policy/${p}*"]
-  }
-
-  statement {
-    sid       = "ReadIam"
-    actions   = ["iam:Get*", "iam:List*"]
-    resources = ["*"]
+    sid       = "ManageOwnLock"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.tfstate.arn}/${each.value.state_prefix}/*.tflock"]
   }
 }
 
-resource "aws_iam_role_policy" "tf_iam_scoped" {
-  for_each = local.tf_iam_prefixes
+resource "aws_iam_role_policy" "tf_backend" {
+  for_each = local.tf_workload_roles
 
-  name   = "seokpan-tf-${each.key}-iam-scoped"
+  name   = "seokpan-tf-${each.key}-backend"
   role   = aws_iam_role.tf[each.key].id
-  policy = data.aws_iam_policy_document.tf_iam_scoped[each.key].json
-}
-
-# rosa Role: Cluster별 OIDC Provider 관리 (Cluster-specific IAM/OIDC는 rosa 소유)
-data "aws_iam_policy_document" "tf_rosa_oidc" {
-  statement {
-    sid = "ManageOidcProvider"
-    actions = [
-      "iam:CreateOpenIDConnectProvider",
-      "iam:DeleteOpenIDConnectProvider",
-      "iam:GetOpenIDConnectProvider",
-      "iam:TagOpenIDConnectProvider",
-      "iam:UntagOpenIDConnectProvider",
-      "iam:UpdateOpenIDConnectProviderThumbprint",
-      "iam:AddClientIDToOpenIDConnectProvider",
-      "iam:RemoveClientIDFromOpenIDConnectProvider",
-    ]
-    resources = ["arn:aws:iam::${local.account_id}:oidc-provider/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "tf_rosa_oidc" {
-  name   = "seokpan-tf-rosa-oidc"
-  role   = aws_iam_role.tf["rosa"].id
-  policy = data.aws_iam_policy_document.tf_rosa_oidc.json
+  policy = data.aws_iam_policy_document.tf_backend[each.key].json
 }
 
 output "tf_exec_role_arns" {

@@ -82,11 +82,24 @@ source scripts/tf-session.sh clear        # 작업 후 세션 해제
 
 - 반드시 `source`로 실행합니다. 임시 자격증명은 현재 셸에만 있고 파일로 저장하지 않습니다.
 - backend(State)와 provider가 같은 세션을 쓰므로, **출력된 실행 주체가 작업 Root와 맞는지** 확인 후 plan/apply 합니다.
-- 각 Role은 **자기 Root의 state key 접두사(`phase2/<root>/`)만** 읽고 쓸 수 있습니다. 다른 Root의 State는 AccessDenied입니다.
-- `foundation` / `rosa` Role은 State 버킷 설정(정책·버저닝·암호화 등)을 변경할 수 없습니다.
 - AssumeRole은 프로젝트 사람 IAM User 4명이 **MFA 인증한 경우에만** 허용됩니다. MFA 미등록자는 먼저 등록합니다.
 - apply 전에 만료 시각을 확인합니다. 남은 시간이 부족하면 세션을 새로 발급한 뒤 plan부터 다시 실행합니다.
-- `foundation` / `rosa` Role의 IAM 권한은 이름 접두사로 제한된 초기값입니다. (`seokpan-fnd-*`, `seokpan-acct-*`, `seokpan-op-*`) 실제 Role 이름이 정해지면 `terraform/bootstrap/iam.tf`를 PR로 조정합니다.
+
+### Role 권한 경계
+
+| 구분 | bootstrap | foundation / rosa |
+|---|---|---|
+| 자기 State(`*.tfstate`) | Get / Put | Get / Put |
+| 자기 Lock(`*.tflock`) | Get / Put / Delete | Get / Put / Delete |
+| List | 버킷 관리 Role | 자기 접두사(`phase2/<root>/`)만 |
+| 다른 Root State | 거부 | 거부 |
+| State 삭제·Version 삭제·버킷 삭제 | 거부 | 거부 |
+| State 버킷 설정 | 관리 | 거부 |
+| AWS 서비스·IAM | `seokpan-tf-*` Role 관리만 | **없음** (Root 구현 PR에서 추가) |
+
+- foundation / rosa에 필요한 권한은 각 Root 구현 PR에서 **필요한 Service / Action / Resource만** `terraform/bootstrap/iam.tf`에 추가합니다. bootstrap apply 후 해당 Root를 실행합니다.
+- `iam:PassRole`은 대상 Role ARN과 `iam:PassedToService` 조건으로 제한합니다. 생성하는 IAM Role에는 필요하면 Permissions Boundary를 둡니다.
+- ROSA Role의 기반 자원 확인은 읽기 전용 조회 권한으로 해결하며, foundation State 읽기 권한을 주지 않습니다. (03 §3-F.15.2)
 
 ## 버전 기준
 
@@ -100,19 +113,22 @@ source scripts/tf-session.sh clear        # 작업 후 세션 해제
 
 ## backend 설정 템플릿
 
-새 Root를 만들 때 `backend.tf`에 아래를 넣고 `key`만 바꿉니다.
+새 Root를 만들 때 `backend.tf`에 아래를 넣고 `<root명>`만 바꿉니다.
 
 ```hcl
 terraform {
   backend "s3" {
-    bucket       = "seokpan-tfstate-847835841591"
-    key          = "phase2/<root명>/terraform.tfstate"
-    region       = "ap-northeast-2"
-    encrypt      = true
-    use_lockfile = true
+    bucket               = "seokpan-tfstate-847835841591"
+    key                  = "phase2/<root명>/terraform.tfstate"
+    workspace_key_prefix = "phase2/<root명>/env"
+    region               = "ap-northeast-2"
+    encrypt              = true
+    use_lockfile         = true
   }
 }
 ```
+
+- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
 
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 

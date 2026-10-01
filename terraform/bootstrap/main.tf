@@ -92,10 +92,11 @@ resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
   }
 }
 
-# State 버킷 정책
+# State 버킷 정책 (03 §3-F.15.1)
 # 1) HTTP(비암호화) 요청 거부
-# 2) TF 실행 Role은 자기 Root의 state key 접두사 밖의 객체에 접근 불가 (03 §3-F.15.1)
-# 3) foundation / rosa Role은 State 버킷 설정 변경 불가 (목록·위치·버저닝 조회만 허용)
+# 2) TF 실행 Role은 자기 Root의 state key 접두사 밖 객체 접근 불가
+# 3) TF 실행 Role은 State 객체 삭제·객체 Version 삭제·버킷 삭제 불가 (Lock 삭제만 허용)
+# 4) foundation / rosa Role은 자기 접두사 밖 List 불가, 그 외 버킷 단위 작업(설정 조회·변경) 불가
 # 사람 IAM User(AdministratorAccess)의 직접 접근은 막지 않음 (03 §3-C.3 협업 모델)
 resource "aws_s3_bucket_policy" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
@@ -111,23 +112,40 @@ resource "aws_s3_bucket_policy" "tfstate" {
         Condition = { Bool = { "aws:SecureTransport" = "false" } }
       }],
       [for k, r in aws_iam_role.tf : {
-        Sid         = "DenyOutsideOwnStatePrefix${title(k)}"
+        Sid         = "DenyObjectsOutsideOwnPrefix${title(k)}"
         Effect      = "Deny"
         Principal   = { AWS = r.arn }
         Action      = "s3:*"
         NotResource = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/${local.tf_roles[k].state_prefix}/*"]
       }],
       [{
-        Sid       = "DenyBucketConfigChangesByWorkloadRoles"
+        Sid       = "DenyVersionAndBucketDeleteByTfRoles"
         Effect    = "Deny"
-        Principal = { AWS = [aws_iam_role.tf["foundation"].arn, aws_iam_role.tf["rosa"].arn] }
-        NotAction = [
-          "s3:ListBucket",
-          "s3:ListBucketVersions",
-          "s3:GetBucketLocation",
-          "s3:GetBucketVersioning",
-        ]
-        Resource = aws_s3_bucket.tfstate.arn
+        Principal = { AWS = [for r in aws_iam_role.tf : r.arn] }
+        Action    = ["s3:DeleteObjectVersion", "s3:DeleteBucket"]
+        Resource  = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/*"]
+      }],
+      [{
+        Sid       = "DenyStateObjectDeleteByTfRoles"
+        Effect    = "Deny"
+        Principal = { AWS = [for r in aws_iam_role.tf : r.arn] }
+        Action    = "s3:DeleteObject"
+        Resource  = "${aws_s3_bucket.tfstate.arn}/*.tfstate"
+      }],
+      [for k, v in local.tf_workload_roles : {
+        Sid       = "DenyListOutsideOwnPrefix${title(k)}"
+        Effect    = "Deny"
+        Principal = { AWS = aws_iam_role.tf[k].arn }
+        Action    = "s3:ListBucket"
+        Resource  = aws_s3_bucket.tfstate.arn
+        Condition = { StringNotLike = { "s3:prefix" = ["${v.state_prefix}/*"] } }
+      }],
+      [{
+        Sid       = "DenyBucketLevelActionsByWorkloadRoles"
+        Effect    = "Deny"
+        Principal = { AWS = [for k in keys(local.tf_workload_roles) : aws_iam_role.tf[k].arn] }
+        NotAction = ["s3:ListBucket"]
+        Resource  = aws_s3_bucket.tfstate.arn
       }]
     )
   })
