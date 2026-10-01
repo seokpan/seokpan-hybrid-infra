@@ -35,7 +35,7 @@ seokpan-hybrid-infra/
 
 | state | key | 소유 리소스 | Runtime Lifecycle |
 |---|---|---|---|
-| bootstrap | `bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, 잠금, Backend 접근 정책 | Persistent |
+| bootstrap | `bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, 잠금, Backend 접근 정책(예정, #5) | Persistent |
 | foundation | `foundation/terraform.tfstate` | Network, RDS, ElastiCache, ECR, Backup S3, Hybrid AWS 측, ROSA Account-wide Role | 리소스별 Persistent / Stoppable / Re-creatable |
 | rosa | `rosa/terraform.tfstate` | ROSA Classic Multi-AZ, Machine Pool, Cluster Operator Role, OIDC | Ephemeral (Validation Window) |
 
@@ -84,6 +84,9 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 - `root`로 Terraform을 실행하지 않습니다. 각자 `su - 본인계정` 후 본인 IAM으로 실행합니다.
 - Provider / Module 버전은 검증한 버전으로 고정하고 `.terraform.lock.hcl`을 커밋합니다.
 - `*.tfstate`, `*.tfvars`, `.terraform/`은 커밋하지 않습니다.
+- plan 파일은 `<작업명>.tfplan`으로 저장하고, **apply 후 즉시 삭제**합니다.
+- 리뷰 후속 소규모 수정(문서·주석·설정 정합성)은 Issue 없이 `docs/<작업명>` 브랜치로 진행할 수 있으며, PR 본문에 원 PR과 관련 Issue를 참조합니다.
+- 인프라 변경이 포함되면 반드시 Issue를 먼저 등록합니다.
 
 ## Secret 규칙
 
