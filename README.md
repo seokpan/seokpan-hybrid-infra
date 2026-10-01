@@ -89,6 +89,15 @@ terraform {
 
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 
+## 기존 clone 사용자 안내 (2026-10-01 구조 변경)
+
+`bootstrap/`이 `terraform/bootstrap/`으로, state key가 `phase2/bootstrap/`으로 바뀌었습니다. 이전에 clone한 경우 한 번 실행합니다.
+
+1. `git checkout main && git pull`
+2. `rm -rf bootstrap` (예전 폴더의 `.terraform/` 잔여물 정리)
+3. `cd terraform/bootstrap && terraform init -reconfigure`
+4. `terraform plan` 결과가 `No changes`인지 확인
+
 ## 작업 흐름
 
 ```
