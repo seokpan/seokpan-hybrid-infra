@@ -66,17 +66,48 @@ resource "aws_s3_bucket_ownership_controls" "tfstate" {
   }
 }
 
-# 이전 버전 state는 90일 후 삭제 (비용 관리)
+# state 이전 버전 관리 및 잔여 객체 정리
 resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
   rule {
     id     = "expire-old-state-versions"
     status = "Enabled"
     filter {}
+
+    # 최신 5개 이전 버전은 보존, 그보다 오래된 버전만 90일 후 삭제
     noncurrent_version_expiration {
-      noncurrent_days = 90
+      noncurrent_days           = 90
+      newer_noncurrent_versions = 5
+    }
+
+    # use_lockfile의 .tflock 삭제로 남는 삭제 마커 정리
+    expiration {
+      expired_object_delete_marker = true
+    }
+
+    # 중단된 멀티파트 업로드 정리
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
     }
   }
+}
+
+# HTTP(비암호화) 요청 거부
+resource "aws_s3_bucket_policy" "tfstate" {
+  bucket = aws_s3_bucket.tfstate.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.tfstate]
 }
 
 output "tfstate_bucket" {
