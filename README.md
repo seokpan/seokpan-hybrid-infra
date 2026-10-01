@@ -35,7 +35,7 @@ seokpan-hybrid-infra/
 
 | state | key | 소유 리소스 | Runtime Lifecycle |
 |---|---|---|---|
-| bootstrap | `bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, 잠금, Backend 접근 정책(예정, #5) | Persistent |
+| bootstrap | `bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, 잠금, Backend 접근 정책(현재 IAM 권한으로 충족, IAM 설계 시 재검토 — #5) | Persistent |
 | foundation | `foundation/terraform.tfstate` | Network, RDS, ElastiCache, ECR, Backup S3, Hybrid AWS 측, ROSA Account-wide Role | 리소스별 Persistent / Stoppable / Re-creatable |
 | rosa | `rosa/terraform.tfstate` | ROSA Classic Multi-AZ, Machine Pool, Cluster Operator Role, OIDC | Ephemeral (Validation Window) |
 
