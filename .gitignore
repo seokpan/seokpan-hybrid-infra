@@ -45,3 +45,6 @@ terraform.rc
 
 # Terraform plan files (민감값이 포함될 수 있음)
 *.tfplan
+tfplan
+*.tfplan.*
+plan.out
