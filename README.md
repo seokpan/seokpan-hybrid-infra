@@ -130,6 +130,8 @@ terraform {
 
 - `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
 
+- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
+
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 
 ## 기존 clone 사용자 안내 (2026-10-01 구조 변경)
