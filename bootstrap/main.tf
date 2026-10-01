@@ -80,7 +80,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
       newer_noncurrent_versions = 5
     }
 
-    # use_lockfile의 .tflock 삭제로 남는 삭제 마커 정리
+    # 삭제 마커 정리 (해당 키의 이전 버전이 모두 만료된 경우에만 동작)
     expiration {
       expired_object_delete_marker = true
     }
