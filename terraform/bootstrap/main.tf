@@ -92,19 +92,44 @@ resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
   }
 }
 
-# HTTP(비암호화) 요청 거부
+# State 버킷 정책
+# 1) HTTP(비암호화) 요청 거부
+# 2) TF 실행 Role은 자기 Root의 state key 접두사 밖의 객체에 접근 불가 (03 §3-F.15.1)
+# 3) foundation / rosa Role은 State 버킷 설정 변경 불가 (목록·위치·버저닝 조회만 허용)
+# 사람 IAM User(AdministratorAccess)의 직접 접근은 막지 않음 (03 §3-C.3 협업 모델)
 resource "aws_s3_bucket_policy" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Sid       = "DenyInsecureTransport"
-      Effect    = "Deny"
-      Principal = "*"
-      Action    = "s3:*"
-      Resource  = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/*"]
-      Condition = { Bool = { "aws:SecureTransport" = "false" } }
-    }]
+    Statement = concat(
+      [{
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource  = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/*"]
+        Condition = { Bool = { "aws:SecureTransport" = "false" } }
+      }],
+      [for k, r in aws_iam_role.tf : {
+        Sid         = "DenyOutsideOwnStatePrefix${title(k)}"
+        Effect      = "Deny"
+        Principal   = { AWS = r.arn }
+        Action      = "s3:*"
+        NotResource = [aws_s3_bucket.tfstate.arn, "${aws_s3_bucket.tfstate.arn}/${local.tf_roles[k].state_prefix}/*"]
+      }],
+      [{
+        Sid       = "DenyBucketConfigChangesByWorkloadRoles"
+        Effect    = "Deny"
+        Principal = { AWS = [aws_iam_role.tf["foundation"].arn, aws_iam_role.tf["rosa"].arn] }
+        NotAction = [
+          "s3:ListBucket",
+          "s3:ListBucketVersions",
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning",
+        ]
+        Resource = aws_s3_bucket.tfstate.arn
+      }]
+    )
   })
 
   depends_on = [aws_s3_bucket_public_access_block.tfstate]
