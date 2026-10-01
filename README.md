@@ -31,7 +31,7 @@ seokpan-hybrid-infra/
 │   ├── rosa/             # 반복 생성·삭제하는 ROSA Classic Multi-AZ
 │   └── modules/          # 필요한 반복 구조의 Local Module (필요 시 생성)
 ├── ansible/              # On-Prem 구성, GitOps 최초 설치, Data Backup/Restore
-└── scripts/              # 실행 주체·대상 검사, State 간 입력 추출 (필요 시 생성)
+└── scripts/              # 실행 세션(tf-session.sh), 실행 주체·대상 검사, State 간 입력 추출
 ```
 
 - 각 Root(`bootstrap`, `foundation`, `rosa`)는 독립적으로 plan/apply하며, 각자 provider 제약과 `.terraform.lock.hcl`을 가집니다.
@@ -43,7 +43,7 @@ seokpan-hybrid-infra/
 
 | Root | key | 소유 리소스 | Runtime Lifecycle |
 |---|---|---|---|
-| bootstrap | `phase2/bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, HTTPS 강제, 잠금, TF 실행 Role(예정, #10) | Persistent |
+| bootstrap | `phase2/bootstrap/terraform.tfstate` | S3 Backend, 버저닝, 암호화, 퍼블릭 차단, HTTPS 강제, 잠금, TF 실행 Role(`seokpan-tf-*`) | Persistent |
 | foundation | `phase2/foundation/terraform.tfstate` | Network, RDS, ElastiCache, ECR, Backup S3, Hybrid AWS 측, ROSA Account-wide Role | 리소스별 Persistent / Stoppable / Re-creatable |
 | rosa | `phase2/rosa/terraform.tfstate` | ROSA Classic Multi-AZ, Machine Pool, Cluster Operator Role, OIDC | Ephemeral (Validation Window) |
 
@@ -61,6 +61,46 @@ seokpan-hybrid-infra/
 - 해당 State 접근 권한이 있는 담당자가 **필요한 비밀값 아닌 Output만** 추출한 제한된 입력 파일로 전달합니다. (03 §3-F.5)
 - 입력 파일은 Git 밖 보호 영역에 두고, Account/Region·출처 Revision·생성 시점을 확인해 오래된 값으로 실행하지 않습니다.
 
+## 인증 (MFA + TF 실행 Role)
+
+Terraform은 `~/.aws`의 장기 Access Key로 직접 실행하지 않고, **MFA로 발급한 임시 세션**으로 실행합니다. (03 §3-C.4, §3-F.4.2, §3-F.15)
+
+| 세션 | 실행 주체 | 사용 대상 | 최대 시간 |
+|---|---|---|---|
+| `personal` | 본인 IAM User + MFA | TF 실행 Role이 없거나 Role 자체를 복구해야 할 때 | 1시간 (`TF_SESSION_SECONDS`로 조정) |
+| `bootstrap` | `seokpan-tf-bootstrap` | `terraform/bootstrap` | 1시간 |
+| `foundation` | `seokpan-tf-foundation` | `terraform/foundation` | 2시간 |
+| `rosa` | `seokpan-tf-rosa` | `terraform/rosa` | 4시간 |
+
+```bash
+cd ~/work/seokpan-hybrid-infra
+source scripts/tf-session.sh foundation   # MFA 코드 입력 → 실행 주체·만료 시각 출력
+cd terraform/foundation && terraform plan -out=<작업명>.tfplan
+
+source scripts/tf-session.sh clear        # 작업 후 세션 해제
+```
+
+- 반드시 `source`로 실행합니다. 임시 자격증명은 현재 셸에만 있고 파일로 저장하지 않습니다.
+- backend(State)와 provider가 같은 세션을 쓰므로, **출력된 실행 주체가 작업 Root와 맞는지** 확인 후 plan/apply 합니다.
+- AssumeRole은 프로젝트 사람 IAM User 4명이 **MFA 인증한 경우에만** 허용됩니다. MFA 미등록자는 먼저 등록합니다.
+- apply 전에 만료 시각을 확인합니다. 남은 시간이 부족하면 세션을 새로 발급한 뒤 plan부터 다시 실행합니다.
+
+### Role 권한 경계
+
+| 구분 | bootstrap | foundation / rosa |
+|---|---|---|
+| 자기 State(`*.tfstate`) | Get / Put | Get / Put |
+| 자기 Lock(`*.tflock`) | Get / Put / Delete | Get / Put / Delete |
+| List | 버킷 관리 Role | 자기 접두사(`phase2/<root>/`)만 |
+| 다른 Root State | 거부 | 거부 |
+| State 삭제·Version 삭제·버킷 삭제 | 거부 | 거부 |
+| State 버킷 설정 | 관리 | 거부 |
+| AWS 서비스·IAM | `seokpan-tf-*` Role 관리만 | **없음** (Root 구현 PR에서 추가) |
+
+- foundation / rosa에 필요한 권한은 각 Root 구현 PR에서 **필요한 Service / Action / Resource만** `terraform/bootstrap/iam.tf`에 추가합니다. bootstrap apply 후 해당 Root를 실행합니다.
+- `iam:PassRole`은 대상 Role ARN과 `iam:PassedToService` 조건으로 제한합니다. 생성하는 IAM Role에는 필요하면 Permissions Boundary를 둡니다.
+- ROSA Role의 기반 자원 확인은 읽기 전용 조회 권한으로 해결하며, foundation State 읽기 권한을 주지 않습니다. (03 §3-F.15.2)
+
 ## 버전 기준
 
 | 대상 | 버전 | 고정 방법 |
@@ -73,19 +113,24 @@ seokpan-hybrid-infra/
 
 ## backend 설정 템플릿
 
-새 Root를 만들 때 `backend.tf`에 아래를 넣고 `key`만 바꿉니다.
+새 Root를 만들 때 `backend.tf`에 아래를 넣고 `<root명>`만 바꿉니다.
 
 ```hcl
 terraform {
   backend "s3" {
-    bucket       = "seokpan-tfstate-847835841591"
-    key          = "phase2/<root명>/terraform.tfstate"
-    region       = "ap-northeast-2"
-    encrypt      = true
-    use_lockfile = true
+    bucket               = "seokpan-tfstate-847835841591"
+    key                  = "phase2/<root명>/terraform.tfstate"
+    workspace_key_prefix = "phase2/<root명>/env"
+    region               = "ap-northeast-2"
+    encrypt              = true
+    use_lockfile         = true
   }
 }
 ```
+
+- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
+
+- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
 
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 
@@ -116,7 +161,7 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 - apply는 `main` 코드로만 실행합니다. (예외: bootstrap 최초 구성)
 - State 잠금은 충돌 방지 장치이며, 동시 apply를 허용한다는 의미가 아닙니다.
 - apply 전 plan의 `destroy` / `replace` 항목을 반드시 확인합니다.
-- `root`로 Terraform을 실행하지 않습니다. 각자 `su - 본인계정` 후 본인 IAM으로 실행합니다.
+- `root`로 Terraform을 실행하지 않습니다. 각자 `su - 본인계정` 후 **본인 IAM User의 MFA 세션**(`scripts/tf-session.sh`)으로 실행합니다.
 - Provider / Module 버전은 검증한 버전으로 고정하고 `.terraform.lock.hcl`을 커밋합니다.
 - `*.tfstate`, `*.tfvars`, `.terraform/`은 커밋하지 않습니다.
 - plan 파일은 `<작업명>.tfplan`으로 저장하고, **apply 후 즉시 삭제**합니다.
@@ -148,7 +193,7 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 
 ## bootstrap 복구 절차
 
-State 버킷이 유실되면 bootstrap Root도 init할 수 없습니다.
+State 버킷이 유실되면 bootstrap Root도 init할 수 없습니다. 복구는 `personal` 세션(본인 IAM User + MFA)으로 진행합니다.
 
 1. `terraform/bootstrap/backend.tf`를 임시로 다른 이름으로 변경
 2. `terraform init -reconfigure` (로컬 state로 전환)
