@@ -84,6 +84,55 @@ source scripts/tf-session.sh clear        # 작업 후 세션 해제
 - backend(State)와 provider가 같은 세션을 쓰므로, **출력된 실행 주체가 작업 Root와 맞는지** 확인 후 plan/apply 합니다.
 - AssumeRole은 프로젝트 사람 IAM User 4명이 **MFA 인증한 경우에만** 허용됩니다. MFA 미등록자는 먼저 등록합니다.
 - apply 전에 만료 시각을 확인합니다. 남은 시간이 부족하면 세션을 새로 발급한 뒤 plan부터 다시 실행합니다.
+- 새 세션을 발급하면 **기존 세션을 먼저 해제**합니다. 발급에 실패하면 이전 Role이 아니라 기본 자격증명(IAM User) 상태로 남고, 실패 메시지에 현재 실행 주체가 표시됩니다.
+- 만료 시각은 KST와 UTC로 함께 표시됩니다.
+- MFA 코드는 한 번만 사용할 수 있습니다. 세션을 연달아 발급할 때는 앱의 숫자가 바뀐 뒤 입력합니다.
+
+### MFA 등록 (최초 1회)
+
+> 2026-10-01 기준 팀원 4명 모두 등록 완료. 장치 교체·재등록 시 사용합니다.
+
+본인 리눅스 계정(`su - 본인계정`)에서 실행합니다. MFA 장치는 **1개만** 등록합니다. 스크립트는 첫 번째 장치를 사용합니다.
+
+```bash
+# 0) 기본 자격증명이 본인 IAM User인지 확인
+aws sts get-caller-identity --query Arn --output text      # …:user/<본인 IAM User>
+
+# 1) 가상 MFA 장치 생성 → QR 이미지 저장 (출력되는 ARN을 메모)
+umask 077
+aws iam create-virtual-mfa-device \
+  --virtual-mfa-device-name <본인 IAM User> \
+  --outfile ~/mfa.png --bootstrap-method QRCodePNG \
+  --query VirtualMFADevice.SerialNumber --output text
+
+# 2) VS Code에서 ~/mfa.png를 열고 휴대폰 인증 앱으로 스캔
+
+# 3) 연속된 코드 2개로 활성화 (첫 코드 확인 후, 숫자가 바뀌면 두 번째 코드)
+aws iam enable-mfa-device --user-name <본인 IAM User> \
+  --serial-number <1)에서 출력된 ARN> \
+  --authentication-code1 <코드1> --authentication-code2 <코드2>
+
+# 4) QR 이미지 즉시 삭제 (MFA 비밀키가 들어 있음)
+rm -f ~/mfa.png
+```
+
+- 1)에서 `EntityAlreadyExists`가 나오면 이전 시도에서 만든 미활성 장치가 남은 것입니다. `aws iam delete-virtual-mfa-device --serial-number <ARN>`으로 지운 뒤 다시 실행합니다.
+- QR 이미지와 시드 값은 커밋하거나 공유하지 않습니다.
+
+### 처음 설정 확인
+
+```bash
+cd ~/work/seokpan-hybrid-infra
+source scripts/tf-session.sh personal     # 실행 주체: …:user/<본인>
+source scripts/tf-session.sh bootstrap    # 실행 주체: …:assumed-role/seokpan-tf-bootstrap/<본인>-bootstrap
+cd terraform/bootstrap
+terraform init                            # 예전 clone이면 아래 "기존 clone 사용자 안내" 먼저
+terraform plan                            # No changes
+cd ../.. && source scripts/tf-session.sh clear
+```
+
+- 확인 결과는 담당 Issue에 **성공/실패와 Role 이름만** 남깁니다. 계정 ID·Access Key·MFA 코드는 기록하지 않습니다.
+- 이 확인은 init / plan까지입니다. apply는 지정된 실행 주체만 수행합니다.
 
 ### Role 권한 경계
 
@@ -130,8 +179,6 @@ terraform {
 
 - `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
 
-- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
-
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 
 ## 기존 clone 사용자 안내 (2026-10-01 구조 변경)
@@ -139,7 +186,8 @@ terraform {
 `bootstrap/`이 `terraform/bootstrap/`으로, state key가 `phase2/bootstrap/`으로 바뀌었습니다. 이전에 clone한 경우 한 번 실행합니다.
 
 1. `git checkout main && git pull`
-2. `rm -rf bootstrap` (예전 폴더의 `.terraform/` 잔여물 정리)
+2. 예전 `bootstrap/` 폴더에 남길 파일이 없는지 확인한 뒤 삭제합니다.
+   `ls -la bootstrap` → `.terraform/`, `.terraform.lock.hcl` 외에 `*.tfplan`, 로컬 state, 개인 메모 등이 있으면 먼저 옮기고 `rm -rf bootstrap`
 3. `cd terraform/bootstrap && terraform init -reconfigure`
 4. `terraform plan` 결과가 `No changes`인지 확인
 
@@ -157,7 +205,8 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 
 ### 규칙
 
-- apply / destroy는 **지정된 실행 주체만** 수행합니다. (스택별 실행자는 WBS에서 지정)
+- apply / destroy는 **지정된 실행 주체만** 수행합니다. bootstrap · foundation: 이유빈, rosa: 정태훈 (04 §2.2). 다른 팀원은 init / plan까지 확인합니다.
+- 지정 실행자가 아닌 사람이 실행해야 하면 담당자와 인계한 뒤 진행하고, PR·Issue에 **배정 실행자와 실제 수행자**를 함께 기록합니다. (04 §2.4)
 - apply는 `main` 코드로만 실행합니다. (예외: bootstrap 최초 구성)
 - State 잠금은 충돌 방지 장치이며, 동시 apply를 허용한다는 의미가 아닙니다.
 - apply 전 plan의 `destroy` / `replace` 항목을 반드시 확인합니다.
