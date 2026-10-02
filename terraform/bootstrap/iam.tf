@@ -228,9 +228,11 @@ data "aws_iam_policy_document" "tf_foundation_registry_ci" {
 # 작성 날짜: 2026/10/02
 # ---------------------------------------------------------------------------
 # CI IAM User(seokpan-fnd-ci) Permissions Boundary
-# - CI User가 가질 수 있는 최대 권한을 ECR push/pull 범위로 고정
+# - CI User의 identity-based 권한(User/inline policy)이 가질 수 있는 최대 범위를 ECR push/pull로 고정
+# - resource-based policy(ECR Repository Policy)의 직접 grant에는 적용되지 않으므로,
+#   foundation Role에는 ecr:SetRepositoryPolicy를 부여하지 않음
 # - bootstrap이 소유: foundation Role은 이 Policy를 수정/삭제할 수 없음
-# - foundation이 User/inline policy에 어떤 권한을 넣어도 유효 권한은 이 범위 안
+# - apply 순서: bootstrap Role의 ManageCiBoundaryPolicy 권한(tf_bootstrap) 적용 후 생성
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "ci_boundary" {
   statement {
@@ -261,8 +263,11 @@ resource "aws_iam_policy" "ci_boundary" {
   policy      = data.aws_iam_policy_document.ci_boundary.json
 
   tags = {
-    Component = "tf-exec-role"
+    Component = "ci"
   }
+
+  # bootstrap Role이 먼저 CreatePolicy 등 권한을 갖도록 순서 고정
+  depends_on = [aws_iam_role_policy.tf_bootstrap]
 }
 
 resource "aws_iam_role_policy" "tf_foundation_registry_ci" {
