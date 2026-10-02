@@ -212,6 +212,7 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 - apply 전 plan의 `destroy` / `replace` 항목을 반드시 확인합니다.
 - `root`로 Terraform을 실행하지 않습니다. 각자 `su - 본인계정` 후 **본인 IAM User의 MFA 세션**(`scripts/tf-session.sh`)으로 실행합니다.
 - Provider / Module 버전은 검증한 버전으로 고정하고 `.terraform.lock.hcl`을 커밋합니다.
+- controller 서버에서 전체 `dnf update`를 실행하지 않습니다. Terraform 등 공용 도구 버전이 함께 바뀔 수 있습니다. 개별 패키지도 설치 전 버전과 의존성 영향을 확인합니다. (04 §8.2)
 - `*.tfstate`, `*.tfvars`, `.terraform/`은 커밋하지 않습니다.
 - plan 파일은 `<작업명>.tfplan`으로 저장하고, **apply 후 즉시 삭제**합니다.
 - 리뷰 후속 소규모 수정(문서·주석·설정 정합성)은 Issue 없이 `docs/<작업명>` 브랜치로 진행할 수 있으며, PR 본문에 원 PR과 관련 Issue를 참조합니다.
