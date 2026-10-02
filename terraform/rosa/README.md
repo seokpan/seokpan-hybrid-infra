@@ -1,6 +1,6 @@
 # ROSA Classic Root — TH-10 Source candidate
 
-원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. 승인 03 §3-F와 04·개인 계획 TH-10을 정적 Source로 연결한다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
+원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비한 별도 HCL 후속 PR이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 승인 03 §3-F와 04·개인 계획 TH-10을 정적 Source로 연결한다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
 
 ## 범위와 Owner
 
@@ -23,6 +23,8 @@ Root는 `bootstrap/foundation/rosa` 3개다. State Key는 **`phase2/rosa/terrafo
 - VPC/Machine `192.168.64.0/20`, Pod `10.128.0.0/14`, Service `10.240.0.0/16`이다. 정확한 지원 `4.20.z` GA patch·Worker disk size는 실제 조회/비용 검토 후 입력한다.
 - RHCS의 기본 Machine Pool 생성 시 입력과 Day 2 관리는 다르다. 생성 후 pool 변경은 **현재 default pool을 같은 rosa State로 import하고 리뷰한 개정**으로 수행한다. 자동 import·추가 pool은 이번 Source에 없다.
 - `create_admin_user=false`다. TH-11의 초기 관리·정상 IDP/RBAC·유지 비상 관리자·회수는 별도 구현이다. 이 Source만으로 전체 Clean Recreate가 완성되지 않는다. Token/관리 비밀번호를 TF 변수/State에 추가하지 않는다.
+
+TH-11은 정상 개인 IDP/RBAC·Argo 권한·유지 비상 경로와 Cloud Secret 주/예비·독립 사본을 확인한 뒤 초기 높은 인증·신규/기존 Token·Argo Session 회수와 잔존을 시험한다. TH-12의 실제 보호 전체 Plan은 A가 Network/IAM·삭제/교체·종속 영향을 리뷰하고 D에게 전체 비용/실행 창을 인계한다. 충돌 실행은 WORK_TRACKER Shared Execution에서 조율하며 Owner·작성 지원·실제 실행자/Caller·Reviewer를 구분한다.
 
 ## foundation 입력 계약 제안
 
@@ -52,6 +54,8 @@ Schema는 다른 Region/환경·중복 Subnet·3 AZ 불일치·다른 Account Ro
 6. **RHCS 1.7.7은 삭제 timeout에 Warning 후 State에서 Cluster를 제거할 수 있다.** State absence나 명령 성공만으로 실제 삭제 완료를 판단하지 않는다. Warning/실제 서비스·자원 상태를 확인하고 불완전 삭제는 IAM/OIDC를 유지한 채 중단·보호 기록·지원/State 정합으로 처리한다. Source만으로 자동 실패 복구가 완성된 것은 아니다.
 7. 실제 Cluster 삭제가 확인된 후 승인된 rosa 전체 cleanup을 Plan/리뷰한다. foundation Data/기반 Rule/Network·bootstrap Backend는 보존한다. 전체 foundation/bootstrap Destroy는 별도 명시 승인 조건을 유지한다. 실제 Orphan/잔존/후속 청구는 따로 확인한다.
 8. 재생성 전 옛 Binding을 제거하고 새 Cluster/SG·근거를 공급한다. `binding_enabled`는 선언 상태이며 통신 PASS가 아니다. 이 단계들은 같은 rosa Root/State다.
+
+C가 RDS Stop을 선택한 경우에만 Client 종료→Stop 완료와 다음 실행 전 Start·연결·Data 확인을 인계한다. 모든 rosa 삭제에 RDS Stop을 강제하지 않는다. 불필요 Credential/Token·시험 Secret 정리와 보존 자료의 복호화 Key 유지도 구분한다.
 
 살아 있는 Cluster에 **곧바로 전체 Root Destroy를 실행하면 timeout 이후 IAM/OIDC가 먼저 사라질 수 있으므로 사용하지 않는다.** 두 단계의 실제 보호 Plan/삭제 결과와 Provider timeout 처리는 실행 전 검증한다.
 
