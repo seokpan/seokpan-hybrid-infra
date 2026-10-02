@@ -135,6 +135,64 @@ resource "aws_iam_role_policy" "tf_backend" {
   policy = data.aws_iam_policy_document.tf_backend[each.key].json
 }
 
+# 작성자: 최유준
+# 작성 날짜: 2026/10/02
+# ---------------------------------------------------------------------------
+# foundation Role 추가 권한: Registry(ECR) + CI IAM User 관리 (03 §3-C.4, §3-C.11)
+# - 대상: foundation Root의 registry.tf(ECR Repository) / ci_iam.tf(CI IAM User)
+# - ECR: 이름 접두사 seokpan-fnd-* Repository만 관리 (Repository 정책/Lifecycle 포함)
+# - IAM User: seokpan-fnd-ci 한 개만 관리 (Inline Policy 방식, Managed Policy attach 불가)
+# - 의도적으로 제외한 Action (Terraform이 CI 자격증명을 만들지 않도록 함):
+#     iam:CreateAccessKey, iam:CreateLoginProfile, iam:AttachUserPolicy, iam:PassRole
+#   (CI Access Key는 Terraform 밖에서 발급하여 SOPS+age Automation-CI 번들로 보관)
+# - 실제 plan/apply 중 AccessDenied가 나는 Action만 이 블록에 추가 (기본값을 넓게 잡지 않음)
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "tf_foundation_registry_ci" {
+  statement {
+    sid = "ManageSeokpanEcrRepositories"
+    actions = [
+      "ecr:CreateRepository",
+      "ecr:DeleteRepository",
+      "ecr:DescribeRepositories",
+      "ecr:PutImageTagMutability",
+      "ecr:PutImageScanningConfiguration",
+      "ecr:PutLifecyclePolicy",
+      "ecr:GetLifecyclePolicy",
+      "ecr:DeleteLifecyclePolicy",
+      "ecr:GetRepositoryPolicy",
+      "ecr:ListTagsForResource",
+      "ecr:TagResource",
+      "ecr:UntagResource",
+    ]
+    resources = ["arn:aws:ecr:ap-northeast-2:${local.account_id}:repository/seokpan-fnd-*"]
+  }
+
+  statement {
+    sid = "ManageSeokpanCiIamUser"
+    actions = [
+      "iam:CreateUser",
+      "iam:DeleteUser",
+      "iam:GetUser",
+      "iam:TagUser",
+      "iam:UntagUser",
+      "iam:ListUserTags",
+      "iam:PutUserPolicy",
+      "iam:GetUserPolicy",
+      "iam:DeleteUserPolicy",
+      "iam:ListUserPolicies",
+      "iam:ListAttachedUserPolicies",
+      "iam:ListGroupsForUser",
+    ]
+    resources = ["arn:aws:iam::${local.account_id}:user/seokpan-fnd-ci"]
+  }
+}
+
+resource "aws_iam_role_policy" "tf_foundation_registry_ci" {
+  name   = "seokpan-tf-foundation-registry-ci"
+  role   = aws_iam_role.tf["foundation"].id
+  policy = data.aws_iam_policy_document.tf_foundation_registry_ci.json
+}
+
 output "tf_exec_role_arns" {
   description = "Root별 Terraform 실행 Role ARN"
   value       = { for k, r in aws_iam_role.tf : k => r.arn }
