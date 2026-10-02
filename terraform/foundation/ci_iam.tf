@@ -7,6 +7,8 @@
 # - Permissions Boundary(seokpan-fnd-ci-boundary)는 bootstrap이 소유. 지정하지 않으면 CreateUser가 AccessDenied (PR #21)
 # - 정책 Action은 Boundary(ECR push/pull) 안으로 제한. 유효 권한은 정책과 Boundary의 교집합
 # - BatchDeleteImage는 부여하지 않음 (이미지 정리는 ECR Lifecycle이 담당)
+# - GetDownloadUrlForLayer는 부여하지 않음: Scan/Health Smoke는 Harbor 사본 사용(hybrid-app #2 A1)이라 ECR pull 불필요.
+#   E2E에서 필요한 호출이 확인되면 근거와 함께 별도 권한 PR로 추가
 # ---------------------------------------------------------------------------
 
 data "aws_caller_identity" "ci" {}
@@ -37,7 +39,6 @@ data "aws_iam_policy_document" "ci_ecr" {
       "ecr:CompleteLayerUpload",
       "ecr:PutImage",
       "ecr:BatchGetImage",
-      "ecr:GetDownloadUrlForLayer",
       "ecr:DescribeImages",
     ]
     resources = [for r in aws_ecr_repository.this : r.arn]

@@ -5,9 +5,10 @@
 # - 이름: seokpan-fnd-backend, seokpan-fnd-frontend (#16 네이밍 합의)
 # - 태그 Immutable, 암호화 AES256(KMS 비의존)
 # - ECR은 Persistent 자원이므로 force_delete = false
-# - 수명 정책: untagged 만료 + 전체 최근 N개 보관 (scan-*/git-* 접두사별 규칙은 사용하지 않음)
-#   scan-* 규칙을 두면, Promote 후 scan-* 태그가 남은 이미지가 이미지 단위로 만료되어
-#   같은 이미지의 git-* 태그까지 삭제될 수 있어 단일 보관 규칙으로 구성
+# - 수명 정책: 저장소별 최신 N개 유지 규칙 하나만 둔다 (#18 합의)
+#   untagged 만료 규칙은 image index 하위 manifest/attestation 영향을
+#   Lifecycle Preview로 확인하기 전까지 넣지 않는다 (확인 후 별도 PR에서 검토)
+#   scan-*/git-* 접두사별 규칙도 사용하지 않음 (이미지 단위 만료로 git-* 태그까지 삭제될 위험)
 # - 변수는 registry_ci_variables.tf, 출력은 registry_ci_outputs.tf
 # - 아직 미반영: ROSA Worker ECR Pull 권한(Role 이름/연결 방식 확인 후 별도 PR)
 # ---------------------------------------------------------------------------
@@ -46,17 +47,6 @@ resource "aws_ecr_lifecycle_policy" "this" {
     rules = [
       {
         rulePriority = 1
-        description  = "untagged 이미지 ${var.registry_untagged_expire_days}일 후 만료"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = var.registry_untagged_expire_days
-        }
-        action = { type = "expire" }
-      },
-      {
-        rulePriority = 2
         description  = "최근 ${var.registry_keep_image_count}개 이미지만 보관"
         selection = {
           tagStatus   = "any"
