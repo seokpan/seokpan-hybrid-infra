@@ -2,7 +2,7 @@
 
 석판(Seokpan) 2차 프로젝트 — **B1: Cloud Primary + On-Prem Restore-based Recovery** 인프라 저장소
 
-- 기준 문서: `02_TARGET_ARCHITECTURE.md`, `03_DETAILED_DESIGN.md` (Source of Truth)
+- 기준 문서: [목표 아키텍처](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/02_TARGET_ARCHITECTURE.md) · [상세설계](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)
 - AWS / ROSA 인프라: Terraform
 - On-Prem 측 설정, GitOps 최초 설치, Backup/Restore 실행: Ansible / Script
 - ROSA 내부 Desired State: [seokpan-hybrid-gitops](https://github.com/seokpan/seokpan-hybrid-gitops) (OpenShift GitOps)
