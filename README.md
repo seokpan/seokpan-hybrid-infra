@@ -88,16 +88,29 @@ source scripts/tf-session.sh clear        # 작업 후 세션 해제
 - 만료 시각은 KST와 UTC로 함께 표시됩니다.
 - MFA 코드는 한 번만 사용할 수 있습니다. 세션을 연달아 발급할 때는 앱의 숫자가 바뀐 뒤 입력합니다.
 
-### MFA 등록 (최초 1회)
+### MFA 등록·교체
 
-> 2026-10-01 기준 팀원 4명 모두 등록 완료. 장치 교체·재등록 시 사용합니다.
+> 2026-10-01 기준 팀원 4명 모두 등록 완료. 먼저 0)으로 현재 상태를 확인하고, 상황에 맞는 절차(A / B / C)를 사용합니다.
 
-본인 리눅스 계정(`su - 본인계정`)에서 실행합니다. MFA 장치는 **1개만** 등록합니다. 스크립트는 첫 번째 장치를 사용합니다.
+본인 리눅스 계정(`su - 본인계정`)에서 실행합니다. MFA 장치는 **1개만** 연결합니다. 스크립트는 첫 번째 장치를 사용합니다.
+
+#### 0) 현재 상태 확인
 
 ```bash
-# 0) 기본 자격증명이 본인 IAM User인지 확인
 aws sts get-caller-identity --query Arn --output text      # …:user/<본인 IAM User>
+aws iam list-mfa-devices --user-name <본인 IAM User> \
+  --query 'MFADevices[].[SerialNumber,EnableDate]' --output text
+```
 
+| 0)의 결과 | 사용할 절차 |
+|---|---|
+| 출력 없음 (연결된 장치 없음) | **A. 최초 등록** |
+| 장치 있음 + 기존 앱으로 `source scripts/tf-session.sh personal` 발급 성공 | **B. 교체** (휴대폰 변경 등) |
+| 장치 있음 + 코드를 확인할 수 없음 (분실·고장·앱 초기화), 또는 본인 계정에 해제 권한이 없음 | **C. 관리자 복구** — 본인이 직접 해제하지 않음 |
+
+#### A. 최초 등록
+
+```bash
 # 1) 가상 MFA 장치 생성 → QR 이미지 저장 (출력되는 ARN을 메모)
 umask 077
 aws iam create-virtual-mfa-device \
@@ -116,8 +129,48 @@ aws iam enable-mfa-device --user-name <본인 IAM User> \
 rm -f ~/mfa.png
 ```
 
-- 1)에서 `EntityAlreadyExists`가 나오면 이전 시도에서 만든 미활성 장치가 남은 것입니다. `aws iam delete-virtual-mfa-device --serial-number <ARN>`으로 지운 뒤 다시 실행합니다.
 - QR 이미지와 시드 값은 커밋하거나 공유하지 않습니다.
+
+#### B. 교체 (기존 장치를 아직 사용할 수 있을 때)
+
+기존 장치로 세션이 발급되는지 먼저 확인한 뒤 **해제 → 삭제 → 생성 → 활성화** 순서로 진행합니다.
+
+```bash
+source scripts/tf-session.sh personal        # 기존 장치로 발급 성공 확인
+source scripts/tf-session.sh clear
+
+# 1) 기존 장치 연결 해제 (0)에서 확인한 SerialNumber)
+aws iam deactivate-mfa-device --user-name <본인 IAM User> --serial-number <기존 ARN>
+
+# 2) 기존 Virtual MFA 삭제
+aws iam delete-virtual-mfa-device --serial-number <기존 ARN>
+
+# 3) A의 1) ~ 4) 진행 → 끝나면 0)으로 장치 1개 연결 확인
+```
+
+- 1)부터 A가 끝날 때까지는 TF 실행 Role을 사용할 수 없습니다. 진행 중인 plan / apply가 없을 때 합니다.
+- 휴대폰 앱의 기존 항목은 새 장치로 세션 발급을 확인한 뒤 삭제합니다.
+
+#### C. 관리자 복구 (기존 장치를 사용할 수 없을 때)
+
+본인이 MFA를 증명할 수 없는 상태이므로 직접 해제하지 않고, 다른 팀원에게 복구를 요청합니다.
+
+1. 요청자가 Issue를 등록합니다. (대상 IAM User, 사유)
+2. 다른 팀원(IAM 관리 권한 보유)이 요청자 본인 여부를 직접 확인한 뒤, 대상 사용자에 대해 B의 1) 해제와 2) 삭제를 실행합니다.
+3. 요청자가 A로 다시 등록하고 `personal` 세션 발급을 확인합니다.
+4. Issue에 요청자, 실행자, 대상 IAM User, 처리 시각, 결과를 기록합니다. 계정 ID와 ARN은 기록하지 않습니다.
+
+#### `EntityAlreadyExists`가 나올 때
+
+같은 이름의 Virtual MFA가 이미 있다는 뜻입니다. 연결된 장치일 수도 있으니 바로 삭제하지 않고 먼저 확인합니다.
+
+```bash
+aws iam list-virtual-mfa-devices --assignment-status Unassigned \
+  --query "VirtualMFADevices[?ends_with(SerialNumber, ':mfa/<본인 IAM User>')].SerialNumber" --output text
+```
+
+- **출력 있음** → 어느 사용자에게도 연결되지 않은 잔여 장치입니다. 출력된 ARN으로 `aws iam delete-virtual-mfa-device --serial-number <ARN>` 실행 후 A의 1)부터 다시 진행합니다.
+- **출력 없음** → 연결된 장치가 있습니다. 0)으로 돌아가 B 또는 C를 사용합니다.
 
 ### 처음 설정 확인
 
