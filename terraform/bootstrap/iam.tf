@@ -85,6 +85,23 @@ data "aws_iam_policy_document" "tf_bootstrap" {
     ]
     resources = ["arn:aws:iam::${local.account_id}:role/seokpan-tf-*"]
   }
+
+  statement {
+    sid = "ManageCiBoundaryPolicy"
+    actions = [
+      "iam:CreatePolicy",
+      "iam:DeletePolicy",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions",
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:ListPolicyTags",
+    ]
+    resources = ["arn:aws:iam::${local.account_id}:policy/seokpan-fnd-ci-boundary"]
+  }
 }
 
 resource "aws_iam_role_policy" "tf_bootstrap" {
@@ -140,8 +157,8 @@ resource "aws_iam_role_policy" "tf_backend" {
 # ---------------------------------------------------------------------------
 # foundation Role 추가 권한: Registry(ECR) + CI IAM User 관리 (03 §3-C.4, §3-C.11)
 # - 대상: foundation Root의 registry.tf(ECR Repository) / ci_iam.tf(CI IAM User)
-# - ECR: 이름 접두사 seokpan-fnd-* Repository만 관리 (Repository 정책/Lifecycle 포함)
-# - IAM User: seokpan-fnd-ci 한 개만 관리 (Inline Policy 방식, Managed Policy attach 불가)
+# - ECR: 이름 접두사 seokpan-fnd-* Repository만 관리 (Lifecycle 관리, Repository Policy는 조회만)
+# - IAM User: seokpan-fnd-ci 한 개만 관리, Permissions Boundary(seokpan-fnd-ci-boundary) 지정 필수
 # - 의도적으로 제외한 Action (Terraform이 CI 자격증명을 만들지 않도록 함):
 #     iam:CreateAccessKey, iam:CreateLoginProfile, iam:AttachUserPolicy, iam:PassRole
 #   (CI Access Key는 Terraform 밖에서 발급하여 SOPS+age Automation-CI 번들로 보관)
@@ -170,7 +187,6 @@ data "aws_iam_policy_document" "tf_foundation_registry_ci" {
   statement {
     sid = "ManageSeokpanCiIamUser"
     actions = [
-      "iam:CreateUser",
       "iam:DeleteUser",
       "iam:GetUser",
       "iam:TagUser",
@@ -184,6 +200,68 @@ data "aws_iam_policy_document" "tf_foundation_registry_ci" {
       "iam:ListGroupsForUser",
     ]
     resources = ["arn:aws:iam::${local.account_id}:user/seokpan-fnd-ci"]
+  }
+
+  # Boundary(seokpan-fnd-ci-boundary)를 지정한 경우에만 User 생성/Boundary 설정 허용
+  statement {
+    sid       = "CreateCiUserOnlyWithBoundary"
+    actions   = ["iam:CreateUser", "iam:PutUserPermissionsBoundary"]
+    resources = ["arn:aws:iam::${local.account_id}:user/seokpan-fnd-ci"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [aws_iam_policy.ci_boundary.arn]
+    }
+  }
+
+  # Boundary 제거 금지
+  statement {
+    sid       = "DenyRemoveCiUserBoundary"
+    effect    = "Deny"
+    actions   = ["iam:DeleteUserPermissionsBoundary"]
+    resources = ["arn:aws:iam::${local.account_id}:user/seokpan-fnd-ci"]
+  }
+}
+
+# 작성자: 최유준
+# 작성 날짜: 2026/10/02
+# ---------------------------------------------------------------------------
+# CI IAM User(seokpan-fnd-ci) Permissions Boundary
+# - CI User가 가질 수 있는 최대 권한을 ECR push/pull 범위로 고정
+# - bootstrap이 소유: foundation Role은 이 Policy를 수정/삭제할 수 없음
+# - foundation이 User/inline policy에 어떤 권한을 넣어도 유효 권한은 이 범위 안
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "ci_boundary" {
+  statement {
+    sid       = "EcrAuthToken"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "EcrPushPullSeokpanRepositories"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:InitiateLayerUpload",
+      "ecr:UploadLayerPart",
+      "ecr:CompleteLayerUpload",
+      "ecr:PutImage",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:DescribeImages",
+    ]
+    resources = ["arn:aws:ecr:ap-northeast-2:${local.account_id}:repository/seokpan-fnd-*"]
+  }
+}
+
+resource "aws_iam_policy" "ci_boundary" {
+  name        = "seokpan-fnd-ci-boundary"
+  description = "Permissions boundary for CI IAM user seokpan-fnd-ci (ECR push/pull only)"
+  policy      = data.aws_iam_policy_document.ci_boundary.json
+
+  tags = {
+    Component = "tf-exec-role"
   }
 }
 
