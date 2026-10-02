@@ -84,6 +84,108 @@ source scripts/tf-session.sh clear        # 작업 후 세션 해제
 - backend(State)와 provider가 같은 세션을 쓰므로, **출력된 실행 주체가 작업 Root와 맞는지** 확인 후 plan/apply 합니다.
 - AssumeRole은 프로젝트 사람 IAM User 4명이 **MFA 인증한 경우에만** 허용됩니다. MFA 미등록자는 먼저 등록합니다.
 - apply 전에 만료 시각을 확인합니다. 남은 시간이 부족하면 세션을 새로 발급한 뒤 plan부터 다시 실행합니다.
+- 새 세션을 발급하면 **기존 세션을 먼저 해제**합니다. 발급에 실패하면 이전 Role이 아니라 기본 자격증명(IAM User) 상태로 남고, 실패 메시지에 현재 실행 주체가 표시됩니다.
+- 만료 시각은 KST와 UTC로 함께 표시됩니다.
+- MFA 코드는 한 번만 사용할 수 있습니다. 세션을 연달아 발급할 때는 앱의 숫자가 바뀐 뒤 입력합니다.
+
+### MFA 등록·교체
+
+> 2026-10-01 기준 팀원 4명 모두 등록 완료. 먼저 0)으로 현재 상태를 확인하고, 상황에 맞는 절차(A / B / C)를 사용합니다.
+
+본인 리눅스 계정(`su - 본인계정`)에서 실행합니다. MFA 장치는 **1개만** 연결합니다. 스크립트는 첫 번째 장치를 사용합니다.
+
+#### 0) 현재 상태 확인
+
+```bash
+aws sts get-caller-identity --query Arn --output text      # …:user/<본인 IAM User>
+aws iam list-mfa-devices --user-name <본인 IAM User> \
+  --query 'MFADevices[].[SerialNumber,EnableDate]' --output text
+```
+
+| 0)의 결과 | 사용할 절차 |
+|---|---|
+| 출력 없음 (연결된 장치 없음) | **A. 최초 등록** |
+| 장치 있음 + 기존 앱으로 `source scripts/tf-session.sh personal` 발급 성공 | **B. 교체** (휴대폰 변경 등) |
+| 장치 있음 + 코드를 확인할 수 없음 (분실·고장·앱 초기화), 또는 본인 계정에 해제 권한이 없음 | **C. 관리자 복구** — 본인이 직접 해제하지 않음 |
+
+#### A. 최초 등록
+
+```bash
+# 1) 가상 MFA 장치 생성 → QR 이미지 저장 (출력되는 ARN을 메모)
+umask 077
+aws iam create-virtual-mfa-device \
+  --virtual-mfa-device-name <본인 IAM User> \
+  --outfile ~/mfa.png --bootstrap-method QRCodePNG \
+  --query VirtualMFADevice.SerialNumber --output text
+
+# 2) VS Code에서 ~/mfa.png를 열고 휴대폰 인증 앱으로 스캔
+
+# 3) 연속된 코드 2개로 활성화 (첫 코드 확인 후, 숫자가 바뀌면 두 번째 코드)
+aws iam enable-mfa-device --user-name <본인 IAM User> \
+  --serial-number <1)에서 출력된 ARN> \
+  --authentication-code1 <코드1> --authentication-code2 <코드2>
+
+# 4) QR 이미지 즉시 삭제 (MFA 비밀키가 들어 있음)
+rm -f ~/mfa.png
+```
+
+- QR 이미지와 시드 값은 커밋하거나 공유하지 않습니다.
+
+#### B. 교체 (기존 장치를 아직 사용할 수 있을 때)
+
+기존 장치로 세션이 발급되는지 먼저 확인한 뒤 **해제 → 삭제 → 생성 → 활성화** 순서로 진행합니다.
+
+```bash
+source scripts/tf-session.sh personal        # 기존 장치로 발급 성공 확인
+source scripts/tf-session.sh clear
+
+# 1) 기존 장치 연결 해제 (0)에서 확인한 SerialNumber)
+aws iam deactivate-mfa-device --user-name <본인 IAM User> --serial-number <기존 ARN>
+
+# 2) 기존 Virtual MFA 삭제
+aws iam delete-virtual-mfa-device --serial-number <기존 ARN>
+
+# 3) A의 1) ~ 4) 진행 → 끝나면 0)으로 장치 1개 연결 확인
+```
+
+- 1)부터 A가 끝날 때까지는 TF 실행 Role을 사용할 수 없습니다. 진행 중인 plan / apply가 없을 때 합니다.
+- 휴대폰 앱의 기존 항목은 새 장치로 세션 발급을 확인한 뒤 삭제합니다.
+
+#### C. 관리자 복구 (기존 장치를 사용할 수 없을 때)
+
+본인이 MFA를 증명할 수 없는 상태이므로 직접 해제하지 않고, 다른 팀원에게 복구를 요청합니다.
+
+1. 요청자가 Issue를 등록합니다. (대상 IAM User, 사유)
+2. 다른 팀원(IAM 관리 권한 보유)이 요청자 본인 여부를 직접 확인한 뒤, 대상 사용자에 대해 B의 1) 해제와 2) 삭제를 실행합니다.
+3. 요청자가 A로 다시 등록하고 `personal` 세션 발급을 확인합니다.
+4. Issue에 요청자, 실행자, 대상 IAM User, 처리 시각, 결과를 기록합니다. 계정 ID와 ARN은 기록하지 않습니다.
+
+#### `EntityAlreadyExists`가 나올 때
+
+같은 이름의 Virtual MFA가 이미 있다는 뜻입니다. 연결된 장치일 수도 있으니 바로 삭제하지 않고 먼저 확인합니다.
+
+```bash
+aws iam list-virtual-mfa-devices --assignment-status Unassigned \
+  --query "VirtualMFADevices[?ends_with(SerialNumber, ':mfa/<본인 IAM User>')].SerialNumber" --output text
+```
+
+- **출력 있음** → 어느 사용자에게도 연결되지 않은 잔여 장치입니다. 출력된 ARN으로 `aws iam delete-virtual-mfa-device --serial-number <ARN>` 실행 후 A의 1)부터 다시 진행합니다.
+- **출력 없음** → 연결된 장치가 있습니다. 0)으로 돌아가 B 또는 C를 사용합니다.
+
+### 처음 설정 확인
+
+```bash
+cd ~/work/seokpan-hybrid-infra
+source scripts/tf-session.sh personal     # 실행 주체: …:user/<본인>
+source scripts/tf-session.sh bootstrap    # 실행 주체: …:assumed-role/seokpan-tf-bootstrap/<본인>-bootstrap
+cd terraform/bootstrap
+terraform init                            # 예전 clone이면 아래 "기존 clone 사용자 안내" 먼저
+terraform plan                            # No changes
+cd ../.. && source scripts/tf-session.sh clear
+```
+
+- 확인 결과는 담당 Issue에 **성공/실패와 Role 이름만** 남깁니다. 계정 ID·Access Key·MFA 코드는 기록하지 않습니다.
+- 이 확인은 init / plan까지입니다. apply는 지정된 실행 주체만 수행합니다.
 
 ### Role 권한 경계
 
@@ -130,8 +232,6 @@ terraform {
 
 - `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
 
-- `workspace_key_prefix`: backend가 init 때 Workspace 목록을 조회(List)하는 경로입니다. 기본값(`env:/`)은 자기 접두사 밖이라 foundation / rosa Role에서 거부되므로 자기 접두사 안으로 둡니다. (bootstrap은 버킷 관리 Role이라 기본값 유지)
-
 > Region은 서울 `ap-northeast-2`로 확정되었습니다. (03 §3-B.3)
 
 ## 기존 clone 사용자 안내 (2026-10-01 구조 변경)
@@ -139,7 +239,8 @@ terraform {
 `bootstrap/`이 `terraform/bootstrap/`으로, state key가 `phase2/bootstrap/`으로 바뀌었습니다. 이전에 clone한 경우 한 번 실행합니다.
 
 1. `git checkout main && git pull`
-2. `rm -rf bootstrap` (예전 폴더의 `.terraform/` 잔여물 정리)
+2. 예전 `bootstrap/` 폴더에 남길 파일이 없는지 확인한 뒤 삭제합니다.
+   `ls -la bootstrap` → `.terraform/`, `.terraform.lock.hcl` 외에 `*.tfplan`, 로컬 state, 개인 메모 등이 있으면 먼저 옮기고 `rm -rf bootstrap`
 3. `cd terraform/bootstrap && terraform init -reconfigure`
 4. `terraform plan` 결과가 `No changes`인지 확인
 
@@ -157,12 +258,14 @@ Issue → Branch → terraform fmt → validate → plan → PR Review → Appro
 
 ### 규칙
 
-- apply / destroy는 **지정된 실행 주체만** 수행합니다. (스택별 실행자는 WBS에서 지정)
+- apply / destroy는 **지정된 실행 주체만** 수행합니다. bootstrap · foundation: 이유빈, rosa: 정태훈 (04 §2.2). 다른 팀원은 init / plan까지 확인합니다.
+- 지정 실행자가 아닌 사람이 실행해야 하면 담당자와 인계한 뒤 진행하고, PR·Issue에 **배정 실행자와 실제 수행자**를 함께 기록합니다. (04 §2.4)
 - apply는 `main` 코드로만 실행합니다. (예외: bootstrap 최초 구성)
 - State 잠금은 충돌 방지 장치이며, 동시 apply를 허용한다는 의미가 아닙니다.
 - apply 전 plan의 `destroy` / `replace` 항목을 반드시 확인합니다.
 - `root`로 Terraform을 실행하지 않습니다. 각자 `su - 본인계정` 후 **본인 IAM User의 MFA 세션**(`scripts/tf-session.sh`)으로 실행합니다.
 - Provider / Module 버전은 검증한 버전으로 고정하고 `.terraform.lock.hcl`을 커밋합니다.
+- controller 서버에서 전체 `dnf update`를 실행하지 않습니다. Terraform 등 공용 도구 버전이 함께 바뀔 수 있습니다. 개별 패키지도 설치 전 버전과 의존성 영향을 확인합니다. (04 §8.2)
 - `*.tfstate`, `*.tfvars`, `.terraform/`은 커밋하지 않습니다.
 - plan 파일은 `<작업명>.tfplan`으로 저장하고, **apply 후 즉시 삭제**합니다.
 - 리뷰 후속 소규모 수정(문서·주석·설정 정합성)은 Issue 없이 `docs/<작업명>` 브랜치로 진행할 수 있으며, PR 본문에 원 PR과 관련 Issue를 참조합니다.
