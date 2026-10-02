@@ -1,0 +1,55 @@
+# Backup 전용 IAM User (03 §3-C.13, §3-D.9.2)
+#
+# - Console 로그인 없음, Access Key는 Terraform 밖에서 발급한다.
+#   (aws_iam_access_key로 만들면 Secret Key가 State에 저장되기 때문)
+# - 전용 Data VM의 예약 Job과 온프렘 Recovery Storage 다운로드에 사용
+# - 삭제 권한 없음: Job이 잘못 동작해도 기존 백업을 지우지 못하게 함
+#   (정리는 Lifecycle 규칙이 담당)
+
+resource "aws_iam_user" "backup" {
+  count = var.create_backup_user ? 1 : 0
+
+  name = "${var.name_prefix}-backup"
+  path = "/automation/"
+
+  tags = {
+    Component = "backup"
+  }
+}
+
+data "aws_iam_policy_document" "backup_user" {
+  # 업로드는 일반 사본 경로에만
+  statement {
+    sid       = "PutHourly"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/hourly/*"]
+  }
+
+  # 다운로드는 일반·보호 사본 모두 (온프렘 Recovery Storage 동기화)
+  statement {
+    sid       = "GetBackups"
+    actions   = ["s3:GetObject"]
+    resources = ["${aws_s3_bucket.backup.arn}/hourly/*", "${aws_s3_bucket.backup.arn}/protected/*"]
+  }
+
+  # 목록 조회는 두 경로 안에서만
+  statement {
+    sid       = "ListBackupPrefixes"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.backup.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["hourly/*", "protected/*"]
+    }
+  }
+}
+
+resource "aws_iam_user_policy" "backup" {
+  count = var.create_backup_user ? 1 : 0
+
+  name   = "${var.name_prefix}-backup-s3"
+  user   = aws_iam_user.backup[0].name
+  policy = data.aws_iam_policy_document.backup_user.json
+}
