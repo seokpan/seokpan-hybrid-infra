@@ -8,15 +8,12 @@
 # - 수명 정책: untagged 만료 + 전체 최근 N개 보관 (scan-*/git-* 접두사별 규칙은 사용하지 않음)
 #   scan-* 규칙을 두면, Promote 후 scan-* 태그가 남은 이미지가 이미지 단위로 만료되어
 #   같은 이미지의 git-* 태그까지 삭제될 수 있어 단일 보관 규칙으로 구성
-# - 아직 미반영: ROSA Worker ECR Pull 권한(Role 이름/연결 방식 확인 후 별도 추가)
+# - 변수는 registry_ci_variables.tf, 출력은 registry_ci_outputs.tf
+# - 아직 미반영: ROSA Worker ECR Pull 권한(Role 이름/연결 방식 확인 후 별도 PR)
 # ---------------------------------------------------------------------------
 
 locals {
   registry_components = toset(["backend", "frontend"])
-
-  # 미확정 값: 비용 집계 후 협의 (#18). GitOps가 참조 중인 git-* 이미지를 지우지 않는 개수여야 함
-  registry_keep_image_count    = 50 # App #2 "최신 50개 유지" 기준
-  registry_untagged_expire_day = 7  # TODO: 미협의, 임시값
 }
 
 resource "aws_ecr_repository" "this" {
@@ -49,30 +46,25 @@ resource "aws_ecr_lifecycle_policy" "this" {
     rules = [
       {
         rulePriority = 1
-        description  = "untagged 이미지 ${local.registry_untagged_expire_day}일 후 만료"
+        description  = "untagged 이미지 ${var.registry_untagged_expire_days}일 후 만료"
         selection = {
           tagStatus   = "untagged"
           countType   = "sinceImagePushed"
           countUnit   = "days"
-          countNumber = local.registry_untagged_expire_day
+          countNumber = var.registry_untagged_expire_days
         }
         action = { type = "expire" }
       },
       {
         rulePriority = 2
-        description  = "최근 ${local.registry_keep_image_count}개 이미지만 보관"
+        description  = "최근 ${var.registry_keep_image_count}개 이미지만 보관"
         selection = {
           tagStatus   = "any"
           countType   = "imageCountMoreThan"
-          countNumber = local.registry_keep_image_count
+          countNumber = var.registry_keep_image_count
         }
         action = { type = "expire" }
       },
     ]
   })
-}
-
-output "ecr_repository_urls" {
-  description = "ECR Repository URL (component별)"
-  value       = { for k, r in aws_ecr_repository.this : k => r.repository_url }
 }

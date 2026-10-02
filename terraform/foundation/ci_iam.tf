@@ -50,7 +50,3 @@ resource "aws_iam_user_policy" "ci_ecr" {
   policy = data.aws_iam_policy_document.ci_ecr.json
 }
 
-output "ci_user_name" {
-  description = "CI IAM User 이름 (Access Key는 Terraform 밖에서 발급)"
-  value       = aws_iam_user.ci.name
-}
