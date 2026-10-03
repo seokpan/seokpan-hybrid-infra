@@ -88,3 +88,14 @@ T19/최종 삭제 전 검증 Backup·Harbor 이미지·Render/도구·독립 사
 실제 기록은 [HANDOFF_TEMPLATE](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HANDOFF_TEMPLATE.md)·[Evidence 안내](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/evidence/README.md)를 따른다. 새 시험/재시험은 새 Run으로 남겨 Run Index 및 작업 Issue에 연결하고 D에게 인계한다. 충돌 가능한 실행은 WORK_TRACKER의 Shared Execution으로 조율한다. 보호 원본 실제 경로/접근 방법은 보호 운영 대장에, 공개 기록에는 논리 참조·책임·가용성/무결성 확인 결과만 연결한다.
 
 근거: 승인03 §3-F.4~8·11·15~19, 04 §2~4·6·9~10, 개인계획 TH-10~12·16·19/§7.3·9·12, 지침 §37. 새로운 필드명·공급 형태·실제 수신 완료는 후속 합의/증거로 확정한다.
+
+## 2026-10-02 HCL 후속 후보와 검사 범위
+
+최초 계약 준비는 [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 HEAD `5eaef969723e29becbb1e0611d04660ddcbdb28d`를 소비했다. 2026-10-03의 [PR #27 병합 전 수정 요청 3건](https://github.com/seokpan/seokpan-hybrid-infra/pull/27#issuecomment-5968219700)의 정정도 후속 이력으로 소비하며, Registry/CI 수신 조건의 정본은 위 단락으로 유지한다. [Draft PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)의 `variables.tf`와 예시는 B 소비 Schema 제안이다. A/C/D가 수락한 최종 Output 표현·실제 값은 아직 아니며, 승인 의미와 기존 체크/실행 Gate를 유지한다. Schema 필드명·Review 참조의 형식 검사나 Source SHA/시각은 실제 입력 최신성·지원/권한/Cost의 증거가 아니다.
+
+Core1.16.4/AWS6.67.0/RHCS1.7.7의 정확 제약·설치 Lock와 정적 HCL을 준비했다. 앞선 착수 댓글의 AWS 표기는 04 §8.4 채택·§8.6 후속과 정합해 6.67.0으로 정정했다. fmt·diff check·예시 JSON·공식 Source Schema 대조는 확인했으나 **Provider validate/schema 실행은 Unix socket 생성 거부로 BLOCKED**다. Controller의 같은 Source/Lock 재검증과 공급/소비 Schema 리뷰가 남는다. 설치 성공을 실제 지원·Cloud 조회·Plan/Apply나 Acceptance PASS로 올리지 않는다.
+
+RHCS1.7.7은 삭제 timeout 후 State에서 Cluster를 제거할 수 있다. [README의 단계](README.md#worker-sg-binding과-삭제-단계)에 따라 Binding을 먼저 해제하고 `cluster_enabled=false`에서 IAM/OIDC를 유지한 채 Cluster만 제거한다. 실제 서비스 삭제 확인 후 별도 전체 rosa cleanup을 검토한다. 직접 전체 Destroy·부분 Replace의 보호는 dependency만으로 보장하지 않으며 실제 Plan/삭제 검증이 남는다. 기존 T19·최종 보존/정리 조건은 그대로 적용한다.
+
+PR #24 병합 전 HEAD 4fcb의 Source/본문 정합은 [B 후속 COMMENT](https://github.com/seokpan/seokpan-hybrid-infra/pull/24#pullrequestreview-5391575120)에서 추가 Source 요구0건으로 연결했다. 작성자 fmt/validate 보고와 승인·병합은 실제 Boundary/통합 Plan/Preview·Worker Pull의 성공과 구분한다. A 승인·병합 완료는 위 정본의 후속 병합 확인을 따른다. 이 후속 후보의 제출·정적 검사만으로 위 미완료 체크를 완료하지 않는다.
+

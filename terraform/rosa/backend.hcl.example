@@ -1,0 +1,3 @@
+# Copy outside Git and supply the existing bootstrap-owned bucket.
+# This file is deliberately not executable input.
+bucket = "INPUT_REQUIRED"
