@@ -1,0 +1,151 @@
+name: ROSA source validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - 'terraform/rosa/**'
+      - '.github/workflows/rosa-static-validation.yml'
+  push:
+    branches: [main, implementation/rosa-classic-root-candidate-20261002]
+    paths:
+      - 'terraform/rosa/**'
+      - '.github/workflows/rosa-static-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rosa-static-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      TF_IN_AUTOMATION: 'true'
+      TF_DATA_DIR: ${{ runner.temp }}/rosa-static-data
+      TF_CLI_CONFIG_FILE: ${{ runner.temp }}/rosa-static.tfrc
+      CHECKPOINT_DISABLE: '1'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - name: Checkout the submitted commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install checksum-verified Terraform 1.16.4
+        run: |
+          set -euo pipefail
+          tf_download_dir="${RUNNER_TEMP}/rosa-terraform-download"
+          tf_binary_dir="${RUNNER_TEMP}/rosa-terraform-bin"
+          mkdir -p "$tf_download_dir" "$tf_binary_dir"
+          cd "$tf_download_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip \
+            --output terraform_1.16.4_linux_amd64.zip
+          curl --fail --silent --show-error --location --retry 3 \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS \
+            --output SHA256SUMS
+          awk '$2 == "terraform_1.16.4_linux_amd64.zip" { print }' SHA256SUMS > selected-checksum.txt
+          test "$(wc -l < selected-checksum.txt)" -eq 1
+          sha256sum -c selected-checksum.txt
+          unzip -q terraform_1.16.4_linux_amd64.zip terraform -d "$tf_binary_dir"
+          printf '%s\n' "$tf_binary_dir" >> "$GITHUB_PATH"
+
+      - name: Prepare isolated provider data and record source
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$TF_DATA_DIR"
+          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          disable_checkpoint = true
+          provider_installation {
+            direct {}
+          }
+          TFRC
+          test -z "$(git status --porcelain)"
+          {
+            printf 'Source commit: %s\n' "$(git rev-parse HEAD)"
+            printf 'Lock blob: %s\n' "$(git hash-object terraform/rosa/.terraform.lock.hcl)"
+            sha256sum terraform/rosa/.terraform.lock.hcl
+            printf 'Scope: source/provider validation; no backend, plan, apply or runtime acceptance.\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check formatting
+        run: terraform -chdir=terraform/rosa fmt -check
+
+      - name: Install locked providers without backend
+        run: terraform -chdir=terraform/rosa init -backend=false -input=false -lockfile=readonly -no-color
+
+      - name: Verify the actual tool and provider versions
+        run: |
+          set -euo pipefail
+          terraform -chdir=terraform/rosa version -json > "${RUNNER_TEMP}/rosa-version.json"
+          python3 - "${RUNNER_TEMP}/rosa-version.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              version = json.load(source)
+          expected = {
+              "registry.terraform.io/hashicorp/aws": "6.67.0",
+              "registry.terraform.io/terraform-redhat/rhcs": "1.7.7",
+          }
+          if version.get("terraform_version") != "1.16.4" or version.get("provider_selections") != expected:
+              raise SystemExit("Unexpected Core/provider version combination")
+          print(json.dumps(version, indent=2))
+          PY
+
+      - name: Validate the configuration with installed providers
+        run: |
+          set -euo pipefail
+          terraform -chdir=terraform/rosa validate -json | tee "${RUNNER_TEMP}/rosa-validate.json"
+          python3 - "${RUNNER_TEMP}/rosa-validate.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              result = json.load(source)
+          if result.get("valid") is not True or result.get("error_count") != 0:
+              raise SystemExit("Configuration validation did not pass")
+          print("Validate errors:", result["error_count"], "warnings:", result.get("warning_count"))
+          PY
+
+      - name: Read actual provider schemas and check declared types
+        run: |
+          set -euo pipefail
+          terraform -chdir=terraform/rosa providers schema -json > "${RUNNER_TEMP}/rosa-provider-schema.json"
+          python3 - "${RUNNER_TEMP}/rosa-provider-schema.json" <<'PY'
+          import json, pathlib, re, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              providers = json.load(source)["provider_schemas"]
+          prefixes = {
+              "aws_": "registry.terraform.io/hashicorp/aws",
+              "rhcs_": "registry.terraform.io/terraform-redhat/rhcs",
+              "terraform_": "terraform.io/builtin/terraform",
+          }
+          checked = set()
+          for path in sorted(pathlib.Path("terraform/rosa").glob("*.tf")):
+              for kind, resource_type in re.findall(r'^\s*(resource|data)\s+"([^"]+)"\s+"[^"]+"', path.read_text(), re.M):
+                  provider = next((value for prefix, value in prefixes.items() if resource_type.startswith(prefix)), None)
+                  bucket = "resource_schemas" if kind == "resource" else "data_source_schemas"
+                  if provider is None or resource_type not in providers.get(provider, {}).get(bucket, {}):
+                      raise SystemExit(f"Missing actual schema for {kind} {resource_type}")
+                  checked.add((kind, resource_type))
+          if not checked:
+              raise SystemExit("No declared resource/data schemas checked")
+          print("Actual schemas checked:")
+          for item in sorted(checked):
+              print(*item)
+          PY
+
+      - name: Confirm source and lock remained unchanged
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+          printf 'Source/Lock validation completed for %s. Cloud/runtime acceptance remains separate.\n' \
+            "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

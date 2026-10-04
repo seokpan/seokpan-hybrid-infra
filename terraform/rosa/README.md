@@ -68,7 +68,7 @@ Root에서 아래 정적 명령을 수행한다. Provider 다운로드와 State 
 ```bash
 terraform version
 terraform fmt -check
-terraform init -backend=false -input=false
+terraform init -backend=false -input=false -lockfile=readonly
 terraform validate
 terraform providers schema -json > /protected/scratch/rosa-provider-schema.json
 ```
@@ -76,6 +76,12 @@ terraform providers schema -json > /protected/scratch/rosa-provider-schema.json
 **이번 환경의 결과:** Core 1.16.4 공식 checksum·공개 Provider 설치/서명·Root Lock·fmt 확인. `validate`/schema는 Provider RPC의 Unix socket 생성이 `operation not permitted`로 차단되어 **미통과**다. 권한을 우회하지 않았으며 다른 Controller에서 같은 Source/Lock로 재검증해야 한다. 공식 v1.7.7 Source Schema 대조는 실행된 Provider Schema/validate PASS가 아니다.
 
 예시는 의도적으로 실행 불가다. 실제 입력/Backend/Plan은 Git 밖 보호 영역, RHCS 인증은 `RHCS_TOKEN` 환경변수로 공급한다. 초기 input/support/예비 비용·Window 리뷰로 Owner의 첫 Plan을 준비하고, 생성 전 **실제 보호 전체 Plan의 최신 수량·누적/잔존·시간·Cost Gate와 팀 리뷰**를 확인한다. `execution_review` 문자열은 보조 검사이며 성공 증거/Apply 승인을 발급하지 않는다. `$450` 계획선 초과 신규 가동 보류·조정, 총 `$500` 한도를 유지한다. 이번 작업에는 Cloud 조회/Plan/Apply·유료 호출이 없다.
+
+## GitHub Linux Source 검사
+
+[ROSA source validation Workflow](../../.github/workflows/rosa-static-validation.yml)는 TH-10의 Source/Lock 정적 검사다. 표준 `ubuntu-24.04`에서 제출 Commit을 checkout하고 공식 SHA-256으로 확인한 Core 1.16.4·고정 AWS 6.67.0/RHCS 1.7.7을 사용한다. 별도 TF_DATA_DIR/CLI config·읽기 전용 Lock·Backend 비활성화로 fmt→init→실제 버전→validate JSON→실제 Provider Schema와 선언 Type→Source/Lock 불변을 확인한다. Secret/OIDC·실제 tfvars/Backend config·TF 세션·Plan/Apply를 공급하지 않으며 D의 Jenkins App Build/Scan/Promotion과 별도다.
+
+Draft PR도 검사하며 PR의 실제 HEAD SHA를 사용한다. PR/해당 작업 Branch·main의 ROSA/Workflow 변경만 실행하고 같은 Commit 중복 실행은 취소한다. 저장소 정책·필수 체크·리뷰 규칙은 변경하지 않는다. GitHub Actions Run의 실제 결론과 같은 Commit의 로그를 원래 Issue/PR에 연결하며 Workflow 게시 자체를 PASS로 기록하지 않는다. 기존 로컬 RPC BLOCKED는 당시 환경 이력으로 유지한다. GitHub Linux 정적 검사 통과도 실제 실행 Controller/Caller·Input/IAM/지원·Plan/Cost·Cloud/Recovery Acceptance를 대신하지 않는다. 전체 schema/캐시 Artifact를 업로드하지 않고 로그에는 검증 결과·필요 Type·Source/Lock/버전만 남긴다.
 
 ## 공식 자료와 남은 Gate
 
