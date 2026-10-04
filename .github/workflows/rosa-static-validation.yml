@@ -29,8 +29,6 @@ jobs:
         shell: bash
     env:
       TF_IN_AUTOMATION: 'true'
-      TF_DATA_DIR: ${{ runner.temp }}/rosa-static-data
-      TF_CLI_CONFIG_FILE: ${{ runner.temp }}/rosa-static.tfrc
       CHECKPOINT_DISABLE: '1'
       AWS_EC2_METADATA_DISABLED: 'true'
     steps:
@@ -63,13 +61,17 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          mkdir -p "$TF_DATA_DIR"
-          cat > "$TF_CLI_CONFIG_FILE" <<'TFRC'
+          rosa_tf_data_dir="${RUNNER_TEMP}/rosa-static-data"
+          rosa_tf_cli_config="${RUNNER_TEMP}/rosa-static.tfrc"
+          mkdir -p "$rosa_tf_data_dir"
+          cat > "$rosa_tf_cli_config" <<'TFRC'
           disable_checkpoint = true
           provider_installation {
             direct {}
           }
           TFRC
+          printf 'TF_DATA_DIR=%s\nTF_CLI_CONFIG_FILE=%s\n' \
+            "$rosa_tf_data_dir" "$rosa_tf_cli_config" >> "$GITHUB_ENV"
           test -z "$(git status --porcelain)"
           {
             printf 'Source commit: %s\n' "$(git rev-parse HEAD)"
