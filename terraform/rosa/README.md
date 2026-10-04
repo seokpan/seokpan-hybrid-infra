@@ -1,6 +1,6 @@
 # ROSA Classic Root — TH-10 Source candidate
 
-원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비한 별도 HCL 후속 PR이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 승인 03 §3-F와 04·개인 계획 TH-10을 정적 Source로 연결한다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
+원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비한 별도 HCL 후속 PR이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 공개 승인 [03 §3-F](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)와 [04](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md)를 정적 Source로 연결한다. 개인 계획 TH-10은 별도 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
 
 ## 범위와 Owner
 
@@ -86,4 +86,4 @@ terraform providers schema -json > /protected/scratch/rosa-provider-schema.json
 - [공식 Classic v1.7.2 Operator Role/Trust/전파](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)
 - [RHCS v1.7.7 실제 Delete 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/clusterrosa/classic/cluster_rosa_classic_resource.go)
 
-Controller 재검증·A/C/D Schema 수신·실제 Output/Route/Role/Policy·서비스 권한 PR·전체 Plan/Cost/Window·전파/부분 실패·Cluster/SG Binding·Node ECR Pull·TH-11 관리/Secret/GitOps·업무/Migration·T19 Recreate·T20/T23 정리가 남아 있다. 실제 CLI/Controller 버전·지원 조합도 실행 시 확인한다. 결과는 Issue/PR 원본, WORK_TRACKER/05에는 원본 링크·범위·남은 Gate를 연결한다.
+Controller 재검증·A/C/D Schema 수신·실제 Output/Route/Role/Policy·서비스 권한 PR·전체 Plan/Cost/Window·전파/부분 실패·Cluster/SG Binding·Node ECR Pull·TH-11 관리/Secret/GitOps·업무/Migration·T19 Recreate·T20/T23 정리가 남아 있다. 실제 CLI/Controller 버전·지원 조합도 실행 시 확인한다. 결과는 Issue/PR 원본에 기록하고 공개 [WORK_TRACKER](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/WORK_TRACKER.md)·[05](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/05_IMPLEMENTATION_AND_VALIDATION.md)에는 원본 링크·범위·남은 Gate를 연결한다. 역할/인계는 [팀 작업·인계 가이드](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/TEAM_WORK_AND_HANDOFF_GUIDE.md)를 따르며 비공개 개인 계획이나 지침 사본을 공개 근거로 제시하지 않는다.
