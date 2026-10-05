@@ -9,7 +9,7 @@
 | Backend·TF Role | 기존 bootstrap. rosa는 기존 Bucket과 `seokpan-tf-rosa` 세션을 소비 |
 | Network·Data·Account-wide ROSA Role/공통 정책 | foundation/A 통합. rosa는 제한 입력만 소비 |
 | Worker ECR Pull Policy·Classic Worker Role Attachment | foundation/A·D 후속. rosa에서 중복 선언하지 않음 |
-| Cluster·managed OIDC config/provider·Operator Role/Attachment | rosa/B. 동일 객체의 AWS/RHCS/CLI 중복 관리 금지 |
+| Cluster·managed OIDC config/provider·Operator Role/Attachment | rosa/B. RHCS는 OCM Config/Cluster, AWS Provider는 고객 IAM Provider·Role/Attachment를 관리. Operator Data Source는 목록 조회만 수행. [실제 객체별 경계](REVIEW_AND_EXECUTION_GATES.md#객체별-실제-provider-소유권) |
 | Worker→Data SG Binding | rosa/B. Data SG 본체·기반 Rule은 foundation. inline Rule 혼용 금지 |
 | Namespace·GitOps/App/IDP·Secret | 승인된 GitOps/최소 Bootstrap/별도 공급. rosa에 생성하지 않음 |
 
@@ -43,6 +43,10 @@ TH-11은 정상 개인 IDP/RBAC·Argo 권한·유지 비상 경로와 Cloud Secr
 Schema는 다른 Region/환경·중복 Subnet·3 AZ 불일치·다른 Account Role/정책 ARN·잘못된 개정/버전 형식·계열을 차단한다. 실제 read-only Data Source는 Caller·VPC CIDR/DNS·Subnet CIDR/VPC/AZ·Private IP 설정·Role ARN을 대조한다. **Output 최신성·Route/NAT/Endpoint·IAM Policy/Trust 권한·지원/Quota·Cost는 이 검사로 입증하지 않는다.** 최신 source/output 개정·생성 조합·자원/Owner를 별도로 확인하고 기반 변경 뒤 다시 추출/리뷰한다.
 
 공식 Classic module은 Operator Role/Attachment 뒤 20초, OIDC 생성/삭제에 10초 대기를 사용한다. 이번 direct-resource Source에는 고정 대기를 추가하지 않았다. **실제 IAM/OIDC 전파와 생성 재시도 처리도 미검증 Gate**이며 dependency만으로 전파 성공을 주장하지 않는다. 시간 경과만으로 전파를 입증할 수도 없다. 실제 Plan/첫 생성 전 지원 경로·재실행/부분 실패 처리를 검증한다.
+
+## OIDC issuer 소비와 리뷰 판단
+
+[현재 C 리뷰의 형식·소유권·검사/실행 순서](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)를 따른다. 고정 RHCS 1.7.7은 `oidc_endpoint_url`에 scheme을 제거한 host/path를 반환하므로 기존 Trust가 실제로 깨졌다고 가정하지 않는다. 소비 코드도 `trimprefix`로 이를 명시하고 AWS Provider URL과 Trust의 `sub` key에 같은 host/path를 사용한다. 실제 생성 Trust JSON·URL은 두 issuer 형태의 mock Provider plan으로 검사한다. 이는 실물 STS Federation 시험이 아니며, 준비 단계의 실제 issuer/IAM/지원 대조와 생성 후 실제 Operator의 WebIdentity/STS 경로를 따로 확인한다. 기존 Root/State/Policy Owner·Provider/Lock·삭제 경계는 유지한다.
 
 ## Worker SG Binding과 삭제 단계
 
@@ -82,7 +86,7 @@ Provider Schema는 아래 GitHub 검사 또는 [원래 Issue #25](https://github
 
 ## GitHub Linux Source 검사
 
-[ROSA source validation Workflow](../../.github/workflows/rosa-static-validation.yml)는 TH-10의 Source/Lock 정적 검사다. 표준 `ubuntu-24.04`에서 제출 Commit을 checkout하고 공식 SHA-256으로 확인한 Core 1.16.4·고정 AWS 6.67.0/RHCS 1.7.7을 사용한다. 별도 TF_DATA_DIR/CLI config·읽기 전용 Lock·Backend 비활성화로 fmt→init→실제 버전→validate JSON→실제 Provider Schema와 선언 Type→Source/Lock 불변을 확인한다. 원래 Root의 validate는 Backend 선언을 포함한 원문 그대로 수행한다. `providers schema`는 Backend/State를 먼저 읽으므로, 그 명령만 같은 HCL/Lock에서 `backend.tf`를 제외한 임시 사본·별도 TF_DATA_DIR로 조회한다. 나머지 HCL/Lock 사본의 동일성을 대조하며 실제 Root Backend 초기화·State/입력의 검증 결과로 확대하지 않는다. Secret/OIDC·실제 tfvars/Backend config·TF 세션·Plan/Apply를 공급하지 않으며 D의 Jenkins App Build/Scan/Promotion과 별도다.
+[ROSA source validation Workflow](../../.github/workflows/rosa-static-validation.yml)는 TH-10의 Source/Lock 정적 검사다. 표준 `ubuntu-24.04`에서 제출 Commit을 checkout하고 공식 SHA-256으로 확인한 Core 1.16.4·고정 AWS 6.67.0/RHCS 1.7.7을 사용한다. 별도 TF_DATA_DIR/CLI config·읽기 전용 Lock·Backend 비활성화로 fmt(테스트 파일 포함)→init→실제 버전→validate JSON→실제 Provider Schema와 선언 Type→두 issuer 형태의 mock Provider plan→Source/Lock 불변을 확인한다. 원래 Root의 validate는 Backend 선언을 포함한 원문 그대로 수행한다. `providers schema`는 Backend/State를 먼저 읽으므로, 그 명령만 같은 HCL/Lock에서 `backend.tf`를 제외한 임시 사본·별도 TF_DATA_DIR로 조회한다. 나머지 HCL/Lock 사본의 동일성을 대조하며 실제 Root Backend 초기화·State/입력의 검증 결과로 확대하지 않는다. mock 테스트는 같은 HCL/Lock의 Backend 제외 사본에서 AWS/RHCS를 모두 mock하고 합성 입력으로 생성 JSON을 확인한다. 실제 Secret/OIDC·tfvars/Backend config·TF 세션·Cloud Plan/Apply를 공급하지 않으며 D의 Jenkins App Build/Scan/Promotion과 별도다.
 
 Draft PR도 검사하며 PR의 실제 HEAD SHA를 사용한다. PR/해당 작업 Branch·main의 ROSA/Workflow 변경만 실행하고 같은 Commit 중복 실행은 취소한다. 저장소 정책·필수 체크·리뷰 규칙은 변경하지 않는다. GitHub Actions Run의 실제 결론과 같은 Commit의 로그를 원래 Issue/PR에 연결하며 Workflow 게시 자체를 PASS로 기록하지 않는다. 기존 로컬 RPC BLOCKED는 당시 환경 이력으로 유지한다. GitHub Linux 정적 검사 통과도 실제 실행 Controller/Caller·Input/IAM/지원·Plan/Cost·Cloud/Recovery Acceptance를 대신하지 않는다. 전체 schema/캐시 Artifact를 업로드하지 않고 로그에는 검증 결과·필요 Type·Source/Lock/버전만 남긴다.
 

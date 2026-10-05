@@ -12,9 +12,40 @@
 | D/A의 Registry·권한 경계 | Worker Pull은 foundation 후속, CI Push 권한과 Runtime Pull 분리, 목적 TF Role의 Backend 권한과 서비스 권한 구분 | [h-infra Issue #18](https://github.com/seokpan/seokpan-hybrid-infra/issues/18), [h-infra Issue #20](https://github.com/seokpan/seokpan-hybrid-infra/issues/20) |
 | 생성·삭제·교체 절차 | Binding 해제 → Cluster 제거·실제 서비스 삭제 확인 → IAM/OIDC cleanup. 부분 Replace·삭제 timeout·잔존 대응 | [README](README.md#worker-sg-binding과-삭제-단계) |
 
-리뷰는 해당 PR의 **최신 전체 HEAD**와 diff·동일 HEAD의 실제 Source 검사 결과를 대상으로 한다. 이전 HEAD의 성공을 새 HEAD에 복사하지 않는다. 무료 정적 Source 검사는 실제 Provider 설치·fmt·validate·Schema와 Source/Lock 불변까지이며, 실제 Backend·Caller·IAM 지원·Cloud Plan/Apply를 입증하지 않는다. 과거 로컬 Unix socket BLOCKED는 그 환경의 이력으로 보존한다. 이미 성공한 이전 검사만 확인하려고 같은 HEAD를 불필요하게 다시 실행하지 않는다.
+리뷰는 해당 PR의 **최신 전체 HEAD**와 diff·동일 HEAD의 실제 Source 검사 결과를 대상으로 한다. 이전 HEAD의 성공을 새 HEAD에 복사하지 않는다. 무료 Source 검사는 실제 Provider 설치·fmt·validate·Schema·mock Provider plan과 Source/Lock 불변까지이며, 실제 Backend·Caller·IAM 지원·Cloud Plan/Apply를 입증하지 않는다. 과거 로컬 Unix socket BLOCKED는 그 환경의 이력으로 보존한다. 이미 성공한 이전 검사만 확인하려고 같은 HEAD를 불필요하게 다시 실행하지 않는다.
 
 리뷰 코멘트에는 `검토 HEAD / 검토 범위 / 수락 또는 보완 / 남은 실행 Gate`를 적는다. Source의 보완 요구가 해소되고 최신 검사·사람 리뷰를 확인한 뒤 Source 병합을 판단한다. Source 병합으로 Issue #25의 실제 Plan·Runtime·정리 범위를 자동 종료하지 않는다.
+
+## 2026-10-05 C 리뷰 — OIDC 형식과 실제 실행 순서
+
+[C의 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)은 HEAD `870d1e43cb2dfa8ee430c8a174665eb690e5059f`의 issuer 형식과 Operator 객체 소유권을 대상으로 한다. 리뷰의 일반적인 IAM 형식 지적은 옳지만, [고정 RHCS 1.7.7 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/oidcconfig/rosa_oidc_config_resource.go#L392)은 실제 `issuerUrl`의 선두 `https://`를 제거해 `oidc_endpoint_url`에 저장한다. 따라서 기존 코드를 현재 고정 조합에서 이미 잘못된 Trust라고 판정하지 않는다. 이번 보완은 이 출력 계약을 소비 코드에서도 명시하고, HTTPS URL과 IAM condition key가 같은 host/path를 사용하도록 하는 최소 변경이다. 임의 audience 추가·Policy 확대·Provider/Lock 변경·구조 재설계는 하지 않는다.
+
+`local.oidc_issuer_hostpath = trimprefix(..., "https://")`로 선두 scheme만 제거하고, AWS Provider URL은 `local.oidc_issuer_url = "https://${local.oidc_issuer_hostpath}"`, Trust의 `sub` key는 `${local.oidc_issuer_hostpath}:sub`로 만든다. Path와 RHCS가 반환하는 허용 ServiceAccount 목록·`ForAnyValue:StringEquals`·Federated Provider ARN은 유지한다. 이는 [공식 Classic Operator Trust](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)와 대조했으며, EKS 예제의 audience를 ROSA에 복사하지 않는다.
+
+### 객체별 실제 Provider 소유권
+
+| 객체 | 생성/조회/관리 경로 | 의존·보존 경계 |
+|---|---|---|
+| Red Hat managed OIDC configuration | `rhcs_rosa_oidc_config`: OCM OIDC Config 생성/삭제, Red Hat managed issuer/공개 discovery·JWKS 경로 | 고객 AWS IAM 객체를 이 Resource가 생성하는 것은 아님. 실제 사용 Cluster가 있으면 RHCS 삭제 구현은 거부 |
+| Classic Operator 역할 정의·ServiceAccount 목록 | `data.rhcs_rosa_operator_roles`: OCM AWS Inquiries의 STS credential requests 목록 **조회** | AWS IAM Role/Policy/Attachment를 생성하지 않음. 조회 목록과 foundation Policy Map을 대조 |
+| 고객 AWS IAM OIDC Provider | `aws_iam_openid_connect_provider.cluster` | RHCS issuer/Thumbprint를 소비하고 rosa State가 관리 |
+| 고객 AWS Operator IAM Role | `aws_iam_role.operator` | 위 Provider ARN + 조회한 정확한 ServiceAccount `sub`; Path/Boundary는 foundation 계약 소비 |
+| 공통 Operator 정책 본체 / 역할 연결 | 정책 본체는 foundation, 연결은 `aws_iam_role_policy_attachment.operator` | `policy_name`별 승인 ARN Map을 소비하며 rosa에서 공통 정책 본체를 중복 생성하지 않음 |
+| ROSA Cluster | `rhcs_cluster_rosa_classic` | Input Contract + AWS OIDC Provider + Role Policy Attachments에 의존. 공통 Account Role은 foundation 소비 |
+
+관리 소유권 근거는 위 [RHCS OIDC 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/oidcconfig/rosa_oidc_config_resource.go)과 [Operator Data Source Read 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/rosa_operator_roles/classic/rosa_operator_roles_data_source.go)다. 현재 Root의 생성 dependency와 Cluster 삭제 → 실제 서비스 삭제 확인 → IAM/OIDC cleanup 순서는 그대로 유지한다. RHCS/CLI가 동일 AWS 객체를 중복 소유하도록 추가하지 않는다.
+
+### 지금 검사할 것과 실제 환경에서 검사할 것
+
+| 시점 | 검사·결과 범위 | 아직 입증하지 않는 범위 |
+|---|---|---|
+| 현재 Source 리뷰 | 고정 Provider/Lock·fmt/validate/Schema, 두 issuer 형태(선두 `https://` 유무)의 **mock Provider plan**으로 실제 HCL이 생성하는 AWS URL·Trust JSON·6 Role/Attachment 대응 확인 | 실제 OCM/AWS 조회·Backend·권한·실물 issuer·STS Federation 성공 |
+| 실제 IAM/OIDC 준비 전후 | 기존 최초 준비 절차의 전체 Plan/권한/입력/Cost 리뷰. 승인 준비 Apply 후 실제 issuer·TLS discovery/JWKS, Provider URL/Client ID/Thumbprint·Trust·SA 목록·Policy Attachment/Boundary·지원/전파 진단 대조 | IAM Get·웹 응답 성공만으로 실제 ServiceAccount의 `AssumeRoleWithWebIdentity` 성공 판정 |
+| 검토한 유료 Cluster 생성 후 | 실제 issuer에 맞는 Cluster/Operator ServiceAccount 경로·WebIdentity 사용과 STS 오류/가용한 CloudTrail·Operator 상태를 확인. 확인 범위·실패·비용·중단/재개 조건을 새 Run에 기록 | Operator 정상 상태만으로 모든 STS 경로를 확인했다고 확대하거나 실패·미관측을 PASS로 처리 |
+
+Managed OIDC 객체 준비만으로 해당 Cluster의 실제 ServiceAccount JWT가 생기지는 않는다. 실제 Operator의 토큰 경로 시험을 Source 병합 전에 무조건 요구하거나, 이를 증명하려고 별도 유료 Cluster를 먼저 생성하는 순환 Gate를 만들지 않는다. 실제 토큰/자격은 공개 로그나 Git에 남기지 않는다. Cluster 생성 전에 수행 가능한 실물 사전 검사는 기존 준비 단계에서 수행하고, 실제 STS/Operator 업무 경로는 검토된 생성 창 안에서 확인한다. 충분한 사전 근거가 없거나 오류가 발견되면 그 실행을 보류한다. Source 재리뷰에는 이 범위와 실제 미수행 항목을 명시한다.
+
+새 HEAD의 실제 CI·재리뷰 결론은 [PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)·[Issue #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)에 연결한다. Mock의 합성 Account/Subnet/Role/issuer/입력은 실행 인계값이 아니며 실제 Cloud Plan/Apply·유료 생성·Runtime PASS를 기록하지 않는다.
 
 ## 실제 첫 Plan에서 기다리는 입력
 

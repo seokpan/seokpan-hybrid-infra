@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   validate:
+    # Standard public runners are free; hold this Source job if visibility changes.
+    if: ${{ github.event.repository.private == false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -77,11 +79,11 @@ jobs:
             printf 'Source commit: %s\n' "$(git rev-parse HEAD)"
             printf 'Lock blob: %s\n' "$(git hash-object terraform/rosa/.terraform.lock.hcl)"
             sha256sum terraform/rosa/.terraform.lock.hcl
-            printf 'Scope: source/provider validation; no backend, plan, apply or runtime acceptance.\n'
+            printf 'Scope: source/provider validation and synthetic mock plans only; no Cloud backend/plan/apply or runtime acceptance.\n'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Check formatting
-        run: terraform -chdir=terraform/rosa fmt -check
+        run: terraform -chdir=terraform/rosa fmt -check -recursive
 
       - name: Install locked providers without backend
         run: terraform -chdir=terraform/rosa init -backend=false -input=false -lockfile=readonly -no-color
@@ -163,6 +165,38 @@ jobs:
           for item in sorted(checked):
               print(*item)
           PY
+
+      - name: Test actual OIDC and trust expressions with mocked providers
+        run: |
+          set -euo pipefail
+          # Use the already initialized schema copy: original HCL/Lock and only
+          # backend.tf omitted. Mock AWS/RHCS providers never call Cloud APIs.
+          rosa_mock_root="${RUNNER_TEMP}/rosa-schema-root"
+          rosa_mock_data="${RUNNER_TEMP}/rosa-schema-data"
+          cp -R terraform/rosa/tests "$rosa_mock_root/tests"
+          for rosa_mock_source in terraform/rosa/tests/*; do
+            cmp "$rosa_mock_source" "$rosa_mock_root/tests/${rosa_mock_source##*/}"
+          done
+          TF_DATA_DIR="$rosa_mock_data" terraform -chdir="$rosa_mock_root" test \
+            -var-file=tests/oidc_mock.tfvars.json -no-color \
+            2>&1 | tee "${RUNNER_TEMP}/rosa-oidc-mock-tests.log"
+          python3 - "${RUNNER_TEMP}/rosa-oidc-mock-tests.log" <<'PY'
+          import pathlib, re, sys
+          log = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          if re.search(r"(?m)^Success! 2 passed, 0 failed\.$", log) is None:
+              raise SystemExit("Both OIDC mock-plan runs must pass without skips")
+          for name in ("issuer_without_scheme", "issuer_with_https_scheme"):
+              if re.search(r'(?m)^\s*run "' + name + r'"\.\.\. pass\s*$', log) is None:
+                  raise SystemExit("Expected issuer normalization mock run did not pass: " + name)
+          print("OIDC mock plans: 2 passed; actual Role trust JSON/OIDC URL and six Role/Policy mappings checked")
+          PY
+          for rosa_mock_source in terraform/rosa/*.tf; do
+            if [ "${rosa_mock_source##*/}" = backend.tf ]; then continue; fi
+            cmp "$rosa_mock_source" "$rosa_mock_root/${rosa_mock_source##*/}"
+          done
+          cmp terraform/rosa/.terraform.lock.hcl "$rosa_mock_root/.terraform.lock.hcl"
+          printf 'OIDC mock scope: synthetic full-Root plans with both providers mocked; actual AWS/RHCS/STS federation remains NOT VERIFIED.\n' \
+            >> "$GITHUB_STEP_SUMMARY"
 
       - name: Confirm source and lock remained unchanged
         run: |

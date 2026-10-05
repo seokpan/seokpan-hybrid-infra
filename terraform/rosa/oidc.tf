@@ -4,8 +4,15 @@ resource "rhcs_rosa_oidc_config" "cluster" {
   depends_on = [terraform_data.input_contract]
 }
 
+locals {
+  # RHCS 1.7.7 returns host/path. Normalize an explicit HTTPS issuer too so
+  # provider URL and IAM condition keys always derive from the same issuer.
+  oidc_issuer_hostpath = trimprefix(rhcs_rosa_oidc_config.cluster.oidc_endpoint_url, "https://")
+  oidc_issuer_url      = "https://${local.oidc_issuer_hostpath}"
+}
+
 resource "aws_iam_openid_connect_provider" "cluster" {
-  url             = "https://${rhcs_rosa_oidc_config.cluster.oidc_endpoint_url}"
+  url             = local.oidc_issuer_url
   client_id_list  = ["openshift", "sts.amazonaws.com"]
   thumbprint_list = [rhcs_rosa_oidc_config.cluster.thumbprint]
 }
@@ -43,7 +50,7 @@ resource "aws_iam_role" "operator" {
       Principal = { Federated = aws_iam_openid_connect_provider.cluster.arn }
       Condition = {
         "ForAnyValue:StringEquals" = {
-          "${rhcs_rosa_oidc_config.cluster.oidc_endpoint_url}:sub" = each.value.service_accounts
+          "${local.oidc_issuer_hostpath}:sub" = each.value.service_accounts
         }
       }
     }]
