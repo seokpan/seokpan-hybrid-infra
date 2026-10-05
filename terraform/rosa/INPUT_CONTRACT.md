@@ -34,7 +34,7 @@ App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업�
 
 ## OIDC/Operator 검증의 소비 경계
 
-[C의 2026-10-05 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)에 대해 고정 RHCS 1.7.7의 실제 scheme 제거 출력·Operator Data Source 조회와 AWS IAM Resource 소유권을 대조했다. [리뷰/실행 계약](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)은 현재의 명시적 issuer 정규화·mock Source 검사, 준비 Apply 전후의 실물 issuer/Trust/지원 대조, 검토된 Cluster 생성 후의 실제 Operator WebIdentity/STS 경로를 구분한다. Mock 합성 입력은 이 계약의 제출/수신 완료가 아니다. 실제 STS 성공을 Source 병합의 일괄 선행으로 옮기거나 공통 Role/Policy를 rosa에서 중복 관리하지 않는다.
+[C의 2026-10-05 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)에 대해 고정 RHCS 1.7.7의 실제 scheme 제거 출력·Operator Data Source 조회와 AWS IAM Resource 소유권을 대조했다. [리뷰/실행 계약](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)은 현재의 명시적 issuer 정규화·격리 harness/mock Source 검사, 준비 Apply 전후의 실물 issuer/Trust/지원 대조, 검토된 Cluster 생성 후의 실제 Operator WebIdentity/STS 경로를 구분한다. Mock 합성 입력은 이 계약의 제출/수신 완료가 아니다. 실제 STS 성공을 Source 병합의 일괄 선행으로 옮기거나 공통 Role/Policy를 rosa에서 중복 관리하지 않는다.
 
 ## Worker Pull과 SG Binding의 미완료 계약
 

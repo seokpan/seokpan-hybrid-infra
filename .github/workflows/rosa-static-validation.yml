@@ -79,7 +79,7 @@ jobs:
             printf 'Source commit: %s\n' "$(git rev-parse HEAD)"
             printf 'Lock blob: %s\n' "$(git hash-object terraform/rosa/.terraform.lock.hcl)"
             sha256sum terraform/rosa/.terraform.lock.hcl
-            printf 'Scope: source/provider validation and synthetic mock plans only; no Cloud backend/plan/apply or runtime acceptance.\n'
+            printf 'Scope: entire-Root provider validation plus scoped OIDC Source-harness mock plans; no Cloud backend/plan/apply or runtime acceptance.\n'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Check formatting
@@ -166,36 +166,53 @@ jobs:
               print(*item)
           PY
 
-      - name: Test actual OIDC and trust expressions with mocked providers
+      - name: Test preserved OIDC and trust expressions in a scoped harness
         run: |
           set -euo pipefail
-          # Use the already initialized schema copy: original HCL/Lock and only
-          # backend.tf omitted. Mock AWS/RHCS providers never call Cloud APIs.
-          rosa_mock_root="${RUNNER_TEMP}/rosa-schema-root"
-          rosa_mock_data="${RUNNER_TEMP}/rosa-schema-data"
-          cp -R terraform/rosa/tests "$rosa_mock_root/tests"
-          for rosa_mock_source in terraform/rosa/tests/*; do
-            cmp "$rosa_mock_source" "$rosa_mock_root/tests/${rosa_mock_source##*/}"
-          done
+          # Keep the original Root/schema copy unchanged. RHCS's computed nested
+          # role collection cannot be supplied as six distinct mock values in
+          # Core 1.16.4. The scoped harness omits only that query and substitutes
+          # its local-map input; exact resource blocks and Lock are checked.
+          rosa_mock_root="${RUNNER_TEMP}/rosa-oidc-harness"
+          rosa_mock_data="${RUNNER_TEMP}/rosa-oidc-harness-data"
+          mkdir -p "$rosa_mock_data"
+          python3 terraform/rosa/tests/build_oidc_test_root.py \
+            --source-root terraform/rosa --output-root "$rosa_mock_root"
+          TF_DATA_DIR="$rosa_mock_data" terraform -chdir="$rosa_mock_root" \
+            init -backend=false -input=false -lockfile=readonly -no-color
           TF_DATA_DIR="$rosa_mock_data" terraform -chdir="$rosa_mock_root" test \
             -var-file=tests/oidc_mock.tfvars.json -no-color \
             2>&1 | tee "${RUNNER_TEMP}/rosa-oidc-mock-tests.log"
-          python3 - "${RUNNER_TEMP}/rosa-oidc-mock-tests.log" <<'PY'
+          python3 - "${RUNNER_TEMP}/rosa-oidc-mock-tests.log" <<'PYCODE'
           import pathlib, re, sys
           log = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
           if re.search(r"(?m)^Success! 2 passed, 0 failed\.$", log) is None:
-              raise SystemExit("Both OIDC mock-plan runs must pass without skips")
+              raise SystemExit("Both scoped OIDC mock-plan runs must pass without skips")
           for name in ("issuer_without_scheme", "issuer_with_https_scheme"):
               if re.search(r'(?m)^\s*run "' + name + r'"\.\.\. pass\s*$', log) is None:
                   raise SystemExit("Expected issuer normalization mock run did not pass: " + name)
-          print("OIDC mock plans: 2 passed; actual Role trust JSON/OIDC URL and six Role/Policy mappings checked")
-          PY
-          for rosa_mock_source in terraform/rosa/*.tf; do
-            if [ "${rosa_mock_source##*/}" = backend.tf ]; then continue; fi
-            cmp "$rosa_mock_source" "$rosa_mock_root/${rosa_mock_source##*/}"
-          done
-          cmp terraform/rosa/.terraform.lock.hcl "$rosa_mock_root/.terraform.lock.hcl"
-          printf 'OIDC mock scope: synthetic full-Root plans with both providers mocked; actual AWS/RHCS/STS federation remains NOT VERIFIED.\n' \
+          print("Scoped OIDC Source harness: 2 passed; preserved Role trust JSON/OIDC URL and six fixture Role/Policy mappings checked")
+          PYCODE
+          python3 - "$rosa_mock_root" <<'PYCODE'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          source = pathlib.Path("terraform/rosa")
+          manifest = json.loads((root / "source-harness-manifest.json").read_text())
+          def sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          if sha(source / "oidc.tf") != manifest["production_oidc_sha256"]:
+              raise SystemExit("Production OIDC Source changed")
+          if sha(root / "oidc.tf") != manifest["harness_oidc_sha256"]:
+              raise SystemExit("Preserved harness OIDC expressions changed")
+          for name, expected in manifest["exact_copy_sha256"].items():
+              if sha(source / name) != expected or sha(root / name) != expected:
+                  raise SystemExit("Source/harness exact copy changed: " + name)
+          for name in ("oidc_issuer.tftest.hcl", "oidc_mock.tfvars.json"):
+              if (source / "tests" / name).read_bytes() != (root / "tests" / name).read_bytes():
+                  raise SystemExit("Harness test input changed: " + name)
+          print("Production Source/Lock and preserved harness HCL unchanged")
+          PYCODE
+          printf 'OIDC mock scope: scoped Source harness, exact OIDC/Role/Attachment HCL with six typed fixture roles; actual RHCS query/postcondition, foundation preflight, Cluster graph and AWS/RHCS/STS federation are NOT VERIFIED by these mock plans.\n' \
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Confirm source and lock remained unchanged

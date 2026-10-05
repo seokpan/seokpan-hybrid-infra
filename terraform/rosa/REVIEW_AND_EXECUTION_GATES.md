@@ -39,9 +39,11 @@
 
 | 시점 | 검사·결과 범위 | 아직 입증하지 않는 범위 |
 |---|---|---|
-| 현재 Source 리뷰 | 고정 Provider/Lock·fmt/validate/Schema, 두 issuer 형태(선두 `https://` 유무)의 **mock Provider plan**으로 실제 HCL이 생성하는 AWS URL·Trust JSON·6 Role/Attachment 대응 확인 | 실제 OCM/AWS 조회·Backend·권한·실물 issuer·STS Federation 성공 |
+| 현재 Source 리뷰 | 고정 Provider/Lock·fmt/validate/Schema, 두 issuer 형태(선두 `https://` 유무)의 **격리 Source harness/mock Provider plan**으로 보존한 production 선언이 생성하는 AWS URL·Trust JSON·합성 6 Role/Attachment 대응 확인 | 실제 foundation/Operator 목록 조회·Data Source의 6개 postcondition 실행·Cluster graph·OCM/AWS·Backend·권한·실물 issuer·STS Federation 성공 |
 | 실제 IAM/OIDC 준비 전후 | 기존 최초 준비 절차의 전체 Plan/권한/입력/Cost 리뷰. 승인 준비 Apply 후 실제 issuer·TLS discovery/JWKS, Provider URL/Client ID/Thumbprint·Trust·SA 목록·Policy Attachment/Boundary·지원/전파 진단 대조 | IAM Get·웹 응답 성공만으로 실제 ServiceAccount의 `AssumeRoleWithWebIdentity` 성공 판정 |
 | 검토한 유료 Cluster 생성 후 | 실제 issuer에 맞는 Cluster/Operator ServiceAccount 경로·WebIdentity 사용과 STS 오류/가용한 CloudTrail·Operator 상태를 확인. 확인 범위·실패·비용·중단/재개 조건을 새 Run에 기록 | Operator 정상 상태만으로 모든 STS 경로를 확인했다고 확대하거나 실패·미관측을 PASS로 처리 |
+
+Core 1.16.4의 [mock 중첩 속성 처리](https://github.com/hashicorp/terraform/blob/v1.16.4/internal/moduletest/mocking/fill.go#L25)는 RHCS의 Computed ListNestedAttribute를 실제 6개 목록처럼 대체하지 못한다. 이를 위해 production의 6개 Role/Policy Map 조건을 완화하거나 Root 구조를 바꾸지 않는다. 격리 harness는 Operator 조회 block만 생략하고 local map의 목록 참조 1개를 합성 fixture로 치환하며, OIDC/Trust/Role/Attachment·정규화 선언과 복사한 variables/providers/versions/Lock의 보존을 검사한다. input_contract stub도 harness에만 존재한다. 원 Root의 Data Source·Postcondition·Cluster dependency는 별도의 원문 validate/Schema·공식 Source/독립 대조로 유지하고, 그 실행을 mock으로 완료했다고 주장하지 않는다.
 
 Managed OIDC 객체 준비만으로 해당 Cluster의 실제 ServiceAccount JWT가 생기지는 않는다. 실제 Operator의 토큰 경로 시험을 Source 병합 전에 무조건 요구하거나, 이를 증명하려고 별도 유료 Cluster를 먼저 생성하는 순환 Gate를 만들지 않는다. 실제 토큰/자격은 공개 로그나 Git에 남기지 않는다. Cluster 생성 전에 수행 가능한 실물 사전 검사는 기존 준비 단계에서 수행하고, 실제 STS/Operator 업무 경로는 검토된 생성 창 안에서 확인한다. 충분한 사전 근거가 없거나 오류가 발견되면 그 실행을 보류한다. Source 재리뷰에는 이 범위와 실제 미수행 항목을 명시한다.
 

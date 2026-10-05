@@ -1,21 +1,11 @@
-# Synthetic full-Root plan tests. Every AWS/RHCS provider is mocked. These are
-# Source assertions, not a real account/support/Plan/Apply/federation result.
+# Two issuer plans in a scoped Source harness. Production OIDC/Trust/Attachment
+# resource blocks are copied byte-for-byte; the RHCS Operator query is replaced
+# by six typed synthetic roles because Terraform 1.16.4 cannot override that
+# computed ListNestedAttribute collection. The original Root remains separately
+# validated. These tests do not accept the actual query, foundation or Runtime.
 mock_provider "aws" {
   override_during = plan
 
-  mock_data "aws_caller_identity" {
-    defaults = {
-      account_id = "123456789012"
-      arn        = "arn:aws:sts::123456789012:assumed-role/seokpan-tf-rosa/mock-source-test"
-    }
-  }
-  mock_data "aws_vpc" {
-    defaults = {
-      cidr_block           = "192.168.64.0/20"
-      enable_dns_support   = true
-      enable_dns_hostnames = true
-    }
-  }
   mock_resource "aws_iam_openid_connect_provider" {
     defaults = {
       arn = "arn:aws:iam::123456789012:oidc-provider/issuer.fixture.test/mock-cluster"
@@ -25,99 +15,6 @@ mock_provider "aws" {
 
 mock_provider "rhcs" {
   override_during = plan
-}
-
-# Override the complete computed collection. mock_data defaults are per-item
-# templates for nested collections, so a six-object list belongs in values.
-override_data {
-  target = data.rhcs_rosa_operator_roles.cluster
-  values = {
-    operator_iam_roles = [
-      {
-        role_name          = "mock-operator-1"
-        policy_name        = "mock-policy-1"
-        operator_namespace = "mock-namespace-1"
-        operator_name      = "mock-name-1"
-        service_accounts   = ["system:serviceaccount:mock-namespace-1:mock-sa-1"]
-      },
-      {
-        role_name          = "mock-operator-2"
-        policy_name        = "mock-policy-2"
-        operator_namespace = "mock-namespace-2"
-        operator_name      = "mock-name-2"
-        service_accounts   = ["system:serviceaccount:mock-namespace-2:mock-sa-2"]
-      },
-      {
-        role_name          = "mock-operator-3"
-        policy_name        = "mock-policy-3"
-        operator_namespace = "mock-namespace-3"
-        operator_name      = "mock-name-3"
-        service_accounts   = ["system:serviceaccount:mock-namespace-3:mock-sa-3"]
-      },
-      {
-        role_name          = "mock-operator-4"
-        policy_name        = "mock-policy-4"
-        operator_namespace = "mock-namespace-4"
-        operator_name      = "mock-name-4"
-        service_accounts   = ["system:serviceaccount:mock-namespace-4:mock-sa-4"]
-      },
-      {
-        role_name          = "mock-operator-5"
-        policy_name        = "mock-policy-5"
-        operator_namespace = "mock-namespace-5"
-        operator_name      = "mock-name-5"
-        service_accounts   = ["system:serviceaccount:mock-namespace-5:mock-sa-5"]
-      },
-      {
-        role_name          = "mock-operator-6"
-        policy_name        = "mock-policy-6"
-        operator_namespace = "mock-namespace-6"
-        operator_name      = "mock-name-6"
-        service_accounts   = ["system:serviceaccount:mock-namespace-6:mock-sa-6a", "system:serviceaccount:mock-namespace-6:mock-sa-6b"]
-      },
-    ]
-  }
-}
-
-override_data {
-  target = data.aws_subnet.public["az_a"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.64.0/24", availability_zone = "ap-northeast-2a" }
-}
-override_data {
-  target = data.aws_subnet.public["az_b"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.65.0/24", availability_zone = "ap-northeast-2b" }
-}
-override_data {
-  target = data.aws_subnet.public["az_c"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.66.0/24", availability_zone = "ap-northeast-2c" }
-}
-override_data {
-  target = data.aws_subnet.rosa_private["az_a"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.67.0/24", availability_zone = "ap-northeast-2a", map_public_ip_on_launch = false }
-}
-override_data {
-  target = data.aws_subnet.rosa_private["az_b"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.68.0/24", availability_zone = "ap-northeast-2b", map_public_ip_on_launch = false }
-}
-override_data {
-  target = data.aws_subnet.rosa_private["az_c"]
-  values = { vpc_id = "vpc-00000001", cidr_block = "192.168.69.0/24", availability_zone = "ap-northeast-2c", map_public_ip_on_launch = false }
-}
-override_data {
-  target = data.aws_iam_role.account["installer"]
-  values = { arn = "arn:aws:iam::123456789012:role/mock-installer" }
-}
-override_data {
-  target = data.aws_iam_role.account["support"]
-  values = { arn = "arn:aws:iam::123456789012:role/mock-support" }
-}
-override_data {
-  target = data.aws_iam_role.account["controlplane"]
-  values = { arn = "arn:aws:iam::123456789012:role/mock-controlplane" }
-}
-override_data {
-  target = data.aws_iam_role.account["worker"]
-  values = { arn = "arn:aws:iam::123456789012:role/mock-worker" }
 }
 
 run "issuer_without_scheme" {
