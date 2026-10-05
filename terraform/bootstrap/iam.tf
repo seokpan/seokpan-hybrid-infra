@@ -1,7 +1,7 @@
 # Terraform 실행 Role (03 §3-C.4, §3-F.4.2, §3-F.15)
 # - Root(bootstrap / foundation / rosa)별 실행 Role을 bootstrap이 소유
 # - 사람 IAM User + MFA 조건으로만 AssumeRole 허용
-# - 현재 단계: foundation Role은 자기 State/Lock 및 지정 Registry/CI 관리 권한(PR #21)을 가짐
+# - 현재 단계: foundation Role은 자기 State/Lock 및 아래 tf_foundation_registry_ci 블록의 지정 Registry/CI 관리 권한을 가짐
 #   rosa Role은 자기 State/Lock 접근만 허용; 나머지 AWS 서비스·IAM·PassRole 권한은
 #   각 Root 구현 PR에서 필요한 Action/Resource만 이 파일에 추가
 #   (PassRole은 대상 Role ARN + iam:PassedToService 조건으로 제한, bootstrap apply 후 해당 Root 실행)
@@ -112,7 +112,7 @@ resource "aws_iam_role_policy" "tf_bootstrap" {
 }
 
 # ---------------------------------------------------------------------------
-# foundation / rosa Role: 자기 Root의 backend 접근만 허용 (03 §3-F.15.1)
+# foundation / rosa Role의 backend 접근 정책(tf_backend): 자기 Root의 State/Lock 접근 범위 (03 §3-F.15.1)
 # - State(*.tfstate): Get / Put
 # - Lock(*.tflock): Get / Put / Delete
 # - List: 자기 접두사만 (backend의 workspace_key_prefix도 자기 접두사 안에 둠)
