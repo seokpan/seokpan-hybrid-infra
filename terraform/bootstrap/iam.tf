@@ -1,8 +1,9 @@
 # Terraform 실행 Role (03 §3-C.4, §3-F.4.2, §3-F.15)
 # - Root(bootstrap / foundation / rosa)별 실행 Role을 bootstrap이 소유
 # - 사람 IAM User + MFA 조건으로만 AssumeRole 허용
-# - 현재 단계: foundation / rosa Role은 자기 State/Lock 접근만 허용
-#   AWS 서비스·IAM·PassRole 권한은 각 Root 구현 PR에서 필요한 Action/Resource만 이 파일에 추가
+# - 현재 단계: foundation Role은 자기 State/Lock 및 지정 Registry/CI 관리 권한(PR #21)을 가짐
+#   rosa Role은 자기 State/Lock 접근만 허용; 나머지 AWS 서비스·IAM·PassRole 권한은
+#   각 Root 구현 PR에서 필요한 Action/Resource만 이 파일에 추가
 #   (PassRole은 대상 Role ARN + iam:PassedToService 조건으로 제한, bootstrap apply 후 해당 Root 실행)
 
 locals {
