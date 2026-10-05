@@ -49,7 +49,7 @@ resource "aws_iam_role" "operator" {
       Action    = "sts:AssumeRoleWithWebIdentity"
       Principal = { Federated = aws_iam_openid_connect_provider.cluster.arn }
       Condition = {
-        "ForAnyValue:StringEquals" = {
+        StringEquals = {
           "${local.oidc_issuer_hostpath}:sub" = each.value.service_accounts
         }
       }

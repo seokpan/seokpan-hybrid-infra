@@ -36,6 +36,8 @@ App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업�
 
 [C의 2026-10-05 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)에 대해 고정 RHCS 1.7.7의 실제 scheme 제거 출력·Operator Data Source 조회와 AWS IAM Resource 소유권을 대조했다. [리뷰/실행 계약](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)은 현재의 명시적 issuer 정규화·격리 harness/mock Source 검사, 준비 Apply 전후의 실물 issuer/Trust/지원 대조, 검토된 Cluster 생성 후의 실제 Operator WebIdentity/STS 경로를 구분한다. Mock 합성 입력은 이 계약의 제출/수신 완료가 아니다. 실제 STS 성공을 Source 병합의 일괄 선행으로 옮기거나 공통 Role/Policy를 rosa에서 중복 관리하지 않는다.
 
+후속 [A 리뷰](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414713742)는 위 형식 보완 이후 HEAD `620314ea2e3309f418f02a9d622ac8a8beb6bc75`의 `sub` 조건 연산자를 대상으로 한다. 현재 Source는 plain `StringEquals`를 사용하고 허용 ServiceAccount 목록·6개 Operator 조회/Policy Map 조건·Federated Provider ARN을 유지한다. [후속 판단](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-a-후속-리뷰--sub-조건-연산자)과 두 issuer 검사 결과는 최신 HEAD에 연결한다. 허용 목록이나 소유권·실제 인계값·실물 STS 검증 시점은 이 연산자 변경으로 새로 확정되지 않는다.
+
 ## Worker Pull과 SG Binding의 미완료 계약
 
 [A의 #23 답변](https://github.com/seokpan/seokpan-hybrid-infra/issues/23#issuecomment-5951505800)은 Worker ECR Pull을 별도 미완료로 남겼다. Registry/CI 권한 PR #21 병합·Bootstrap Apply 보고와 구분한다.

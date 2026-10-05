@@ -20,7 +20,17 @@
 
 [C의 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)은 HEAD `870d1e43cb2dfa8ee430c8a174665eb690e5059f`의 issuer 형식과 Operator 객체 소유권을 대상으로 한다. 리뷰의 일반적인 IAM 형식 지적은 옳지만, [고정 RHCS 1.7.7 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/oidcconfig/rosa_oidc_config_resource.go#L392)은 실제 `issuerUrl`의 선두 `https://`를 제거해 `oidc_endpoint_url`에 저장한다. 따라서 기존 코드를 현재 고정 조합에서 이미 잘못된 Trust라고 판정하지 않는다. 이번 보완은 이 출력 계약을 소비 코드에서도 명시하고, HTTPS URL과 IAM condition key가 같은 host/path를 사용하도록 하는 최소 변경이다. 임의 audience 추가·Policy 확대·Provider/Lock 변경·구조 재설계는 하지 않는다.
 
-`local.oidc_issuer_hostpath = trimprefix(..., "https://")`로 선두 scheme만 제거하고, AWS Provider URL은 `local.oidc_issuer_url = "https://${local.oidc_issuer_hostpath}"`, Trust의 `sub` key는 `${local.oidc_issuer_hostpath}:sub`로 만든다. Path와 RHCS가 반환하는 허용 ServiceAccount 목록·`ForAnyValue:StringEquals`·Federated Provider ARN은 유지한다. 이는 [공식 Classic Operator Trust](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)와 대조했으며, EKS 예제의 audience를 ROSA에 복사하지 않는다.
+`local.oidc_issuer_hostpath = trimprefix(..., "https://")`로 선두 scheme만 제거하고, AWS Provider URL은 `local.oidc_issuer_url = "https://${local.oidc_issuer_hostpath}"`, Trust의 `sub` key는 `${local.oidc_issuer_hostpath}:sub`로 만든다. C 리뷰의 형식 보완 시점에는 Path와 RHCS가 반환하는 허용 ServiceAccount 목록·`ForAnyValue:StringEquals`·Federated Provider ARN을 유지했다. 당시 [공식 Classic v1.7.2 Operator Trust](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)와 대조한 이력이며, 조건 연산자의 현재 선택은 아래 A 후속 리뷰를 따른다. EKS 예제의 audience를 ROSA에 복사하지 않는다.
+
+## 2026-10-05 A 후속 리뷰 — sub 조건 연산자
+
+[A의 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414713742)은 C 리뷰 보완 이후의 정확 HEAD `620314ea2e3309f418f02a9d622ac8a8beb6bc75`를 재검토했다. issuer 형식·객체 소유권·검사 결과는 수락하고, 단일 OIDC `sub`에 사용한 `ForAnyValue:StringEquals`를 별도로 지적했다. 따라서 수정 전 코드를 판단한 오래된 리뷰로 처리하지 않는다.
+
+[AWS의 single/multivalued context key 지침](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-single-vs-multi-valued-context-keys.html)은 single-valued key에 `ForAnyValue`/`ForAllValues`를 사용하지 말라고 안내하고, [동일 key의 여러 정책 값 평가](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-logic-multiple-context-keys-or-values.html)는 여러 허용 값이 OR로 비교됨을 설명한다. A가 인용한 legacy `terraform-aws-rosa-sts`의 `StringEquals`와 이전에 대조한 Classic v1.7.2의 `ForAnyValue:StringEquals`는 서로 다른 모듈의 구현이다. 공식 Classic 모듈 전체가 `StringEquals`로 변경됐다고 기록하지 않는다.
+
+이번 Source는 조건 연산자를 plain `StringEquals`로 바꾸고 RHCS가 반환하는 `each.value.service_accounts` 목록은 그대로 둔다. 단일 요청 `sub`와 정책의 여러 허용 subject를 비교하는 목적에 맞춘 최소 변경이다. 이전 Classic v1.7.2 예제를 사용한 이력은 보존하지만 그것만으로 현재 연산자를 유지해야 한다고 판단하지 않는다. 실제 무단 접근·STS 실패가 관측됐거나 모든 `ForAnyValue` 사용이 취약하다고 단정하지 않는다.
+
+두 issuer 형태의 격리 harness는 생성한 Trust JSON의 조건 키가 정확히 `StringEquals`인지 검사하고, issuer key·허용 SA 목록·6개 Role·Federated Provider ARN·Action·Policy Attachment 대응을 함께 보존한다. Production의 다른 Root HCL·6개 Role/Policy Map postcondition·Provider/Lock·Backend/State·권한 범위·생성/삭제 단계는 변경하지 않는다. 실제 Cloud Plan/Apply·STS Federation·유료 실행 없이 최신 HEAD의 Source CI와 사람 재리뷰로 이 수정의 수락 여부를 판단한다. 아래 Runtime Gate와 Owner/실행 창은 그대로 남는다.
 
 ### 객체별 실제 Provider 소유권
 

@@ -48,6 +48,8 @@ Schema는 다른 Region/환경·중복 Subnet·3 AZ 불일치·다른 Account Ro
 
 [현재 C 리뷰의 형식·소유권·검사/실행 순서](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)를 따른다. 고정 RHCS 1.7.7은 `oidc_endpoint_url`에 scheme을 제거한 host/path를 반환하므로 기존 Trust가 실제로 깨졌다고 가정하지 않는다. 소비 코드도 `trimprefix`로 이를 명시하고 AWS Provider URL과 Trust의 `sub` key에 같은 host/path를 사용한다. 실제 생성 Trust JSON·URL은 두 issuer 형태의 격리 Source harness/mock Provider plan으로 검사한다. 이는 실물 STS Federation 시험이 아니며, 준비 단계의 실제 issuer/IAM/지원 대조와 생성 후 실제 Operator의 WebIdentity/STS 경로를 따로 확인한다. 기존 Root/State/Policy Owner·Provider/Lock·삭제 경계는 유지한다.
 
+이후 [A의 최신 HEAD 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414713742)을 반영하여 `sub` 조건 연산자는 `ForAnyValue:StringEquals`에서 plain `StringEquals`로 바꾼다. 허용 ServiceAccount 목록은 그대로 두고 단일 요청 `sub`를 그 목록과 비교하며, 두 issuer 형태 시험도 생성된 Trust JSON의 정확한 `StringEquals`와 기존 6개 Role/Attachment 대응을 확인한다. [이번 판단과 보존 범위](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-a-후속-리뷰--sub-조건-연산자)를 따른다. 기존 고정 Source의 실제 무단 접근·STS 실패가 관측됐다고 표현하지 않으며 최신 HEAD의 실제 CI와 사람 재리뷰로 Source 수락을 판단한다.
+
 ## Worker SG Binding과 삭제 단계
 
 1. `cluster_enabled=true`, `worker_sg_binding=null`으로 최초 Cluster를 준비한다. Data ingress Rule은 0개다. Ready는 App/Data 연결 완료가 아니다.

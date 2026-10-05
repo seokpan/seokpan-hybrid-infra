@@ -48,16 +48,16 @@ run "issuer_without_scheme" {
         jsondecode(role.assume_role_policy).Statement[0].Effect == "Allow" &&
         jsondecode(role.assume_role_policy).Statement[0].Action == "sts:AssumeRoleWithWebIdentity" &&
         jsondecode(role.assume_role_policy).Statement[0].Principal.Federated == aws_iam_openid_connect_provider.cluster.arn &&
-        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition)) == toset(["ForAnyValue:StringEquals"]) &&
-        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition["ForAnyValue:StringEquals"])) == toset(["issuer.fixture.test/mock-cluster:sub"]) &&
-        toset(jsondecode(role.assume_role_policy).Statement[0].Condition["ForAnyValue:StringEquals"]["issuer.fixture.test/mock-cluster:sub"]) == toset(local.operator_roles[name].service_accounts)
+        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition)) == toset(["StringEquals"]) &&
+        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition["StringEquals"])) == toset(["issuer.fixture.test/mock-cluster:sub"]) &&
+        toset(jsondecode(role.assume_role_policy).Statement[0].Condition["StringEquals"]["issuer.fixture.test/mock-cluster:sub"]) == toset(local.operator_roles[name].service_accounts)
       ]) &&
       alltrue([for name, attachment in aws_iam_role_policy_attachment.operator :
         attachment.role == aws_iam_role.operator[name].name &&
         attachment.policy_arn == var.foundation.operator_policy_arns[local.operator_roles[name].policy_name]
       ])
     )
-    error_message = "All six generated Role trust JSONs, subjects and policy attachments must preserve the Classic mapping."
+    error_message = "All six generated Role trust JSONs must use plain StringEquals for sub and preserve the Classic subjects and attachments."
   }
 }
 
@@ -92,15 +92,15 @@ run "issuer_with_https_scheme" {
         jsondecode(role.assume_role_policy).Statement[0].Effect == "Allow" &&
         jsondecode(role.assume_role_policy).Statement[0].Action == "sts:AssumeRoleWithWebIdentity" &&
         jsondecode(role.assume_role_policy).Statement[0].Principal.Federated == aws_iam_openid_connect_provider.cluster.arn &&
-        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition)) == toset(["ForAnyValue:StringEquals"]) &&
-        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition["ForAnyValue:StringEquals"])) == toset(["issuer.fixture.test/mock-cluster:sub"]) &&
-        toset(jsondecode(role.assume_role_policy).Statement[0].Condition["ForAnyValue:StringEquals"]["issuer.fixture.test/mock-cluster:sub"]) == toset(local.operator_roles[name].service_accounts)
+        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition)) == toset(["StringEquals"]) &&
+        toset(keys(jsondecode(role.assume_role_policy).Statement[0].Condition["StringEquals"])) == toset(["issuer.fixture.test/mock-cluster:sub"]) &&
+        toset(jsondecode(role.assume_role_policy).Statement[0].Condition["StringEquals"]["issuer.fixture.test/mock-cluster:sub"]) == toset(local.operator_roles[name].service_accounts)
       ]) &&
       alltrue([for name, attachment in aws_iam_role_policy_attachment.operator :
         attachment.role == aws_iam_role.operator[name].name &&
         attachment.policy_arn == var.foundation.operator_policy_arns[local.operator_roles[name].policy_name]
       ])
     )
-    error_message = "HTTPS input must preserve the same six generated trust policies and mapped attachments."
+    error_message = "HTTPS input must use the same plain StringEquals sub policies and mapped attachments for all six roles."
   }
 }
