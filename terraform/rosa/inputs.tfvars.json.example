@@ -1,0 +1,44 @@
+{
+  "foundation": {
+    "schema_version": 1,
+    "revision": "INPUT_REQUIRED",
+    "source_code_revision": "INPUT_REQUIRED",
+    "confirmed_at": "INPUT_REQUIRED",
+    "terraform_version": "1.16.4",
+    "aws_provider_version": "6.67.0",
+    "environment": "cloud",
+    "account_id": "INPUT_REQUIRED",
+    "region": "ap-northeast-2",
+    "vpc_id": "INPUT_REQUIRED",
+    "subnets": {
+      "az_a": {"availability_zone": "INPUT_REQUIRED", "public_id": "INPUT_REQUIRED", "rosa_private_id": "INPUT_REQUIRED"},
+      "az_b": {"availability_zone": "INPUT_REQUIRED", "public_id": "INPUT_REQUIRED", "rosa_private_id": "INPUT_REQUIRED"},
+      "az_c": {"availability_zone": "INPUT_REQUIRED", "public_id": "INPUT_REQUIRED", "rosa_private_id": "INPUT_REQUIRED"}
+    },
+    "account_role_prefix": "INPUT_REQUIRED",
+    "iam_path": "/",
+    "account_roles": {
+      "installer": "INPUT_REQUIRED",
+      "support": "INPUT_REQUIRED",
+      "controlplane": "INPUT_REQUIRED",
+      "worker": "INPUT_REQUIRED"
+    },
+    "operator_policy_arns": {"INPUT_REQUIRED": "INPUT_REQUIRED"},
+    "operator_permissions_boundary": null,
+    "trust_policy_external_id": null,
+    "data_security_groups": {"mariadb": "INPUT_REQUIRED", "redis": "INPUT_REQUIRED"}
+  },
+  "cluster_name": "INPUT_REQUIRED",
+  "operator_role_prefix": "INPUT_REQUIRED",
+  "openshift_version": "INPUT_REQUIRED",
+  "worker_disk_size_gib": 0,
+  "cluster_enabled": true,
+  "execution_review": {
+    "foundation_revision": "INPUT_REQUIRED",
+    "input_review": "INPUT_REQUIRED",
+    "support_review": "INPUT_REQUIRED",
+    "cost_review": "INPUT_REQUIRED",
+    "window": "INPUT_REQUIRED"
+  },
+  "worker_sg_binding": null
+}

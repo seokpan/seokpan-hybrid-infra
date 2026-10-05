@@ -1,12 +1,12 @@
 # ROSA 후속 HCL 수신계약
 
-이 문서는 승인된 **필요한 비밀값 아닌 출력만 전달하는 경로**를 rosa HCL 구현에 연결하기 위한 계약 준비다. 실제 입력 파일·HCL 변수·Schema Validator·추출기 구현이나 A/B 수신 합의 완료를 뜻하지 않는다. 정확한 필드명·JSON/HCL 표현·파일 위치·개정 형식은 이유빈의 foundation 공통 틀과 정태훈의 소비 HCL을 대조해 후속 PR/원래 Issue에서 확정한다.
+이 문서는 승인된 **비밀값이 아닌 필요한 출력만 전달하는 경로**를 rosa HCL 구현에 연결하는 계약이다. 현재 PR #28에는 HCL 변수·형식 검사·Root Lock의 B 소비 후보가 있으며, 이 계약이나 정적 Source 검사만으로 실제 입력 파일의 추출·공급/소비 합의·수신 완료를 뜻하지 않는다. 정확한 공급 필드·JSON/HCL 표현·보호 파일 위치·개정 형식은 이유빈의 foundation 공통 틀과 정태훈의 소비 HCL을 대조해 원래 Issue에서 수락 범위를 확정한다.
 
 - 작성/소비: 정태훈(tjung03)
 - 기반 출력 공급·foundation 전체 통합/실행 및 리뷰: 이유빈(ggbun2)
 - Data 전용 의미 대조: 김상희, Registry/CI 전용 의미 대조: 최유준
 - 추적: [ROSA 실행 Issue](https://github.com/seokpan/seokpan-hybrid-infra/issues/25), [기반 실행 틀 #23](https://github.com/seokpan/seokpan-hybrid-infra/issues/23)
-- 2026-10-02 20:39:14 KST Source 조회 기준: Infra main `44470359c4e6de366db428adcb7831bac38a690e`, [A의 답변](https://github.com/seokpan/seokpan-hybrid-infra/issues/23#issuecomment-5951505800). 최신화는 실제 수신/Plan 직전에 다시 수행한다.
+- 계약의 작성/검토·수신 개정 이력: [ROSA 실행 Issue #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25). 실제 수신/Plan 직전에 최신 기반 입력·Code/Lock·Caller를 다시 대조한다.
 
 ## 공급·수신 경계
 
@@ -32,6 +32,12 @@ A는 공통 Backend·Provider·버전·변수·출력을 작성한다. C/D의 �
 
 App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업에서 별도 대조한다. rosa가 DB/Redis 비밀번호나 App Secret을 필요 출력으로 가져오는 구조로 확장하지 않는다. GitOps 최초 인계에 필요한 새 Cluster ID/Context·Node/Role/Host 참조는 rosa **실행 후** 확인한 범위만 후속 담당자에게 전달한다.
 
+## OIDC/Operator 검증의 소비 경계
+
+[C의 2026-10-05 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)에 대해 고정 RHCS 1.7.7의 실제 scheme 제거 출력·Operator Data Source 조회와 AWS IAM Resource 소유권을 대조했다. [리뷰/실행 계약](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-c-리뷰--oidc-형식과-실제-실행-순서)은 현재의 명시적 issuer 정규화·격리 harness/mock Source 검사, 준비 Apply 전후의 실물 issuer/Trust/지원 대조, 검토된 Cluster 생성 후의 실제 Operator WebIdentity/STS 경로를 구분한다. Mock 합성 입력은 이 계약의 제출/수신 완료가 아니다. 실제 STS 성공을 Source 병합의 일괄 선행으로 옮기거나 공통 Role/Policy를 rosa에서 중복 관리하지 않는다.
+
+후속 [A 리뷰](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414713742)는 위 형식 보완 이후 HEAD `620314ea2e3309f418f02a9d622ac8a8beb6bc75`의 `sub` 조건 연산자를 대상으로 한다. 현재 Source는 plain `StringEquals`를 사용하고 허용 ServiceAccount 목록·6개 Operator 조회/Policy Map 조건·Federated Provider ARN을 유지한다. [후속 판단](REVIEW_AND_EXECUTION_GATES.md#2026-10-05-a-후속-리뷰--sub-조건-연산자)과 두 issuer 검사 결과는 최신 HEAD에 연결한다. 허용 목록이나 소유권·실제 인계값·실물 STS 검증 시점은 이 연산자 변경으로 새로 확정되지 않는다.
+
 ## Worker Pull과 SG Binding의 미완료 계약
 
 [A의 #23 답변](https://github.com/seokpan/seokpan-hybrid-infra/issues/23#issuecomment-5951505800)은 Worker ECR Pull을 별도 미완료로 남겼다. Registry/CI 권한 PR #21 병합·Bootstrap Apply 보고와 구분한다.
@@ -48,15 +54,14 @@ App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업�
 
 ## Registry/CI 새 Source의 수신 조건
 
-등록 직전의 과거 관측: [Infra PR #24](https://github.com/seokpan/seokpan-hybrid-infra/pull/24), HEAD `33432eecc6cae81f7725c9d39f8a7730ca9ce815`의 담당 4파일 제출을 확인했다. 당시 실제 Plan/Apply·권한/비용/Pull 성공은 없으며 Worker Pull은 제외된 범위였다.
+[h-infra PR #24](https://github.com/seokpan/seokpan-hybrid-infra/pull/24)의 Registry/CI Source는 승인·병합됐으며 준비 범위로 수신한다. 수신 결론은 다음과 같다.
 
-당시 HEAD `33432eecc6cae81f7725c9d39f8a7730ca9ce815`에서 `registry.tf`의 untagged 7일 만료 규칙은 [Infra #18](https://github.com/seokpan/seokpan-hybrid-infra/issues/18)·[App #2 B 리뷰/수신](https://github.com/seokpan/seokpan-hybrid-app/issues/2#issuecomment-5950470901)의 **Preview 전 untagged 만료 제외·N 보류**와 달랐다. N50·7일을 당시 확정 입력으로 수락하지 않았다. PR 본문의 ECR Scan/Smoke Pull 설명도 A1의 Harbor 사본 Scan/Smoke와 당시 정합이 필요했으며 `GetDownloadUrlForLayer`는 최신 명세의 실제 E2E 필요 확인 대상으로 남겼다. 수정 개정의 준비 범위 부분 수신을 요청한 과거 인계였다. 최종 N·Lifecycle/CI 권한·Worker Pull의 확정/PASS는 해당 Preview/E2E·Role 후속 검증에 연결하며 미실행 범위를 당시 확정 입력으로 수락하지 않았다. 이 조건은 ROSA 입력계약/Source 준비를 중단시키지 않는다.
+- ECR Lifecycle은 `any + imageCountMoreThan` 단일 N 규칙이다. 별도 untagged 만료 규칙은 제외하며 **N=50은 임시 후보**다. 실제 Lifecycle Preview에서 사용 Digest·rollback 후보·image index/하위 manifest 보호를 대조한 뒤 최종 N을 결정한다.
+- Scan/Health Smoke는 [h-app Issue #2의 A1 수신](https://github.com/seokpan/seokpan-hybrid-app/issues/2#issuecomment-5950470901)대로 Harbor 사본을 사용한다. `GetDownloadUrlForLayer`는 현재 CI 정책에서 제외하고 실제 E2E에서 필요가 확인되면 별도 권한 PR로 판단한다. CI에는 `BatchDeleteImage`를 부여하지 않는다.
+- Source 승인·병합과 작성자의 fmt/validate 보고는 공통 Provider/Lock·실제 Boundary/통합 Plan/Cost·CI/E2E·Lifecycle Preview/최종 N의 실행 성공과 구분한다.
+- **Worker ECR Pull은 별도 미완료**다. 실제 Classic Worker Role·지원 연결 방식·공유 범위를 대조하며 정책/Attachment는 foundation Owner를 유지한다. Registry/CI 준비 수신이 rosa 계약/HCL의 독립 준비를 막지는 않는다.
 
-**PR #24 병합 전 관측:** 단일 조회의 관측 종료는 `2026-10-02T12:12:44.366Z` / `2026-10-02T21:12:44.366+09:00`다. [Infra PR #24](https://github.com/seokpan/seokpan-hybrid-infra/pull/24)는 HEAD `4fcbab4acc3e851f9a20a9affc4e4f4c29526add`, 당시 open·미병합이었다. 담당 4파일과 당시 최신 본문에서 untagged 만료 규칙/변수 및 `GetDownloadUrlForLayer` 실제 Action 제외, N=50 임시 후보·Preview 후 최종 확정, Harbor A1 Scan/Smoke 경계를 확인했다. [D의 최신 본문·검사 갱신](https://github.com/seokpan/seokpan-hybrid-infra/pull/24#issuecomment-5951983854)의 같은 HEAD init/fmt/validate 성공은 담당자 보고로 접수하며 이번에 재실행한 결과가 아니다. 옛 HEAD의 수정 지적을 현재 코드에 다시 요구하지 않는다. 당시 A의 사람 재리뷰/Merge와 공통 Provider/Lock·실제 Boundary/통합 Plan/Cost·Lifecycle Preview/E2E·Worker Pull을 별도 Gate로 남겼다. 최종 N과 제외 Action의 실제 필요 여부도 실행 근거로 판단한다.
-
-**후속 병합 확인:** [h-infra PR #24](https://github.com/seokpan/seokpan-hybrid-infra/pull/24)는 A의 승인 후 `2026-10-02T12:20:17Z`에 squash 병합됐다. 병합 Commit이자 당시 확인된 Infra main은 `b3e6572ff3ddf7e068258102c2a7fa079acb4a7e`다. 위 open·미병합과 A 재리뷰 대기는 병합 전 이력이며 현재 미완료 조건이 아니다. 공통 Provider/Lock·실제 Boundary/통합 Plan/Cost·Lifecycle Preview/E2E·Worker Pull은 별도 실행 Gate로 유지한다. 승인·병합을 이 실행 성공이나 최종 N 확정으로 확대하지 않는다.
-
-[Infra #25 Source 준비 기록](https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-5951857787)는 당시 HCL·Schema의 정적 준비 착수를 보고했다. [Infra #26](https://github.com/seokpan/seokpan-hybrid-infra/issues/26)는 중복으로 닫혔으며 rosa 코드/입력·Plan/Cost·Runtime 정본은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. 그 착수 보고만으로 HCL 게시·정적 검사 완료·Cloud 호출/Plan/Apply를 입증하지 않았다. 이후 HCL·Lock 후보 게시와 검사 범위는 [Draft h-infra PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)에 연결됐으며, 실제 Cloud/Runtime 결과와 구분한다. 보고의 AWS 6.66.0 표기는 해당 시점 기록으로 보존하고, 실제 소비 Schema·Root Lock은 승인 04와 현재 채택 AWS 6.67.0에 대조한다.
+날짜·옛 HEAD·수정/리뷰 경과는 [h-infra Issue #25의 수신 기록](https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-5952073380)과 [승인된 h-infra PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)에 보존한다. HCL/Lock 후보·검사와 실제 입력/Plan/Cost/Runtime의 최신 상태는 [Source 리뷰 h-infra PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)·원본 Issue #25를 따른다. 중복 Issue #26의 종료와 #25 정본을 유지한다.
 
 ## 오류 차단과 검증 단계
 
@@ -87,4 +92,16 @@ T19/최종 삭제 전 검증 Backup·Harbor 이미지·Render/도구·독립 사
 
 실제 기록은 [HANDOFF_TEMPLATE](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HANDOFF_TEMPLATE.md)·[Evidence 안내](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/evidence/README.md)를 따른다. 새 시험/재시험은 새 Run으로 남겨 Run Index 및 작업 Issue에 연결하고 D에게 인계한다. 충돌 가능한 실행은 WORK_TRACKER의 Shared Execution으로 조율한다. 보호 원본 실제 경로/접근 방법은 보호 운영 대장에, 공개 기록에는 논리 참조·책임·가용성/무결성 확인 결과만 연결한다.
 
-근거: 승인03 §3-F.4~8·11·15~19, 04 §2~4·6·9~10, 개인계획 TH-10~12·16·19/§7.3·9·12, 지침 §37. 새로운 필드명·공급 형태·실제 수신 완료는 후속 합의/증거로 확정한다.
+공개 근거: [03 상세설계](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md) §3-F.4~8·11·15~19, [04 구현 준비](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md) §2~4·6·9~10, [05 구현·검증](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/05_IMPLEMENTATION_AND_VALIDATION.md)과 [팀 작업·인계 가이드](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/TEAM_WORK_AND_HANDOFF_GUIDE.md). 개인계획 TH-10~12·16·19/§7.3·9·12와 지침 §37은 별도로 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 새로운 필드명·공급 형태·실제 수신 완료는 후속 합의/증거로 확정한다.
+
+## 2026-10-02 HCL 후속 후보와 검사 범위
+
+최초 계약 준비는 [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 HEAD `5eaef969723e29becbb1e0611d04660ddcbdb28d`를 소비했다. 2026-10-03의 [PR #27 병합 전 수정 요청 3건](https://github.com/seokpan/seokpan-hybrid-infra/pull/27#issuecomment-5968219700)의 정정도 후속 이력으로 소비하며, Registry/CI 수신 조건의 정본은 위 단락으로 유지한다. [Source 리뷰 PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)의 `variables.tf`와 예시는 B 소비 Schema 제안이다. A/C/D가 수락한 최종 Output 표현·실제 값은 아직 아니며, 승인 의미와 기존 체크/실행 Gate를 유지한다. Schema 필드명·Review 참조의 형식 검사나 Source SHA/시각은 실제 입력 최신성·지원/권한/Cost의 증거가 아니다.
+
+Core1.16.4/AWS6.67.0/RHCS1.7.7의 정확 제약·설치 Lock와 정적 HCL을 준비했다. 앞선 착수 댓글의 AWS 표기는 04 §8.4 채택·§8.6 후속과 정합해 6.67.0으로 정정했다. **당시 로컬 환경**에서는 fmt·diff check·예시 JSON·공식 Source Schema 대조를 확인했으나 Provider validate/schema 실행이 Unix socket 생성 거부로 BLOCKED였다. 이는 해당 환경의 과거 결과다.
+
+**2026-10-05 후속 Source 결과:** PR #28은 Draft를 해제해 Source 리뷰 중이다. 문서 보완 전 HEAD `b65dc9244f1d6714c4dc56cba4267b572027f661`의 [GitHub Linux Source Run 37296404096](https://github.com/seokpan/seokpan-hybrid-infra/actions/runs/37296404096)은 success이며, 고정 조합·fmt·원 Root validate(errors=0/warnings=0)·실제 Provider Schema의 선언 Type 13개·Source/Lock 불변을 확인했다. 문서 보완으로 새 HEAD가 생기면 그 HEAD의 실제 검사와 사람 재리뷰를 따르며 이 성공을 복사하지 않는다. 실제 실행 Controller/Caller·Backend·공급/소비 입력·IAM/지원·Plan/Cost·Runtime 수락은 별도 미완료다. 남은 조건은 [리뷰/실행 인계](REVIEW_AND_EXECUTION_GATES.md)를 따른다.
+
+RHCS1.7.7은 삭제 timeout 후 State에서 Cluster를 제거할 수 있다. [README의 단계](README.md#worker-sg-binding과-삭제-단계)에 따라 Binding을 먼저 해제하고 `cluster_enabled=false`에서 IAM/OIDC를 유지한 채 Cluster만 제거한다. 실제 서비스 삭제 확인 후 별도 전체 rosa cleanup을 검토한다. 직접 전체 Destroy·부분 Replace의 보호는 dependency만으로 보장하지 않으며 실제 Plan/삭제 검증이 남는다. 기존 T19·최종 보존/정리 조건은 그대로 적용한다.
+
+PR #24 병합 전 HEAD 4fcb의 Source/본문 정합은 [B 후속 COMMENT](https://github.com/seokpan/seokpan-hybrid-infra/pull/24#pullrequestreview-5391575120)에서 추가 Source 요구0건으로 연결했다. 작성자 fmt/validate 보고와 승인·병합은 실제 Boundary/통합 Plan/Preview·Worker Pull의 성공과 구분한다. 승인·병합과 현재 수신 결론은 위 Registry/CI 계약 및 Issue #25의 검토 이력을 따른다. 이 후속 후보의 제출·정적 검사만으로 위 미완료 체크를 완료하지 않는다.
