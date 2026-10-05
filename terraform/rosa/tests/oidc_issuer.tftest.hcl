@@ -25,54 +25,57 @@ mock_provider "aws" {
 
 mock_provider "rhcs" {
   override_during = plan
+}
 
-  mock_data "rhcs_rosa_operator_roles" {
-    defaults = {
-      operator_iam_roles = [
-        {
-          role_name          = "mock-operator-1"
-          policy_name        = "mock-policy-1"
-          operator_namespace = "mock-namespace-1"
-          operator_name      = "mock-name-1"
-          service_accounts   = ["system:serviceaccount:mock-namespace-1:mock-sa-1"]
-        },
-        {
-          role_name          = "mock-operator-2"
-          policy_name        = "mock-policy-2"
-          operator_namespace = "mock-namespace-2"
-          operator_name      = "mock-name-2"
-          service_accounts   = ["system:serviceaccount:mock-namespace-2:mock-sa-2"]
-        },
-        {
-          role_name          = "mock-operator-3"
-          policy_name        = "mock-policy-3"
-          operator_namespace = "mock-namespace-3"
-          operator_name      = "mock-name-3"
-          service_accounts   = ["system:serviceaccount:mock-namespace-3:mock-sa-3"]
-        },
-        {
-          role_name          = "mock-operator-4"
-          policy_name        = "mock-policy-4"
-          operator_namespace = "mock-namespace-4"
-          operator_name      = "mock-name-4"
-          service_accounts   = ["system:serviceaccount:mock-namespace-4:mock-sa-4"]
-        },
-        {
-          role_name          = "mock-operator-5"
-          policy_name        = "mock-policy-5"
-          operator_namespace = "mock-namespace-5"
-          operator_name      = "mock-name-5"
-          service_accounts   = ["system:serviceaccount:mock-namespace-5:mock-sa-5"]
-        },
-        {
-          role_name          = "mock-operator-6"
-          policy_name        = "mock-policy-6"
-          operator_namespace = "mock-namespace-6"
-          operator_name      = "mock-name-6"
-          service_accounts   = ["system:serviceaccount:mock-namespace-6:mock-sa-6a", "system:serviceaccount:mock-namespace-6:mock-sa-6b"]
-        },
-      ]
-    }
+# Override the complete computed collection. mock_data defaults are per-item
+# templates for nested collections, so a six-object list belongs in values.
+override_data {
+  target = data.rhcs_rosa_operator_roles.cluster
+  values = {
+    operator_iam_roles = [
+      {
+        role_name          = "mock-operator-1"
+        policy_name        = "mock-policy-1"
+        operator_namespace = "mock-namespace-1"
+        operator_name      = "mock-name-1"
+        service_accounts   = ["system:serviceaccount:mock-namespace-1:mock-sa-1"]
+      },
+      {
+        role_name          = "mock-operator-2"
+        policy_name        = "mock-policy-2"
+        operator_namespace = "mock-namespace-2"
+        operator_name      = "mock-name-2"
+        service_accounts   = ["system:serviceaccount:mock-namespace-2:mock-sa-2"]
+      },
+      {
+        role_name          = "mock-operator-3"
+        policy_name        = "mock-policy-3"
+        operator_namespace = "mock-namespace-3"
+        operator_name      = "mock-name-3"
+        service_accounts   = ["system:serviceaccount:mock-namespace-3:mock-sa-3"]
+      },
+      {
+        role_name          = "mock-operator-4"
+        policy_name        = "mock-policy-4"
+        operator_namespace = "mock-namespace-4"
+        operator_name      = "mock-name-4"
+        service_accounts   = ["system:serviceaccount:mock-namespace-4:mock-sa-4"]
+      },
+      {
+        role_name          = "mock-operator-5"
+        policy_name        = "mock-policy-5"
+        operator_namespace = "mock-namespace-5"
+        operator_name      = "mock-name-5"
+        service_accounts   = ["system:serviceaccount:mock-namespace-5:mock-sa-5"]
+      },
+      {
+        role_name          = "mock-operator-6"
+        policy_name        = "mock-policy-6"
+        operator_namespace = "mock-namespace-6"
+        operator_name      = "mock-name-6"
+        service_accounts   = ["system:serviceaccount:mock-namespace-6:mock-sa-6a", "system:serviceaccount:mock-namespace-6:mock-sa-6b"]
+      },
+    ]
   }
 }
 
