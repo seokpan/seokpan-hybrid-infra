@@ -94,3 +94,8 @@ Draft PR도 검사하며 PR의 실제 HEAD SHA를 사용한다. PR/해당 작업
 - [RHCS v1.7.7 실제 Delete 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/clusterrosa/classic/cluster_rosa_classic_resource.go)
 
 Controller 재검증·A/C/D Schema 수신·실제 Output/Route/Role/Policy·서비스 권한 PR·전체 Plan/Cost/Window·전파/부분 실패·Cluster/SG Binding·Node ECR Pull·TH-11 관리/Secret/GitOps·업무/Migration·T19 Recreate·T20/T23 정리가 남아 있다. 실제 CLI/Controller 버전·지원 조합도 실행 시 확인한다. 결과는 Issue/PR 원본에 기록하고 공개 [WORK_TRACKER](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/WORK_TRACKER.md)·[05](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/05_IMPLEMENTATION_AND_VALIDATION.md)에는 원본 링크·범위·남은 Gate를 연결한다. 역할/인계는 [팀 작업·인계 가이드](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/TEAM_WORK_AND_HANDOFF_GUIDE.md)를 따르며 비공개 개인 계획이나 지침 사본을 공개 근거로 제시하지 않는다.
+
+
+## Source 리뷰와 실제 실행의 분리
+
+[리뷰/실행 조건과 인계](REVIEW_AND_EXECUTION_GATES.md)를 사용한다. 최신 main·Source/Lock 검사를 확인한 뒤 사람 Source 리뷰를 시작할 수 있다. 실제 입력 수신·Controller/권한/지원·첫 Plan 준비·전체 Plan/Cost/유료 실행·Runtime 수락은 원 Issue #25에서 별도 확인한다. Source 병합으로 실제 실행 Gate나 TH 전체 완료를 해제하지 않는다.
