@@ -76,6 +76,8 @@ Provider Schema는 아래 GitHub 검사 또는 [원래 Issue #25](https://github
 
 **기존 로컬 환경의 결과:** Core 1.16.4 공식 checksum·공개 Provider 설치/서명·Root Lock·fmt 확인. `validate`/schema는 Provider RPC의 Unix socket 생성이 `operation not permitted`로 차단되어 **미통과**다. 권한을 우회하지 않았으며 다른 Controller에서 같은 Source/Lock로 재검증해야 한다. 공식 v1.7.7 Source Schema 대조는 실행된 Provider Schema/validate PASS가 아니다.
 
+**후속 GitHub Linux 결과:** 2026-10-05의 문서 보완 전 HEAD `b65dc9244f1d6714c4dc56cba4267b572027f661`에서 [Source Run 37296404096](https://github.com/seokpan/seokpan-hybrid-infra/actions/runs/37296404096)이 success다. 고정 조합·fmt·원 Root validate(errors=0/warnings=0)·실제 Provider Schema의 선언 Type 13개·Source/Lock 불변을 확인했다. 위 로컬 BLOCKED는 과거 환경의 이력으로 보존한다. 새 HEAD에는 새 실제 검사 결과를 연결하며, 이 정적 PASS를 실행 Controller/Caller·Backend/IAM/지원·실제 Plan/Apply의 성공으로 사용하지 않는다.
+
 예시는 의도적으로 실행 불가다. 실제 입력/Backend/Plan은 Git 밖 보호 영역, RHCS 인증은 `RHCS_TOKEN` 환경변수로 공급한다. 초기 input/support/예비 비용·Window 리뷰로 Owner의 첫 Plan을 준비하고, 생성 전 **실제 보호 전체 Plan의 최신 수량·누적/잔존·시간·Cost Gate와 팀 리뷰**를 확인한다. `execution_review` 문자열은 보조 검사이며 성공 증거/Apply 승인을 발급하지 않는다. `$450` 계획선 초과 신규 가동 보류·조정, 총 `$500` 한도를 유지한다. 이번 작업에는 Cloud 조회/Plan/Apply·유료 호출이 없다.
 
 ## GitHub Linux Source 검사
