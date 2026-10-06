@@ -38,8 +38,9 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name      = "seokpan-fnd-public-${each.key}"
-    Component = "network"
+    Name                     = "seokpan-fnd-public-${each.key}"
+    "kubernetes.io/role/elb" = "1"
+    Component                = "network"
   }
 }
 
@@ -52,8 +53,9 @@ resource "aws_subnet" "rosa" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name      = "seokpan-fnd-rosa-${each.key}"
-    Component = "network"
+    Name                              = "seokpan-fnd-rosa-${each.key}"
+    "kubernetes.io/role/internal-elb" = "1"
+    Component                         = "network"
   }
 }
 

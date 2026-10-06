@@ -123,3 +123,17 @@ EC2 규격 제공 조회는 실제 생성 용량이나 ROSA/RDS/Redis 지원 조
 
 현재 Network Source와 정적 검사 준비 단계입니다.
 실제 AWS 생성·통신·Plan·Apply 완료를 의미하지 않습니다.
+
+### ROSA Classic Subnet 태그
+
+기존 VPC를 사용하는 ROSA Classic의 공식 Subnet 태그 요구사항을 반영합니다.
+
+- Public Subnet 3개: `kubernetes.io/role/elb = "1"`
+- ROSA Private Subnet 3개: `kubernetes.io/role/internal-elb = "1"`
+- Data Private Subnet 3개: ROSA 설치 대상에서 제외하며 위 태그를 추가하지 않습니다.
+
+각 Subnet 리소스의 `for_each`에 따라 해당 태그를 AZ별 3개에 적용하도록 선언합니다.
+현재는 Source 반영 단계이며, 실제 AWS 태그 적용·Preflight 통과는 별도 확인합니다.
+
+공식 기준:
+https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
