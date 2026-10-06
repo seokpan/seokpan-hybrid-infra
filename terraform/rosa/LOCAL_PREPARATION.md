@@ -31,10 +31,19 @@ for tool in python3 bash git terraform aws rosa oc jq; do
   fi
 done
 
-python3 --version
-git --version
-jq --version
-bash -n scripts/tf-session.sh
+for tool in python3 git jq; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    "$tool" --version
+  else
+    printf '%s version: NOT RUN (MISSING)\n' "$tool"
+  fi
+done
+
+if command -v bash >/dev/null 2>&1; then
+  bash -n scripts/tf-session.sh
+else
+  printf 'Bash syntax check: NOT RUN (MISSING)\n'
+fi
 ```
 
 존재 여부는 버전·인증·실행 권한 확인과 다르다. Terraform이 설치돼 있다면 `CHECKPOINT_DISABLE=1 terraform version -json`으로 Core를 대조하고, AWS CLI는 `aws --version`으로 로컬 버전을 확인한다. Core **1.16.4**, Source/Lock의 AWS **6.67.0**, RHCS **1.7.7**을 유지한다. ROSA/oc CLI의 공급·지원 버전은 실행 환경에서 별도로 확정한다. 도구가 없으면 그 도구를 쓰는 검사를 `NOT RUN`으로 기록하며, 설치 성공으로 Cloud 실행 준비를 완료 처리하지 않는다.
