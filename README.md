@@ -197,7 +197,7 @@ cd ../.. && source scripts/tf-session.sh clear
 | 다른 Root State | 거부 | 거부 |
 | State 삭제·Version 삭제·버킷 삭제 | 거부 | 거부 |
 | State 버킷 설정 | 관리 | 거부 |
-| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` 관리 | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)). CI Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy` 권한은 부여하지 않음; rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
+| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` · `seokpan-fnd-backup-boundary` 관리 | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)), Data 계층(RDS · ElastiCache · Data SG · Backup S3 버킷 · Backup IAM User) 관리([h-infra #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19)). CI · Backup Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy`·백업 객체 읽기/쓰기·`secretsmanager:GetSecretValue` 권한은 부여하지 않음; rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
 
 - foundation / rosa에 필요한 권한은 각 Root 구현 PR에서 **필요한 Service / Action / Resource만** `terraform/bootstrap/iam.tf`에 추가합니다. bootstrap apply 후 해당 Root를 실행합니다.
 - `iam:PassRole`은 대상 Role ARN과 `iam:PassedToService` 조건으로 제한합니다. 생성하는 IAM Role에는 필요하면 Permissions Boundary를 둡니다.
