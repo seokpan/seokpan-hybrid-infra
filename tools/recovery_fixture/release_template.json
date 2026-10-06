@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "record_kind": "run",
+  "completeness": "INCOMPLETE",
+  "release_id": null,
+  "source": {
+    "app_sha": null,
+    "infra_sha": null,
+    "gitops_sha": null
+  },
+  "images": {
+    "frontend": {
+      "ecr_digest": null,
+      "harbor_digest": null,
+      "platform": null
+    },
+    "backend": {
+      "ecr_digest": null,
+      "harbor_digest": null,
+      "platform": null
+    }
+  },
+  "revisions": {
+    "schema": null,
+    "config": null,
+    "secret": null,
+    "tool_manifest": null,
+    "recovery_bundle": null
+  },
+  "review_refs": [],
+  "verification": {
+    "render": "NOT RUN",
+    "deployment": "NOT RUN",
+    "acceptance": "NOT RUN"
+  },
+  "missing_inputs": [
+    "SOURCE_COMMITS",
+    "ARTIFACT_DIGESTS_AND_PLATFORMS",
+    "CONFIGURATION_REVISIONS",
+    "RENDER_AND_REVIEW"
+  ],
+  "run_id": null,
+  "test_id": null,
+  "case_ids": [],
+  "requirement_ids": [],
+  "environment": null,
+  "scope": null,
+  "previous_run_ref": null,
+  "next_run_ref": null,
+  "render_ref": null,
+  "assigned_execution_owner": null,
+  "actual_operator": null,
+  "reviewer": null,
+  "collaborators": [],
+  "observed_principal_ref": null,
+  "account_management_owner_ref": null,
+  "borrowing_handover_ref": null,
+  "started_at_utc": null,
+  "finished_at_utc": null,
+  "started_at_kst": null,
+  "finished_at_kst": null,
+  "conditions_ref": null,
+  "measurements_ref": "metrics.csv",
+  "timeline_ref": "timeline.csv",
+  "recovery": {
+    "backup_id": null,
+    "encrypted_backup_sha256": null,
+    "data_reference_time_utc": null,
+    "data_reference_level": null,
+    "incident_at_utc": null,
+    "dump_started_at_utc": null,
+    "dump_finished_at_utc": null,
+    "import_started_at_utc": null,
+    "import_finished_at_utc": null,
+    "business_resumed_at_utc": null,
+    "rto_seconds": null,
+    "rpo_seconds": null,
+    "persistent_data_losses": null,
+    "redis_runtime_losses": null
+  },
+  "raw_artifact_ref": null,
+  "custodian_ref": null,
+  "access_policy_ref": null,
+  "retention_ref": null,
+  "availability_integrity": null
+}

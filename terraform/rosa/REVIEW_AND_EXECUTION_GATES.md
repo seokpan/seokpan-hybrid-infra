@@ -1,0 +1,150 @@
+# ROSA Source 리뷰와 실제 실행의 출발점
+
+이 문서는 [h-infra PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)의 Source 리뷰와 [h-infra Issue #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)의 실제 실행을 연결한다. 승인 설계·Owner·비용 기준을 바꾸지 않는다. 최신 코드와 정적 검사만 준비됐어도 사람의 Source 리뷰를 시작할 수 있다. 실제 foundation 출력이나 전체 A 업무의 종료를 Source 리뷰 요청 조건으로 묶지 않는다.
+
+## 지금 리뷰할 범위
+
+| 리뷰 대상 | 확인할 내용 | 관련 작업 |
+|---|---|---|
+| B의 rosa Root·State | Cluster 종속 IAM/OIDC·Cluster·Worker→Data Binding, 정본 Key, 승인 주소/초기 Worker, 별도 관리·Secret 경계 | [h-infra Issue #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25) |
+| A의 기반 경계·소비 Schema | VPC/6 Subnet/AZ·Classic 공통 Role/Policy·제한 출력 개정, foundation과 rosa의 중복 Owner 없음 | [h-infra Issue #23](https://github.com/seokpan/seokpan-hybrid-infra/issues/23) |
+| C의 Data 의미 | 서로 다른 MariaDB/Redis SG 2개, 기반 Rule과 종속 Binding 소유권·Port·재생성/보존 범위 | [h-infra Issue #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19) |
+| D/A의 Registry·권한 경계 | Worker Pull은 foundation 후속, CI Push 권한과 Runtime Pull 분리, 목적 TF Role의 Backend 권한과 서비스 권한 구분 | [h-infra Issue #18](https://github.com/seokpan/seokpan-hybrid-infra/issues/18), [h-infra Issue #20](https://github.com/seokpan/seokpan-hybrid-infra/issues/20) |
+| 생성·삭제·교체 절차 | Binding 해제 → Cluster 제거·실제 서비스 삭제 확인 → IAM/OIDC cleanup. 부분 Replace·삭제 timeout·잔존 대응 | [README](README.md#worker-sg-binding과-삭제-단계) |
+
+리뷰는 해당 PR의 **최신 전체 HEAD**와 diff·동일 HEAD의 실제 Source 검사 결과를 대상으로 한다. 이전 HEAD의 성공을 새 HEAD에 복사하지 않는다. 무료 Source 검사는 실제 Provider 설치·fmt·validate·Schema·mock Provider plan과 Source/Lock 불변까지이며, 실제 Backend·Caller·IAM 지원·Cloud Plan/Apply를 입증하지 않는다. 과거 로컬 Unix socket BLOCKED는 그 환경의 이력으로 보존한다. 이미 성공한 이전 검사만 확인하려고 같은 HEAD를 불필요하게 다시 실행하지 않는다.
+
+리뷰 코멘트에는 `검토 HEAD / 검토 범위 / 수락 또는 보완 / 남은 실행 Gate`를 적는다. Source의 보완 요구가 해소되고 최신 검사·사람 리뷰를 확인한 뒤 Source 병합을 판단한다. Source 병합으로 Issue #25의 실제 Plan·Runtime·정리 범위를 자동 종료하지 않는다.
+
+## 2026-10-05 C 리뷰 — OIDC 형식과 실제 실행 순서
+
+[C의 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414086734)은 HEAD `870d1e43cb2dfa8ee430c8a174665eb690e5059f`의 issuer 형식과 Operator 객체 소유권을 대상으로 한다. 리뷰의 일반적인 IAM 형식 지적은 옳지만, [고정 RHCS 1.7.7 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/oidcconfig/rosa_oidc_config_resource.go#L392)은 실제 `issuerUrl`의 선두 `https://`를 제거해 `oidc_endpoint_url`에 저장한다. 따라서 기존 코드를 현재 고정 조합에서 이미 잘못된 Trust라고 판정하지 않는다. 이번 보완은 이 출력 계약을 소비 코드에서도 명시하고, HTTPS URL과 IAM condition key가 같은 host/path를 사용하도록 하는 최소 변경이다. 임의 audience 추가·Policy 확대·Provider/Lock 변경·구조 재설계는 하지 않는다.
+
+`local.oidc_issuer_hostpath = trimprefix(..., "https://")`로 선두 scheme만 제거하고, AWS Provider URL은 `local.oidc_issuer_url = "https://${local.oidc_issuer_hostpath}"`, Trust의 `sub` key는 `${local.oidc_issuer_hostpath}:sub`로 만든다. C 리뷰의 형식 보완 시점에는 Path와 RHCS가 반환하는 허용 ServiceAccount 목록·`ForAnyValue:StringEquals`·Federated Provider ARN을 유지했다. 당시 [공식 Classic v1.7.2 Operator Trust](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)와 대조한 이력이며, 조건 연산자의 현재 선택은 아래 A 후속 리뷰를 따른다. EKS 예제의 audience를 ROSA에 복사하지 않는다.
+
+## 2026-10-05 A 후속 리뷰 — sub 조건 연산자
+
+[A의 변경 요청](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5414713742)은 C 리뷰 보완 이후의 정확 HEAD `620314ea2e3309f418f02a9d622ac8a8beb6bc75`를 재검토했다. issuer 형식·객체 소유권·검사 결과는 수락하고, 단일 OIDC `sub`에 사용한 `ForAnyValue:StringEquals`를 별도로 지적했다. 따라서 수정 전 코드를 판단한 오래된 리뷰로 처리하지 않는다.
+
+[AWS의 single/multivalued context key 지침](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-single-vs-multi-valued-context-keys.html)은 single-valued key에 `ForAnyValue`/`ForAllValues`를 사용하지 말라고 안내하고, [동일 key의 여러 정책 값 평가](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-logic-multiple-context-keys-or-values.html)는 여러 허용 값이 OR로 비교됨을 설명한다. A가 인용한 legacy `terraform-aws-rosa-sts`의 `StringEquals`와 이전에 대조한 Classic v1.7.2의 `ForAnyValue:StringEquals`는 서로 다른 모듈의 구현이다. 공식 Classic 모듈 전체가 `StringEquals`로 변경됐다고 기록하지 않는다.
+
+이번 Source는 조건 연산자를 plain `StringEquals`로 바꾸고 RHCS가 반환하는 `each.value.service_accounts` 목록은 그대로 둔다. 단일 요청 `sub`와 정책의 여러 허용 subject를 비교하는 목적에 맞춘 최소 변경이다. 이전 Classic v1.7.2 예제를 사용한 이력은 보존하지만 그것만으로 현재 연산자를 유지해야 한다고 판단하지 않는다. 실제 무단 접근·STS 실패가 관측됐거나 모든 `ForAnyValue` 사용이 취약하다고 단정하지 않는다.
+
+두 issuer 형태의 격리 harness는 생성한 Trust JSON의 조건 키가 정확히 `StringEquals`인지 검사하고, issuer key·허용 SA 목록·6개 Role·Federated Provider ARN·Action·Policy Attachment 대응을 함께 보존한다. Production의 다른 Root HCL·6개 Role/Policy Map postcondition·Provider/Lock·Backend/State·권한 범위·생성/삭제 단계는 변경하지 않는다. 실제 Cloud Plan/Apply·STS Federation·유료 실행 없이 최신 HEAD의 Source CI와 사람 재리뷰로 이 수정의 수락 여부를 판단한다. 아래 Runtime Gate와 Owner/실행 창은 그대로 남는다.
+
+### 객체별 실제 Provider 소유권
+
+| 객체 | 생성/조회/관리 경로 | 의존·보존 경계 |
+|---|---|---|
+| Red Hat managed OIDC configuration | `rhcs_rosa_oidc_config`: OCM OIDC Config 생성/삭제, Red Hat managed issuer/공개 discovery·JWKS 경로 | 고객 AWS IAM 객체를 이 Resource가 생성하는 것은 아님. 실제 사용 Cluster가 있으면 RHCS 삭제 구현은 거부 |
+| Classic Operator 역할 정의·ServiceAccount 목록 | `data.rhcs_rosa_operator_roles`: OCM AWS Inquiries의 STS credential requests 목록 **조회** | AWS IAM Role/Policy/Attachment를 생성하지 않음. 조회 목록과 foundation Policy Map을 대조 |
+| 고객 AWS IAM OIDC Provider | `aws_iam_openid_connect_provider.cluster` | RHCS issuer/Thumbprint를 소비하고 rosa State가 관리 |
+| 고객 AWS Operator IAM Role | `aws_iam_role.operator` | 위 Provider ARN + 조회한 정확한 ServiceAccount `sub`; Path/Boundary는 foundation 계약 소비 |
+| 공통 Operator 정책 본체 / 역할 연결 | 정책 본체는 foundation, 연결은 `aws_iam_role_policy_attachment.operator` | `policy_name`별 승인 ARN Map을 소비하며 rosa에서 공통 정책 본체를 중복 생성하지 않음 |
+| ROSA Cluster | `rhcs_cluster_rosa_classic` | Input Contract + AWS OIDC Provider + Role Policy Attachments에 의존. 공통 Account Role은 foundation 소비 |
+
+관리 소유권 근거는 위 [RHCS OIDC 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/oidcconfig/rosa_oidc_config_resource.go)과 [Operator Data Source Read 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/f77dde5a5bf48694ea6b07e493a30a6a2a0fc82d/provider/rosa_operator_roles/classic/rosa_operator_roles_data_source.go)다. 현재 Root의 생성 dependency와 Cluster 삭제 → 실제 서비스 삭제 확인 → IAM/OIDC cleanup 순서는 그대로 유지한다. RHCS/CLI가 동일 AWS 객체를 중복 소유하도록 추가하지 않는다.
+
+### 지금 검사할 것과 실제 환경에서 검사할 것
+
+| 시점 | 검사·결과 범위 | 아직 입증하지 않는 범위 |
+|---|---|---|
+| 현재 Source 리뷰 | 고정 Provider/Lock·fmt/validate/Schema, 두 issuer 형태(선두 `https://` 유무)의 **격리 Source harness/mock Provider plan**으로 보존한 production 선언이 생성하는 AWS URL·Trust JSON·합성 6 Role/Attachment 대응 확인 | 실제 foundation/Operator 목록 조회·Data Source의 6개 postcondition 실행·Cluster graph·OCM/AWS·Backend·권한·실물 issuer·STS Federation 성공 |
+| 실제 IAM/OIDC 준비 전후 | 기존 최초 준비 절차의 전체 Plan/권한/입력/Cost 리뷰. 승인 준비 Apply 후 실제 issuer·TLS discovery/JWKS, Provider URL/Client ID/Thumbprint·Trust·SA 목록·Policy Attachment/Boundary·지원/전파 진단 대조 | IAM Get·웹 응답 성공만으로 실제 ServiceAccount의 `AssumeRoleWithWebIdentity` 성공 판정 |
+| 검토한 유료 Cluster 생성 후 | 실제 issuer에 맞는 Cluster/Operator ServiceAccount 경로·WebIdentity 사용과 STS 오류/가용한 CloudTrail·Operator 상태를 확인. 확인 범위·실패·비용·중단/재개 조건을 새 Run에 기록 | Operator 정상 상태만으로 모든 STS 경로를 확인했다고 확대하거나 실패·미관측을 PASS로 처리 |
+
+Core 1.16.4의 [mock 중첩 속성 처리](https://github.com/hashicorp/terraform/blob/v1.16.4/internal/moduletest/mocking/fill.go#L25)는 RHCS의 Computed ListNestedAttribute를 실제 6개 목록처럼 대체하지 못한다. 이를 위해 production의 6개 Role/Policy Map 조건을 완화하거나 Root 구조를 바꾸지 않는다. 격리 harness는 Operator 조회 block만 생략하고 local map의 목록 참조 1개를 합성 fixture로 치환하며, OIDC/Trust/Role/Attachment·정규화 선언과 복사한 variables/providers/versions/Lock의 보존을 검사한다. input_contract stub도 harness에만 존재한다. 원 Root의 Data Source·Postcondition·Cluster dependency는 별도의 원문 validate/Schema·공식 Source/독립 대조로 유지하고, 그 실행을 mock으로 완료했다고 주장하지 않는다.
+
+Managed OIDC 객체 준비만으로 해당 Cluster의 실제 ServiceAccount JWT가 생기지는 않는다. 실제 Operator의 토큰 경로 시험을 Source 병합 전에 무조건 요구하거나, 이를 증명하려고 별도 유료 Cluster를 먼저 생성하는 순환 Gate를 만들지 않는다. 실제 토큰/자격은 공개 로그나 Git에 남기지 않는다. Cluster 생성 전에 수행 가능한 실물 사전 검사는 기존 준비 단계에서 수행하고, 실제 STS/Operator 업무 경로는 검토된 생성 창 안에서 확인한다. 충분한 사전 근거가 없거나 오류가 발견되면 그 실행을 보류한다. Source 재리뷰에는 이 범위와 실제 미수행 항목을 명시한다.
+
+새 HEAD의 실제 CI·재리뷰 결론은 [PR #28](https://github.com/seokpan/seokpan-hybrid-infra/pull/28)·[Issue #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)에 연결한다. Mock의 합성 Account/Subnet/Role/issuer/입력은 실행 인계값이 아니며 실제 Cloud Plan/Apply·유료 생성·Runtime PASS를 기록하지 않는다.
+
+## 실제 첫 Plan에서 기다리는 입력
+
+아래 항목은 **실제 수신·확인이 아직 필요한 조건**이다. 문서의 필드와 `INPUT_REQUIRED` 예시는 수신 완료 증거가 아니다. 공개 기록에는 값 대신 받은 개정·출처 전체 SHA·확인 시각·논리 참조·수락 범위·보완 담당을 연결한다.
+
+| 필요한 입력·확인 | 공급·확인 경로 | 이 단계에 요구하지 않는 항목 |
+|---|---|---|
+| 실제 Account/서울 Region/VPC, Public 3 + ROSA Private 3의 같은 VPC·3 AZ 조합, 최신 기반 Source/출력 개정·생성 조합 | A의 Issue #23 → B의 Issue #25 수신 | Data Private Subnet을 설치 목록에 추가, VPN·복구 Host 전체 완료 |
+| Classic Installer/Support/ControlPlane/Worker Role 4개·Prefix/Path, Operator 공통 Policy Map, 적용 Boundary/External ID와 실제 권한·Trust·공유 영향 | A 기반·bootstrap Owner, Issue #20 권한 연결 → B 수신 | Backend 접근만으로 서비스 권한 PASS, 개인 Admin 성공을 목적 Role 성공으로 전용 |
+| 서로 다른 실제 MariaDB/Redis Data SG 2개·Owner·기반 Rule 의미 | C의 Issue #19와 A의 Issue #23 → B 수신 | DB/Redis Endpoint·비밀번호·CA·Schema·데이터 이전·전체 백업 |
+| B 실행 Controller의 Core/Provider/Lock·CLI 조합, 현재 목적 Caller/세션, 정본 Backend Key/Lock·Account, 실제 서비스 지원/GA patch·Quota·구독·Worker disk | B의 Issue #25, A의 Network/IAM 리뷰 | ROSA 생성·지원·권한이 이미 PASS라는 가정 |
+| 실제 입력 수신, 지원·예비 총비용·실행 창의 첫 Plan 준비 리뷰 참조, 보호된 전체 Plan 저장/리뷰 경로 | B 준비, A 기반 리뷰, D 총비용·창 연결 | 아직 없는 실제 Plan을 리뷰·승인했다고 표시 |
+
+첫 Plan은 `cluster_enabled=true`, **`worker_sg_binding=null`**로 준비할 수 있다. 현재 Schema는 이때도 **Data SG 2개가 필수**다. Binding Rule은 0개이며, 실제 Worker SG는 생성 뒤 확인한다. DB/Redis 연결값·App Image Digest는 rosa 첫 Plan 입력이 아니다. Worker Pull 구현과 Data/Secret/Schema 준비는 후속 App 배포 조건으로 관리한다.
+
+값 누락·기반 변경·Caller/Backend 불일치·지원/권한 부족이 있으면 **그 실제 Plan을 대기**하고 계약·코드·Case·OCP/Cloud GitOps 준비는 계속한다. `execution_review`의 문자열 검사는 참조의 형식 확인이며 실제 리뷰·지원·비용 승인 자체를 발급하지 않는다.
+
+## 서비스 권한·세션 멱등성·전파의 후속 처리
+
+[D의 Source 리뷰](https://github.com/seokpan/seokpan-hybrid-infra/pull/28#pullrequestreview-5413597372)의 비차단 제안은 원 Issue #25의 실제 첫 Plan/생성 준비에 연결한다. 현재 rosa 실행 Role은 Backend 접근만 선언돼 있으며, 이 문서가 서비스 권한을 추가하거나 Apply하지 않는다.
+
+| 항목 | 현재 Source에서 확인한 범위 | 다음 확인·보완과 실행 경계 |
+|---|---|---|
+| 서비스 권한 | OIDC Provider·Operator Role/Policy Attachment, Caller/VPC/Subnet/Account Role 조회, 생성 후 SG 조회·Ingress Rule 관리가 해당 Root 호출 범위다 | 아래 단계별 수요표는 B의 현재 HCL·고정 Provider 호출을 대조한 준비 자료다. A의 bootstrap Owner와 Issue #20 경로에서 제한 Action/Resource·조건·공유 영향을 리뷰한다. 실제 Cloud 호출·지원 도구의 추가 요구는 별도 근거로 대조하며 권한 PR·지정 Apply·목적 Role 재시험 전 실행 준비를 완료 처리하지 않는다 |
+| `rosa_creator_arn` | 현재 `scripts/tf-session.sh`의 세션명은 `${user_name}-${mode}`다. 같은 사용자·rosa 모드의 재발급마다 세션명이 바뀌는 구조는 아니다. 인계 실행자/세션명이 바뀌면 ARN 값이 달라질 수 있다 | 최초 생성의 실제 creator 논리 참조를 보호 대장에 보존한다. 정상 갱신 세션과 인계 세션의 전체 Plan에서 기존 Cluster properties의 diff/NoChanges를 확인한다. 차이가 있으면 자동 Apply하지 않고 세션 규칙·실행자 인계·필드 유지 방법을 A/B가 실제 Provider/API 동작과 대조한다. 임의 `ignore_changes`·State 편집·Replace로 차이를 숨기지 않는다 |
+| IAM/OIDC 전파·부분 실패 | 공식 Classic v1.7.2는 Operator 생성 후 20초와 OIDC 생성/삭제 10초를 `time_sleep` 및 output dependency로 연결한다. 이 Root는 직접 dependency만 있고 해당 대기 Resource/Provider는 없다 | 현재 Source에는 대기를 임의 추가하지 않는 선택을 유지한다. 첫 실제 준비/생성 Apply 전에 아래 기존 토글·전체 Plan의 단계 분리와 프로브·관측 최대시간·실패 Runbook 후보를 A/B가 수락한다. 자동 대기가 필요하다는 검증 결론이면 별도 Source/Lock 변경·새 검사·리뷰를 먼저 수행한다. 고정 시간이나 dependency만으로 전파 성공을 판단하지 않는다 |
+
+### 목적 실행 Role의 단계별 호출 수요 — Source 검토용
+
+아래 표는 현재 `inputs.tf`·`oidc.tf`·`cluster.tf`·`bindings.tf`와 고정 **AWS 6.67.0 / RHCS 1.7.7**의 구현을 대조한 **A/B 권한 검토 자료**다. 허용 정책·실효 권한·지원 성공을 확정하거나 권한을 추가하지 않는다. `seokpan-tf-rosa`의 서비스 권한 변경은 **A 소유 bootstrap**에서 검토·적용하고, B는 실제 목적 Caller로 해당 단계의 결과를 수락한다. 현재 Source의 rosa Role 연결은 자기 State/Lock 정책이며, 계정의 실제 추가 정책·Boundary·Session Policy·SCP는 조회하지 않았다.
+
+**전제:** 같은 rosa Root/State를 유지한다. Backend의 자기 `phase2/rosa` State/Lock 접근은 기존 `tf_backend`·버킷 정책 범위를 확인하며 새 전체 State 읽기 권한을 요청하지 않는다. 첫 Plan의 읽기와 기존 State의 Refresh, 준비 Apply·Cluster 생성·Binding·삭제의 변경 호출을 구분한다.
+
+| 단계·HCL 소비 | 고정 구현에서 확인한 호출 수요 | 검토할 대상·조건 / 남는 한계 |
+| --- | --- | --- |
+| 최초 빈 State Plan — `data.aws_caller_identity.current` | AWS STS `GetCallerIdentity`. 응답 Account와 `assumed-role/seokpan-tf-rosa` ARN을 HCL postcondition으로 대조 | 이 API는 명시 Allow가 필요하지 않는다. 이를 이유로 `sts:*`를 요청하지 않는다. MFA AssumeRole·세션 공급은 별도 기존 절차 |
+| 최초 빈 State Plan — `data.aws_vpc.foundation` | `ec2:DescribeVpcs`, `ec2:DescribeVpcAttribute`로 DNS Hostnames/Support 및 Network Address Usage Metrics 조회. 같은 Read에서 Main Route Table의 `ec2:DescribeRouteTables`도 호출 | DescribeVpcs/RouteTables는 Resource `*` + 서울 Region 조건 검토. DescribeVpcAttribute는 수신 VPC ARN으로 제한 가능. Main Route Table 조회 실패는 Provider가 **WARN·null로 처리**하므로 이것만으로 Plan 필수 실패라고 단정하지 않는다. 읽기 성공도 실제 Public/Private Route·NAT 정상 검증은 아님 |
+| 최초 빈 State Plan — Public/ROSA Private Subnet·Account Role 4개 | Subnet은 `ec2:DescribeSubnets`; `data.aws_iam_role.account`는 `iam:GetRole` | Subnet 조회 Resource `*` + 서울 조건, HCL에서 ID/VPC/CIDR/AZ 대조. GetRole은 A가 공급한 Installer/Support/ControlPlane/Worker **4 ARN**에 한정. Trust 문서는 GetRole 응답에 있으나 HCL은 실제 Policy/Trust 유효성을 전부 검사하지 않음 |
+| 최초 빈 State Plan — `data.rhcs_rosa_operator_roles.cluster` | RHCS의 OCM `AWSInquiries/STSCredentialRequests` 목록 조회 | AWS IAM Role 생성이나 AWS STS 요청이 아님. 별도 RHCS 인증/구독과 실제 6개 Operator·Policy Map 의미를 대조. `availability_zone`는 위 Subnet 조회 결과로 대조하며 HCL 자체가 `DescribeAvailabilityZones`·Instance Offering을 조회하는 것은 아님 |
+| 기존 State Refresh — AWS OIDC Provider·Operator Role/Attachment | OIDC는 `iam:GetOpenIDConnectProvider`; Operator Role은 `iam:GetRole`, `iam:ListRolePolicies`, `iam:ListAttachedRolePolicies`; Inline Policy가 실제 발견되면 `iam:GetRolePolicy`도 읽음. Attachment Read도 ListAttachedRolePolicies 사용 | **현재 Cluster의 OIDC ARN·Operator Role ARN 목록**으로 제한. 공통 Account Role·다른 Cluster를 관리 대상으로 넓히지 않음. 정상 Read·생성 후 tail Read는 Get 응답의 Tag를 `setTagsOut`으로 설정해 아래 SDK fallback을 건너뛴다. 별도 조건부 Tag 조회 수요는 다음 행에 적었다. 기존 자원 Refresh의 읽기를 신규 생성 권한과 분리 |
+| 조건부 Tag 조회 — IAM Resource tagging interceptor | `iam:ListOpenIDConnectProviderTags`·`iam:ListRoleTags`. SDK `After`는 Tag 출력(`TagsOut`)이 미설정이고 식별자가 있을 때만 ListTags를 호출한다. 별도 `Finally Update`는 식별자가 있고 Plan의 `tags_all`이 wholly known이 아니면 UpdateTags 성공 뒤 ListTags를 호출 | **현재 Cluster OIDC Provider ARN / 현재 6 Operator Role ARN** 각각에 한정. 정상 Read는 Tag가 없거나 빈 목록이어도 `option.Some`로 출력하므로 ListTags가 매번 호출된다고 보지 않는다. 현재 default Tag는 고정 문자열, Operator Tag 일부는 RHCS 조회값이며 실제 Plan의 known 여부·빈 값 등을 대조한다. Annotation/helper 존재만으로 정상 Refresh·생성 후 Read의 AccessDenied를 예측하지 않고, 이 조건부 호출도 실제 bootstrap 정책 수요에 포함해 검토 |
+| 기존 State Refresh — RHCS OIDC Config/Cluster 및 Binding | RHCS는 OCM OIDC Config/Cluster 조회. Binding이 있을 때 `ec2:DescribeSecurityGroups`와 `ec2:DescribeSecurityGroupRules` | RHCS와 AWS 목적 인증은 별개. EC2 조회는 서울 조건을 검토. 처음 Binding=null이면 해당 SG Data Source/Rule 인스턴스는 0개다. 같은 VPC라는 결과만으로 Worker Node/ENI 소속을 입증하지 않음 |
+| 승인된 IAM/OIDC 준비 — `rhcs_rosa_oidc_config.cluster` | RHCS가 OCM에 managed OIDC Config 추가·조회 및 Thumbprint Inquiry를 요청 | AWS 고객 OIDC Provider와 다른 객체. RHCS 호출을 고객 S3/Secrets Manager 생성 권한으로 바꾸지 않는다. 필요한 실제 RHCS 권한·지원·전파는 준비 전후 확인 |
+| 승인된 IAM/OIDC 준비 — `aws_iam_openid_connect_provider.cluster` | `iam:CreateOpenIDConnectProvider`·`iam:GetOpenIDConnectProvider`, Tag-on-create의 `iam:TagOpenIDConnectProvider`. 변경 시 `iam:UpdateOpenIDConnectProviderThumbprint`, `iam:AddClientIDToOpenIDConnectProvider`, `iam:RemoveClientIDFromOpenIDConnectProvider`, `iam:TagOpenIDConnectProvider`·`iam:UntagOpenIDConnectProvider` 경로 | 수신 Account의 **현재 Cluster issuer에 해당하는 OIDC ARN**, 승인 Project/Phase/Component Tag 조건을 A와 검토. issuer는 managed Config 결과이며 전체 Account OIDC 관리로 넓히지 않는다. Update/Client ID/Tag 변경 권한은 실제 변경 범위에 맞춰 검토. 생성 후 Read는 위 Refresh, Update의 조건부 ListTags는 별도 행을 함께 대조 |
+| 승인된 IAM/OIDC 준비 — `aws_iam_role.operator`·Attachment | `iam:CreateRole`·`iam:TagRole`·`iam:GetRole` 및 위 Refresh 읽기, `iam:AttachRolePolicy`. Trust 갱신은 `iam:UpdateAssumeRolePolicy`; Max Session 변경 API의 정책 Action은 `iam:UpdateRole`, Description 변경 API는 별도의 `iam:UpdateRoleDescription`이다. 경계 변경은 `iam:PutRolePermissionsBoundary`·`iam:DeleteRolePermissionsBoundary`, Tag 변경은 `iam:TagRole`·`iam:UntagRole` 경로 | RHCS가 조회한 **현재 6 Operator Role의 실제 이름/Path/ARN**과 수신 Policy ARN Map만 대상으로 검토. Attach/Detach는 `iam:PolicyARN` 조건 후보와 함께 대조. Boundary 제거를 기본 허용하지 않으며 변경이 필요하면 별도 영향 검토. 공통 Account Role/Policy 생성·Policy 본체 수정·Worker Pull Attachment는 A/D 소유를 유지. 생성 후 Read는 위 Refresh, Update의 조건부 ListTags는 별도 행을 함께 대조 |
+| 승인된 Cluster 생성 — `rhcs_cluster_rosa_classic.cluster` | RHCS는 OCM Cluster Add/Get·Ready 대기, 변경 시 Update를 요청. `account_roles`·Subnet·OIDC 참조를 payload에 소비 | 고객 Terraform Caller가 직접 EC2/RDS/Redis를 생성하는 코드가 아니다. Installer/Operator 등의 **서비스 실행 Role** 권한과 Terraform 목적 Role을 구분. payload에 Role ARN이 있다는 이유로 B Role의 `iam:PassRole`·EC2 광역 생성 권한을 자동 도출하지 않음. 실제 지원 경로·추가 호출/거부 근거가 확인되면 역할 전달 대상/서비스 조건을 A와 대조 |
+| 생성 후 Stage 2 — `aws_vpc_security_group_ingress_rule.worker_to_data` | SG/Rule 읽기 + `ec2:AuthorizeSecurityGroupIngress`, Update의 `ec2:ModifySecurityGroupRules`, 삭제의 `ec2:RevokeSecurityGroupIngress`. Tag-on-create/변경은 `ec2:CreateTags`·`ec2:DeleteTags` 경로 | A/C의 **MariaDB/Redis 대상 SG**, rosa가 만든 해당 Rule ARN과 Tag·VPC/Region 조건을 검토. Modify는 SG와 Rule 대상 모두 대조. 생성 시 Tag 인증의 `ec2:CreateAction=AuthorizeSecurityGroupIngress` 제한과 이후 Tag 변경 허용을 구분. 기본 호출 의미는 Worker SG → TCP3306/6379의 Rule 2개. SG 본체 생성/삭제·전체 목록 덮어쓰기·기반 Rule 관리 권한을 추가하지 않음 |
+| Binding 해제 → Cluster=false 삭제 | 먼저 기존 Rule의 `ec2:RevokeSecurityGroupIngress`·읽기. 이어 RHCS OCM Cluster Delete/Get·삭제 대기. AWS OIDC/Operator Role은 유지 | 같은 Root의 **새 전체 Plan을 단계별로 검토**. false는 기존 Cluster를 삭제하므로 범용 안전 모드가 아님. 삭제 Timeout 후 State 제거는 실제 서비스 삭제·과금 종료의 증거가 아님 |
+| 실제 Cluster 삭제 확인 뒤 최종 IAM/OIDC cleanup | `iam:DetachRolePolicy`, `iam:DeleteRole`, `iam:DeleteOpenIDConnectProvider` 및 Refresh 읽기. Role Delete 구현은 `iam:ListInstanceProfilesForRole`를 먼저 호출. RHCS managed Config 삭제 전 Cluster 이용 여부 목록/Config 조회 뒤 삭제 | 현재 Cluster 종속 ARN만 대상으로 검토. 예상 밖 Instance Profile·Inline Policy·다른 Owner Attachment가 있으면 **중단·Owner 확인**. Provider는 State의 Inline/Managed Policy 또는 force_detach 조건에 따라 추가 제거 호출을 할 수 있으므로 Source에 Inline 선언이 없다는 이유만으로 삭제 분기가 없다고 단정하지 않음. `iam:RemoveRoleFromInstanceProfile`·`iam:PutRolePolicy`·`iam:DeleteRolePolicy`·Policy 본체 Delete를 기본 일괄 허용하지 않으며 실제 정리 범위가 필요하면 별도 검토. foundation/bootstrap 전체 삭제 권한은 범위 밖 |
+
+**HCL에 없는 실물 진단을 분리한다.** 위 Subnet Data Source가 읽는 AZ 이름/ID와 별개로 서비스 지원·AZ Offering을 확인하는 CLI, 생성 후 Worker Node→EC2/ENI→SG 소속 관측, IAM Policy 본문/Version·Boundary/Trust·실효 권한의 진단은 추가 수요다. 예를 들어 `iam:GetPolicy`·`iam:GetPolicyVersion`은 현재 Attachment Resource의 직접 읽기 호출이 아니며, A/B가 실제 수신 Policy ARN·지원 진단을 검토하는 범위로 따로 결정한다. `DescribeInstances/DescribeNetworkInterfaces`도 Worker 소속 관측에 필요한 방식이 정해진 뒤 대조한다. 현재 HCL을 이유로 모든 `Describe*`·`iam:*`·서비스 지원 CLI의 권한을 일괄 요청하지 않는다.
+
+`sts:AssumeRoleWithWebIdentity`는 Operator **Trust Policy 안의 허용 Action**이다. B의 Terraform 목적 Role이 수행할 API 권한으로 복사하지 않는다. `iam:PassRole`은 실제 AWS 서비스에 역할을 전달하는 호출·대상 ARN·`iam:PassedToService` 등 조건이 확인된 경우에만 별도 도출한다. IAM 생성/변경/삭제 API의 호출 성공도 Operator의 실제 WebIdentity/STS·설치 성공을 뜻하지 않는다.
+
+**현재 남은 인계:** B는 이 수요와 실제 Role/Policy/OIDC/SG 논리 참조를 원 Issue #25에 연결하고, A bootstrap Owner와 #20 경로에서 현재 서비스 권한 후속·리뷰/적용 개정을 조율한다. A/C의 foundation Network/Data 권한 PR을 B가 대신 작성하지 않는다. 실제 Code/Lock/입력·Caller/Backend·Boundary/Session Policy/SCP·RHCS 지원 및 해당 단계 Plan/실행 결과를 확인하기 전에는 실효 권한 PASS나 TH 완료로 표시하지 않는다.
+
+근거는 고정 [AWS6.67 VPC Read](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/ec2/vpc_data_source.go)·[Subnet Read](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/ec2/vpc_subnet_data_source.go)·[IAM Role](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/role.go)·[Role Data Source](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/role_data_source.go)·[Attachment](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/role_policy_attachment.go)·[OIDC Provider](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/openid_connect_provider.go)·[SG Ingress Rule](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/ec2/vpc_security_group_ingress_rule.go), [SDK Tag interceptor](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/provider/sdkv2/tags_interceptor.go#L77-L98)·[조건부 Update 조회](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/provider/sdkv2/tags_interceptor.go#L113-L183)·[Tag 출력 설정](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/tags_gen.go#L59-L63)·[Tag 등록](https://github.com/hashicorp/terraform-provider-aws/blob/v6.67.0/internal/service/iam/service_package_gen.go#L289-L326), 고정 [RHCS1.7.7 Operator 조회](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/rosa_operator_roles/classic/rosa_operator_roles_data_source.go)·[managed OIDC](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/oidcconfig/rosa_oidc_config_resource.go)·[Classic](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/clusterrosa/classic/cluster_rosa_classic_resource.go), [AWS EC2 Action/Resource 표](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html)·[IAM Action/Resource 표](https://docs.aws.amazon.com/service-authorization/latest/reference/list_iam.html)·[GetCallerIdentity 권한 설명](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html)다. Provider Read의 보조 호출/조건부 분기는 실행 조합에 따라 달라질 수 있으며 실제 거부·변경 영향은 같은 원 기록에서 좁혀 확인한다.
+
+RHCS 1.7.7의 [Classic 구현](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/clusterrosa/classic/cluster_rosa_classic_resource.go)에서 `properties`에는 `RequiresReplace` 선언이 없고 Update 경로가 있다. [ValidatePatchProperties](https://github.com/terraform-redhat/terraform-provider-rhcs/blob/v1.7.7/provider/clusterrosa/common/properties.go)는 기존 creator ARN과 다른 값에 오류를 반환하며 Classic Update는 이를 Warning으로 기록한 뒤 반환된 Map의 patch 경로를 처리한다. 따라서 Source만으로 이 필드 변경의 실제 API 수락·NoChanges·교체 여부를 확정하지 않는다. **동일 세션 재발급·인계 세션·생성 후 Stage 2·삭제 단계의 실제 전체 Plan**에서 확인하며 diff가 남은 Plan은 보호·검토 후 해당 실행을 보류한다.
+
+전파/부분 실패 Runbook 후보는 기존 `cluster_enabled` 토글을 이용한다. **최초 IAM/OIDC 준비**와 **기존 Cluster 삭제**에 같은 false 값을 쓰므로 실제 상태와 Plan으로 목적을 구분한다.
+
+1. 최초 준비를 선택하려면 현재 rosa State·import 대상·실제 서비스에 보존/관리 중인 Cluster가 없음을 확인한다. `cluster_enabled=false`, `worker_sg_binding=null`의 **같은 rosa Root 전체 Plan**에 의도하지 않은 삭제·교체가 0건인지 확인한다. 기존 Cluster가 있으면 false는 삭제를 계획하므로 이 준비 절차를 적용하지 않는다. 새 State나 `-target`으로 우회하지 않는다.
+2. 준비 Apply도 실제 AWS/RHCS 쓰기다. 실행 전에 실제 지원 조합·목적 권한·보호 전체 Plan·수량/비용·창·중단/지원/잔존 담당과 **그 준비 범위의 실행 승인**을 확인한다. Source 병합이나 계속 진행 요청을 이 승인으로 사용하지 않는다. 보호 원본을 남기고 공유 실행을 조율한다.
+3. 승인된 준비 Apply 뒤 목적 Caller로 해당 Role/Policy Attachment·OIDC의 실제 참조/Trust/정책·서비스 진단을 확인한다. A/B는 관측 프로브·최대시간·간격·실패 종료/재시험 조건과 근거를 실행 전에 정한다. 단순 Role/OIDC Get 성공은 전체 STS Federation이나 Cluster 설치의 PASS가 아니며 공식 20초/10초를 성공 보증값으로 사용하지 않는다. 충분한 근거를 확보하지 못하면 Cluster 생성을 보류하고 지원 경로나 필요한 Source/Lock 변경을 먼저 리뷰한다.
+4. 준비 결과·입력·권한/지원·전체 비용을 다시 수신하고 `cluster_enabled=true`, Binding=null의 **새 전체 Plan**을 리뷰해 실제 Cluster 생성의 동일 Code/Lock/입력·Plan과 해당 실행 승인을 확인한다. Stage 2 Worker→Data 연결은 생성 후 실제 Cluster/SG 관측과 별도의 새 전체 Plan으로 진행한다.
+5. 실패/timeout/Warning이 생기면 상태·단계·실제 OCM Cluster와 AWS IAM/OIDC 존재 여부를 보호 기록으로 수집한다. Cloud Apply 성공이나 State absence만으로 자원 정리를 판단하지 않는다.
+6. 실제 자원이 생성된 경우 기존 IAM/OIDC를 유지하고, 같은 Root/State의 새 전체 Plan·실제 서비스 상태·지원/Owner 리뷰로 재개 가능한 범위를 확인한다. 임의 반복 생성·State 삭제·곧바로 전체 Destroy를 수행하지 않는다.
+7. 정리가 필요하면 App/Backup 보존·Binding 해제 → Cluster만 제거 → 실제 Red Hat/AWS 삭제 확인 → 승인된 IAM/OIDC cleanup 순서를 사용한다. Cluster error·삭제 불완전이면 IAM/OIDC를 유지하고 지원·State 정합을 먼저 처리한다. 재실행/정리는 새 Run과 실제 비용에 남긴다.
+
+근거는 [공식 Operator Role 대기](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/main.tf)·[그 output 연결](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/operator-roles/outputs.tf), [공식 OIDC 대기](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/oidc-config-and-provider/main.tf)·[그 output 연결](https://github.com/terraform-redhat/terraform-rhcs-rosa-classic/blob/v1.7.2/modules/oidc-config-and-provider/outputs.tf)다. 이 후보의 작성은 실제 전파/재개/정리 시험 PASS나 유료 첫 Apply 승인이 아니다.
+
+## 첫 Plan 이후의 순서
+
+| 단계 | 다음 단계로 넘길 증거 | 계속 보류할 실행 |
+|---|---|---|
+| 실제 전체 Plan | 동일 Code/Lock/입력·Caller, 실제 생성/교체/삭제·권한·Network/Data 보존 영향의 A 리뷰, 보완 요구 해소 | Plan 없이 유료 생성 |
+| 유료 ROSA 생성 | 실제 Plan 수량·단가·현재 누적/잔여/잔존·Window·실패/정리 비용을 포함한 D의 전체 Cost Gate, 실행 범위·창·가동/삭제 책임 확인 및 해당 실행 승인 | Source 병합만으로 Apply/생성 |
+| 생성 후 Data 연결 | 실제 현재 Cluster/infra ID·Worker SG·Node/ENI 소속 관측 → 새 Stage 2 전체 Plan → Data SG로 TCP 3306/6379 Rule 2개·Owner/충돌/허용·거부 확인 | 임의 같은 VPC SG를 Worker SG로 수락 |
+| App 최초 배포 | 실제 Worker Pull/Image, Data Endpoint/CA·TLS/AUTH·Schema·Cloud Secret, 관리/최소 Bootstrap·GitOps 인계. 필요한 Migration 단일 실행/결과 확인 후 최초 수동 Sync | Cluster Ready를 App 업무 PASS로 표시 |
+| Window A/B·복구·재생성 | 정상 Baseline·Backup/Release, 조건부 중간 정리·새 Cluster/Binding/Pull/Context, 실제 분리 장애·부하·전체 T18의 각 Run | 부분 Source/예행을 전체 시험 PASS로 표시 |
+| 최종 정리 | 검증 자산·독립 사본/복호화 수단·Evidence 접근 보존, 승인 rosa 삭제의 실제 완료·Orphan/잔존/후속 청구·담당 수락 | foundation/bootstrap 전체 Destroy를 rosa 기본 정리로 실행 |
+
+전체 비용은 **$450 계획선 초과 신규 가동 보류·조정, $500 한도**를 유지한다. Window A 뒤 정리는 백업/자산 접근·쓰기/Binding 보호·범위/비용·실행 승인을 확인한 조건부 작업이다. 계속 가동하면 실제 가동 시간과 누적 비용을 기록한다. ROSA 삭제·잔존 비용 종료·프로젝트 전체 완료는 각각 확인한다.
+
+## 결과를 남기는 위치
+
+실제 Source·입력 수신·Plan·각 실행 결과는 Issue #25와 원 PR/새 Evidence Run에 먼저 기록한다. `NOT RUN`, `BLOCKED`, 실패·부분 결과와 다음 담당을 실제 상태로 남긴다. 보호 Plan/State·실제 입력·Token·비밀번호·Key는 Git/공개 로그에 게시하지 않는다.
+
+본인 진행은 [h-docs Issue #21](https://github.com/seokpan/seokpan-hybrid-docs/issues/21)의 해당 TH와 연결하고, 팀 입력/공유 실행은 [h-docs Issue #8](https://github.com/seokpan/seokpan-hybrid-docs/issues/8)·[WORK_TRACKER](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/WORK_TRACKER.md), 공식 판정은 [05 구현·검증](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/05_IMPLEMENTATION_AND_VALIDATION.md)에 원본 링크를 연결한다. 제출과 수신, Source 리뷰와 실행 리뷰를 별도로 적는다.

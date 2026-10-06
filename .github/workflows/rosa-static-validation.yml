@@ -1,0 +1,224 @@
+name: ROSA source validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+    branches: [main]
+    paths:
+      - 'terraform/rosa/**'
+      - '.github/workflows/rosa-static-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/rosa/**'
+      - '.github/workflows/rosa-static-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rosa-static-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    # Standard public runners are free; hold this Source job if visibility changes.
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      TF_IN_AUTOMATION: 'true'
+      CHECKPOINT_DISABLE: '1'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - name: Checkout the submitted commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install checksum-verified Terraform 1.16.4
+        run: |
+          set -euo pipefail
+          tf_download_dir="${RUNNER_TEMP}/rosa-terraform-download"
+          tf_binary_dir="${RUNNER_TEMP}/rosa-terraform-bin"
+          mkdir -p "$tf_download_dir" "$tf_binary_dir"
+          cd "$tf_download_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip \
+            --output terraform_1.16.4_linux_amd64.zip
+          curl --fail --silent --show-error --location --retry 3 \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS \
+            --output SHA256SUMS
+          awk '$2 == "terraform_1.16.4_linux_amd64.zip" { print }' SHA256SUMS > selected-checksum.txt
+          test "$(wc -l < selected-checksum.txt)" -eq 1
+          sha256sum -c selected-checksum.txt
+          unzip -q terraform_1.16.4_linux_amd64.zip terraform -d "$tf_binary_dir"
+          printf '%s\n' "$tf_binary_dir" >> "$GITHUB_PATH"
+
+      - name: Prepare isolated provider data and record source
+        run: |
+          set -euo pipefail
+          umask 077
+          rosa_tf_data_dir="${RUNNER_TEMP}/rosa-static-data"
+          rosa_tf_cli_config="${RUNNER_TEMP}/rosa-static.tfrc"
+          mkdir -p "$rosa_tf_data_dir"
+          cat > "$rosa_tf_cli_config" <<'TFRC'
+          disable_checkpoint = true
+          provider_installation {
+            direct {}
+          }
+          TFRC
+          printf 'TF_DATA_DIR=%s\nTF_CLI_CONFIG_FILE=%s\n' \
+            "$rosa_tf_data_dir" "$rosa_tf_cli_config" >> "$GITHUB_ENV"
+          test -z "$(git status --porcelain)"
+          {
+            printf 'Source commit: %s\n' "$(git rev-parse HEAD)"
+            printf 'Lock blob: %s\n' "$(git hash-object terraform/rosa/.terraform.lock.hcl)"
+            sha256sum terraform/rosa/.terraform.lock.hcl
+            printf 'Scope: entire-Root provider validation plus scoped OIDC Source-harness mock plans; no Cloud backend/plan/apply or runtime acceptance.\n'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check formatting
+        run: terraform -chdir=terraform/rosa fmt -check -recursive
+
+      - name: Install locked providers without backend
+        run: terraform -chdir=terraform/rosa init -backend=false -input=false -lockfile=readonly -no-color
+
+      - name: Verify the actual tool and provider versions
+        run: |
+          set -euo pipefail
+          terraform -chdir=terraform/rosa version -json > "${RUNNER_TEMP}/rosa-version.json"
+          python3 - "${RUNNER_TEMP}/rosa-version.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              version = json.load(source)
+          expected = {
+              "registry.terraform.io/hashicorp/aws": "6.67.0",
+              "registry.terraform.io/terraform-redhat/rhcs": "1.7.7",
+          }
+          if version.get("terraform_version") != "1.16.4" or version.get("provider_selections") != expected:
+              raise SystemExit("Unexpected Core/provider version combination")
+          print(json.dumps(version, indent=2))
+          PY
+
+      - name: Validate the configuration with installed providers
+        run: |
+          set -euo pipefail
+          terraform -chdir=terraform/rosa validate -json | tee "${RUNNER_TEMP}/rosa-validate.json"
+          python3 - "${RUNNER_TEMP}/rosa-validate.json" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              result = json.load(source)
+          if result.get("valid") is not True or result.get("error_count") != 0:
+              raise SystemExit("Configuration validation did not pass")
+          print("Validate errors:", result["error_count"], "warnings:", result.get("warning_count"))
+          PY
+
+      - name: Read actual provider schemas and check declared types
+        run: |
+          set -euo pipefail
+          # Schema reads backend/state before requesting provider schemas. Use an
+          # isolated copy without backend.tf; original Root validation stays above.
+          rosa_schema_root="${RUNNER_TEMP}/rosa-schema-root"
+          rosa_schema_data="${RUNNER_TEMP}/rosa-schema-data"
+          mkdir -p "$rosa_schema_root" "$rosa_schema_data"
+          for rosa_schema_source in terraform/rosa/*.tf; do
+            if [ "${rosa_schema_source##*/}" = backend.tf ]; then continue; fi
+            cp "$rosa_schema_source" "$rosa_schema_root/"
+            cmp "$rosa_schema_source" "$rosa_schema_root/${rosa_schema_source##*/}"
+          done
+          cp terraform/rosa/.terraform.lock.hcl "$rosa_schema_root/"
+          TF_DATA_DIR="$rosa_schema_data" terraform -chdir="$rosa_schema_root" \
+            init -backend=false -input=false -lockfile=readonly -no-color
+          TF_DATA_DIR="$rosa_schema_data" terraform -chdir="$rosa_schema_root" \
+            providers schema -json > "${RUNNER_TEMP}/rosa-provider-schema.json"
+          for rosa_schema_source in terraform/rosa/*.tf; do
+            if [ "${rosa_schema_source##*/}" = backend.tf ]; then continue; fi
+            cmp "$rosa_schema_source" "$rosa_schema_root/${rosa_schema_source##*/}"
+          done
+          cmp terraform/rosa/.terraform.lock.hcl "$rosa_schema_root/.terraform.lock.hcl"
+          printf 'Schema scope: isolated HCL copy with only backend.tf omitted; original Root was validated unchanged.\n'
+          python3 - "${RUNNER_TEMP}/rosa-provider-schema.json" <<'PY'
+          import json, pathlib, re, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              providers = json.load(source)["provider_schemas"]
+          prefixes = {
+              "aws_": "registry.terraform.io/hashicorp/aws",
+              "rhcs_": "registry.terraform.io/terraform-redhat/rhcs",
+              "terraform_": "terraform.io/builtin/terraform",
+          }
+          checked = set()
+          for path in sorted(pathlib.Path("terraform/rosa").glob("*.tf")):
+              for kind, resource_type in re.findall(r'^\s*(resource|data)\s+"([^"]+)"\s+"[^"]+"', path.read_text(), re.M):
+                  provider = next((value for prefix, value in prefixes.items() if resource_type.startswith(prefix)), None)
+                  bucket = "resource_schemas" if kind == "resource" else "data_source_schemas"
+                  if provider is None or resource_type not in providers.get(provider, {}).get(bucket, {}):
+                      raise SystemExit(f"Missing actual schema for {kind} {resource_type}")
+                  checked.add((kind, resource_type))
+          if not checked:
+              raise SystemExit("No declared resource/data schemas checked")
+          print("Actual schemas checked:")
+          for item in sorted(checked):
+              print(*item)
+          PY
+
+      - name: Test preserved OIDC and trust expressions in a scoped harness
+        run: |
+          set -euo pipefail
+          # Keep the original Root/schema copy unchanged. RHCS's computed nested
+          # role collection cannot be supplied as six distinct mock values in
+          # Core 1.16.4. The scoped harness omits only that query and substitutes
+          # its local-map input; exact resource blocks and Lock are checked.
+          rosa_mock_root="${RUNNER_TEMP}/rosa-oidc-harness"
+          rosa_mock_data="${RUNNER_TEMP}/rosa-oidc-harness-data"
+          mkdir -p "$rosa_mock_data"
+          python3 terraform/rosa/tests/build_oidc_test_root.py \
+            --source-root terraform/rosa --output-root "$rosa_mock_root"
+          TF_DATA_DIR="$rosa_mock_data" terraform -chdir="$rosa_mock_root" \
+            init -backend=false -input=false -lockfile=readonly -no-color
+          TF_DATA_DIR="$rosa_mock_data" terraform -chdir="$rosa_mock_root" test \
+            -var-file=tests/oidc_mock.tfvars.json -no-color \
+            2>&1 | tee "${RUNNER_TEMP}/rosa-oidc-mock-tests.log"
+          python3 - "${RUNNER_TEMP}/rosa-oidc-mock-tests.log" <<'PYCODE'
+          import pathlib, re, sys
+          log = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          if re.search(r"(?m)^Success! 2 passed, 0 failed\.$", log) is None:
+              raise SystemExit("Both scoped OIDC mock-plan runs must pass without skips")
+          for name in ("issuer_without_scheme", "issuer_with_https_scheme"):
+              if re.search(r'(?m)^\s*run "' + name + r'"\.\.\. pass\s*$', log) is None:
+                  raise SystemExit("Expected issuer normalization mock run did not pass: " + name)
+          print("Scoped OIDC Source harness: 2 passed; preserved Role trust JSON/OIDC URL and six fixture Role/Policy mappings checked")
+          PYCODE
+          python3 - "$rosa_mock_root" <<'PYCODE'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          source = pathlib.Path("terraform/rosa")
+          manifest = json.loads((root / "source-harness-manifest.json").read_text())
+          def sha(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+          if sha(source / "oidc.tf") != manifest["production_oidc_sha256"]:
+              raise SystemExit("Production OIDC Source changed")
+          if sha(root / "oidc.tf") != manifest["harness_oidc_sha256"]:
+              raise SystemExit("Preserved harness OIDC expressions changed")
+          for name, expected in manifest["exact_copy_sha256"].items():
+              if sha(source / name) != expected or sha(root / name) != expected:
+                  raise SystemExit("Source/harness exact copy changed: " + name)
+          for name in ("oidc_issuer.tftest.hcl", "oidc_mock.tfvars.json"):
+              if (source / "tests" / name).read_bytes() != (root / "tests" / name).read_bytes():
+                  raise SystemExit("Harness test input changed: " + name)
+          print("Production Source/Lock and preserved harness HCL unchanged")
+          PYCODE
+          printf 'OIDC mock scope: scoped Source harness, exact OIDC/Role/Attachment HCL with six typed fixture roles; actual RHCS query/postcondition, foundation preflight, Cluster graph and AWS/RHCS/STS federation are NOT VERIFIED by these mock plans.\n' \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Confirm source and lock remained unchanged
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+          printf 'Source/Lock validation completed for %s. Cloud/runtime acceptance remains separate.\n' \
+            "$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
