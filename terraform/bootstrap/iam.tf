@@ -107,6 +107,46 @@ data "aws_iam_policy_document" "tf_bootstrap" {
       "arn:aws:iam::${local.account_id}:policy/seokpan-fnd-backup-boundary",
     ]
   }
+  # 작성자: 이유빈
+  # 작성 날짜: 2026/10/06
+  # 작성 내용: foundation Network 관리형 정책 생성·연결 및 bootstrap 관리 권한 추가
+  # 지정한 Network 고객 관리형 정책 한 개만 관리
+  statement {
+    sid = "ManageFoundationNetworkPolicy"
+    actions = [
+      "iam:CreatePolicy",
+      "iam:DeletePolicy",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions",
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:ListPolicyTags",
+    ]
+    resources = [
+      "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-network",
+    ]
+  }
+
+  # 위 정책을 foundation 실행 Role에만 연결·해제
+  statement {
+    sid     = "AttachFoundationNetworkPolicy"
+    actions = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+    resources = [
+      "arn:aws:iam::${local.account_id}:role/seokpan-tf-foundation",
+    ]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "iam:PolicyARN"
+      values = [
+        "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-network",
+      ]
+    }
+  }
+
 }
 
 resource "aws_iam_role_policy" "tf_bootstrap" {
@@ -641,6 +681,278 @@ resource "aws_iam_role_policy" "tf_foundation_data" {
   name   = "seokpan-tf-foundation-data"
   role   = aws_iam_role.tf["foundation"].id
   policy = data.aws_iam_policy_document.tf_foundation_data.json
+}
+
+
+# ---------------------------------------------------------------------------
+# 작성자: 이유빈
+# 작성 날짜: 2026/10/06
+# 작성 내용: foundation Network 관리형 정책 생성·연결 및 bootstrap 관리 권한 추가
+# foundation Network 실행 권한 — infra #23 / PR #33
+# 기존 Data·Registry/CI inline 정책과 별도로 관리형 정책을 연결합니다.
+# 대상: VPC / Subnet / IGW / Route / NAT / EIP / S3 Gateway Endpoint
+# VPN EC2·ENI·SG 등 Hybrid 추가 권한은 #16 후속 범위입니다.
+# ---------------------------------------------------------------------------
+data "aws_iam_policy_document" "tf_foundation_network" {
+  source_policy_documents = [
+    <<-POLICY
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadFoundationNetwork",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcAttribute",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeNatGateways",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeVpcEndpoints",
+        "ec2:DescribeVpcEndpointServices",
+        "ec2:DescribePrefixLists",
+        "ec2:DescribeTags"
+      ],
+      "Resource": [
+        "*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedNetworkResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpc",
+        "ec2:CreateSubnet",
+        "ec2:CreateInternetGateway",
+        "ec2:CreateRouteTable",
+        "ec2:AllocateAddress",
+        "ec2:CreateNatGateway"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:internet-gateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:natgateway/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "seokpan",
+          "aws:RequestTag/Phase": "2",
+          "aws:RequestTag/Component": "network"
+        }
+      }
+    },
+    {
+      "Sid": "UseOwnedNetworkResourcesForCreation",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateSubnet",
+        "ec2:CreateRouteTable",
+        "ec2:CreateNatGateway",
+        "ec2:CreateVpcEndpoint"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "seokpan",
+          "ec2:ResourceTag/Phase": "2",
+          "ec2:ResourceTag/Component": "network"
+        }
+      }
+    },
+    {
+      "Sid": "CreateTaggedS3Endpoint",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpcEndpoint"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "seokpan",
+          "aws:RequestTag/Phase": "2",
+          "aws:RequestTag/Component": "network",
+          "ec2:VpceServiceName": "com.amazonaws.ap-northeast-2.s3"
+        }
+      }
+    },
+    {
+      "Sid": "TagNetworkResourcesOnCreate",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:internet-gateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:natgateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Project": "seokpan",
+          "aws:RequestTag/Phase": "2",
+          "aws:RequestTag/Component": "network",
+          "ec2:CreateAction": [
+            "CreateVpc",
+            "CreateSubnet",
+            "CreateInternetGateway",
+            "CreateRouteTable",
+            "AllocateAddress",
+            "CreateNatGateway",
+            "CreateVpcEndpoint"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "ManageOwnedNetworkResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:ModifyVpcAttribute",
+        "ec2:DeleteVpc",
+        "ec2:ModifySubnetAttribute",
+        "ec2:DeleteSubnet",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:CreateRoute",
+        "ec2:ReplaceRoute",
+        "ec2:DeleteRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:ReplaceRouteTableAssociation",
+        "ec2:DeleteRouteTable",
+        "ec2:DeleteNatGateway",
+        "ec2:ReleaseAddress",
+        "ec2:ModifyVpcEndpoint",
+        "ec2:DeleteVpcEndpoints"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:internet-gateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:natgateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "seokpan",
+          "ec2:ResourceTag/Phase": "2",
+          "ec2:ResourceTag/Component": "network"
+        }
+      }
+    },
+    {
+      "Sid": "UpdateOwnedNetworkTags",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateTags"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:internet-gateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:natgateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "seokpan",
+          "ec2:ResourceTag/Phase": "2",
+          "ec2:ResourceTag/Component": "network"
+        },
+        "StringEqualsIfExists": {
+          "aws:RequestTag/Project": "seokpan",
+          "aws:RequestTag/Phase": "2",
+          "aws:RequestTag/Component": "network"
+        }
+      }
+    },
+    {
+      "Sid": "DeleteNonOwnershipNetworkTags",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteTags"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:internet-gateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:natgateway/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc-endpoint/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "seokpan",
+          "ec2:ResourceTag/Phase": "2",
+          "ec2:ResourceTag/Component": "network"
+        },
+        "ForAllValues:StringNotEquals": {
+          "aws:TagKeys": [
+            "Project",
+            "Phase",
+            "Component"
+          ]
+        },
+        "Null": {
+          "aws:TagKeys": "false"
+        }
+      }
+    }
+  ]
+}
+    POLICY
+  ]
+}
+
+resource "aws_iam_policy" "tf_foundation_network" {
+  name        = "seokpan-tf-foundation-network"
+  description = "Foundation Network resource management for the Seokpan project"
+  policy      = data.aws_iam_policy_document.tf_foundation_network.json
+
+  tags = {
+    Component = "tf-exec-role"
+  }
+
+  depends_on = [aws_iam_role_policy.tf_bootstrap]
+
+  lifecycle {
+    precondition {
+      condition = length(jsonencode(jsondecode(
+        data.aws_iam_policy_document.tf_foundation_network.json
+      ))) <= 6144
+      error_message = "Network managed policy exceeds the 6144-character limit."
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "tf_foundation_network" {
+  role       = aws_iam_role.tf["foundation"].name
+  policy_arn = aws_iam_policy.tf_foundation_network.arn
 }
 
 output "tf_exec_role_arns" {
