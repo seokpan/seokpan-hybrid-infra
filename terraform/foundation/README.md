@@ -133,11 +133,46 @@ Data 코드는 `data_*.tf`(Data SG · RDS · Valkey · Backup S3 · Backup User)
 
 - 공통 입력 `onprem_job_host_cidrs`(`variables.tf`): 온프렘 작업 Host `/32` 목록.
   Data RDS SG 규칙과 #16 Data Route · VPN 경로가 같은 값을 씁니다. 기본값 `[]`이면 규칙 · 경로를 만들지 않습니다.
-- `redis_auth_token`: 기본값이 없는 write-only 입력입니다. Plan · Apply 전에 SOPS 원본에서
-  현재 셸의 `TF_VAR_redis_auth_token`으로만 공급하고, 실행용 tfvars · 명령 인자에 넣지 않습니다.
-  값이 State · Plan에 남지 않으며 `redis_auth_token_version`이 바뀔 때만 새 Token이 전송됩니다.
+- `redis_auth_token`: 기본값이 없는 write-only 입력입니다. 실행용 tfvars · 명령 인자에 넣지 않고
+  아래 "Redis Token 공급 절차"대로 현재 셸의 `TF_VAR_redis_auth_token`으로만 공급합니다.
+  값이 State · Plan에 남지 않으며, 생성 때와 `redis_auth_token_version`이 바뀔 때만 AWS로 전송됩니다.
+  허용 문자: 16~128자, 영문 · 숫자와 `! & # $ ^ < > -` (ElastiCache AUTH 제약과 같음).
 - Data 출력: Data SG ID 2개(rosa 입력) · RDS / Valkey Endpoint · Port · 마스터 Secret ARN · Backup 버킷 · User 이름.
   비밀값은 출력하지 않습니다.
+
+### Redis Token 공급 절차 (foundation Plan · Apply)
+
+역할: Token 원본(SOPS 암호화 파일) 보관 = Data 담당(김상희), Plan · Apply 실행 = 지정 실행자(이유빈).
+SOPS 파일의 수신자(age Recipient)에 실행자를 포함해 실행자가 직접 해독합니다 (#19 합의).
+
+`redis_auth_token`은 `ephemeral` 입력이라 **저장된 Plan 파일에 값이 들어가지 않습니다.**
+따라서 저장된 Plan을 Apply할 때도 **같은 원본에서 같은 Token**을 다시 넣어야 하며,
+Plan과 Apply는 아래처럼 **하나의 하위 셸 안에서 연속 실행**합니다.
+하위 셸이 끝나면 환경변수도 함께 사라지고, 중간에 실패해도 `trap`이 값을 지웁니다.
+
+```bash
+# 저장소 최상위, foundation MFA 세션을 연 셸에서
+# SOPS_FILE: Data 담당이 공급한 Token SOPS 파일 경로 (Git 밖)
+# RUN_TFVARS: Git 밖 실행용 입력 파일 (onprem_job_host_cidrs 등)
+(
+  set -euo pipefail
+  trap 'unset TF_VAR_redis_auth_token' EXIT
+  export TF_VAR_redis_auth_token="$(sops -d --extract '["redis_auth_token"]' "$SOPS_FILE")"
+
+  terraform -chdir=terraform/foundation plan -var-file="$RUN_TFVARS" -out=foundation.tfplan
+  # 사람이 Plan 결과를 검토 · 승인한 뒤 같은 하위 셸에서 Apply (같은 Token이 그대로 남아 있음)
+  read -r -p "Plan 검토 완료 후 apply하려면 yes 입력: " ok
+  [ "$ok" = "yes" ] && terraform -chdir=terraform/foundation apply foundation.tfplan
+)
+rm -f terraform/foundation/foundation.tfplan
+env | grep -c '^TF_VAR_redis_auth_token=' || true   # 0이어야 함
+```
+
+- Token 값 · 해독 결과는 화면 · 로그 · PR · Issue에 남기지 않습니다 (`echo`, `set -x` 사용 금지).
+- 같은 원본을 쓰는지 확인할 때는 값 대신 SOPS 파일의 개정(`sops` 메타데이터의 `lastmodified`)만 기록합니다.
+- Plan 검토가 길어져 하위 셸을 닫았다면, Apply 전에 같은 방법으로 같은 파일에서 다시 넣습니다.
+- Token 교체(`redis_auth_token_version` 변경)는 이 절차와 별도입니다.
+  AWS의 ROTATE → SET 순서, App Secret(`backend-redis-runtime`) 교체, 이전 Token 제거와 접속 확인을 함께 계획한 뒤 진행합니다.
 
 ### 실제 실행 전에 남은 조건
 

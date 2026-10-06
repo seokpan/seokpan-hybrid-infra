@@ -20,7 +20,9 @@ variable "onprem_job_host_cidrs" {
   default     = []
 
   validation {
-    condition     = alltrue([for c in var.onprem_job_host_cidrs : can(cidrhost(c, 0)) && endswith(c, "/32")])
-    error_message = "onprem_job_host_cidrs에는 /32 주소만 넣습니다 (예: 192.168.52.50/32)."
+    # cidrnetmask()는 IPv4 CIDR만 받는다 → IPv6(예: 2001:db8::/32)와 잘못된 IPv4는 여기서 걸러짐
+    # 소비 Resource가 cidr_ipv4이므로 Plan 전에 IPv4 Host /32만 통과시킨다 (PR #37 리뷰)
+    condition     = alltrue([for c in var.onprem_job_host_cidrs : can(cidrnetmask(c)) && endswith(c, "/32")])
+    error_message = "onprem_job_host_cidrs에는 IPv4 Host /32만 넣습니다 (예: 192.168.52.50/32)."
   }
 }

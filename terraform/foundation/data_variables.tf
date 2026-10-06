@@ -87,9 +87,9 @@ variable "redis_node_type" {
 
 variable "redis_auth_token" {
   description = <<-EOT
-    Redis AUTH Token (16~128자, 출력 가능한 ASCII 중 @ " / 공백 제외).
+    Redis(Valkey) AUTH Token — 16~128자, 영문 · 숫자와 특수문자 ! & # $ ^ < > - 만 (ElastiCache AUTH 허용 문자).
     write-only 인자로만 전달되어 State·Plan에 남지 않는다.
-    값은 SOPS 원본에서 현재 셸의 TF_VAR_redis_auth_token으로만 공급한다.
+    값은 SOPS 원본에서 현재 셸의 TF_VAR_redis_auth_token으로만 공급한다 (절차: README "Redis Token 공급 절차").
     기본값이 없으므로 값 없이 Plan하면 멈춘다 → AUTH 없는 Redis가 만들어지는 것을 막음.
   EOT
   type        = string
@@ -98,8 +98,9 @@ variable "redis_auth_token" {
   nullable    = false
 
   validation {
-    condition     = can(regex("^[!#-.0-?A-~]{16,128}$", var.redis_auth_token))
-    error_message = "redis_auth_token은 16~128자, 출력 가능한 ASCII 중 @ \" / 와 공백을 뺀 문자여야 합니다."
+    # AWS가 허용하는 문자만 통과시키는 허용 목록 방식 → 잘못된 Token이 Apply 도중이 아니라 Plan 전에 걸러짐 (PR #37 리뷰)
+    condition     = can(regex("^[A-Za-z0-9!&#$^<>-]{16,128}$", var.redis_auth_token))
+    error_message = "redis_auth_token은 16~128자, 영문 · 숫자와 ! & # $ ^ < > - 만 쓸 수 있습니다."
   }
 }
 
