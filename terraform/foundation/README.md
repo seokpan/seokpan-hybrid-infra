@@ -110,6 +110,22 @@ EC2 규격 제공 조회는 실제 생성 용량이나 ROSA/RDS/Redis 지원 조
 - `network_subnets`에는 Data ID도 있으므로 전체 출력을 ROSA 입력에 그대로
   전달하지 않습니다. 필요한 필드만 추출하고 소비 계약과 대조합니다.
 
+### NAT 비용 Window 안전수칙
+
+`enable_nat_gateways`는 NAT Gateway 비용을 승인된 Window에만 발생시키기 위한
+운영 제어 변수이며 기본값은 `false`입니다.
+
+- ROSA가 생성되어 운영·검증 중인 동안에는 `enable_nat_gateways = true`를 유지합니다.
+- `true → false` 전환과 그에 따른 Apply는 **ROSA 삭제 완료를 확인한 이후에만** 수행합니다.
+- Window 중 Plan/Apply에서는 검토된 실행용 tfvars에
+  `enable_nat_gateways = true`를 명시합니다.
+- CLI의 `-var='enable_nat_gateways=true'`만 단독으로 사용하지 않습니다.
+  실행 시 옵션 누락으로 기본값 `false`가 적용되는 사고를 방지하기 위한 기준입니다.
+- 실행용 tfvars는 저장소에 커밋하지 않습니다.
+- `false`로 전환하면 NAT EIP, NAT Gateway, ROSA의 `0.0.0.0/0` NAT Route가
+  함께 제거됩니다. EIP도 반납되므로 다음 Window 재생성 시 NAT 공인 IP가
+  변경될 수 있습니다.
+
 ### 실제 실행 전에 남은 조건
 
 - Data 코드를 같은 foundation Root/State로 통합
