@@ -755,13 +755,30 @@ data "aws_iam_policy_document" "tf_foundation_network" {
       "Action": [
         "ec2:CreateSubnet",
         "ec2:CreateRouteTable",
-        "ec2:CreateNatGateway",
-        "ec2:CreateVpcEndpoint"
+        "ec2:CreateNatGateway"
       ],
       "Resource": [
         "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
         "arn:aws:ec2:ap-northeast-2:${local.account_id}:subnet/*",
         "arn:aws:ec2:ap-northeast-2:${local.account_id}:elastic-ip/*",
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "ec2:ResourceTag/Project": "seokpan",
+          "ec2:ResourceTag/Phase": "2",
+          "ec2:ResourceTag/Component": "network"
+        }
+      }
+    },
+    {
+      "Sid": "UseOwnedNetworkForS3GatewayEndpoint",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateVpcEndpoint"
+      ],
+      "Resource": [
+        "arn:aws:ec2:ap-northeast-2:${local.account_id}:vpc/*",
         "arn:aws:ec2:ap-northeast-2:${local.account_id}:route-table/*"
       ],
       "Condition": {
