@@ -2,6 +2,8 @@
 
 원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비한 별도 HCL 후속 PR이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 공개 승인 [03 §3-F](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)와 [04](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md)를 정적 Source로 연결한다. 개인 계획 TH-10은 별도 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
 
+실제 첫 Plan 전 본인 Source/도구·보호 입력·Backend/Caller의 단계별 준비는 [로컬 준비 절차](LOCAL_PREPARATION.md)를 따른다. 기존 도구만 사용하며 오프라인 확인과 실제 인증/Cloud 실행을 구분한다.
+
 ## 범위와 Owner
 
 | 대상 | Owner / 구현 |
