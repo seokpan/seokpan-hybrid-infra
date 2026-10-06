@@ -6,7 +6,7 @@ ROSA 삭제와 분리해 관리하는 Cloud Foundation
 - 범위
   - VPC / Subnet / Route / NAT / Security Group
   - Amazon RDS for MariaDB Multi-AZ (Primary DB)
-  - Amazon ElastiCache for Redis OSS (Cluster Mode Disabled, Primary 1 + Replica 1, Multi-AZ, Auto Failover)
+  - Amazon ElastiCache for Valkey 7.2 (Cluster Mode Disabled, Primary 1 + Replica 1, Multi-AZ, Auto Failover — 10-06 Redis OSS에서 변경, infra #19)
   - Amazon ECR (Cloud Runtime Primary Registry)
   - Backup용 S3
   - AWS 측 Hybrid 리소스
@@ -126,9 +126,22 @@ EC2 규격 제공 조회는 실제 생성 용량이나 ROSA/RDS/Redis 지원 조
   함께 제거됩니다. EIP도 반납되므로 다음 Window 재생성 시 NAT 공인 IP가
   변경될 수 있습니다.
 
+### Data 파일과 입력
+
+Data 코드는 `data_*.tf`(Data SG · RDS · Valkey · Backup S3 · Backup User)와
+전용 변수 `data_variables.tf` · 출력 `data_outputs.tf`로 나뉘어 같은 Root/State에 있습니다 (infra #19).
+
+- 공통 입력 `onprem_job_host_cidrs`(`variables.tf`): 온프렘 작업 Host `/32` 목록.
+  Data RDS SG 규칙과 #16 Data Route · VPN 경로가 같은 값을 씁니다. 기본값 `[]`이면 규칙 · 경로를 만들지 않습니다.
+- `redis_auth_token`: 기본값이 없는 write-only 입력입니다. Plan · Apply 전에 SOPS 원본에서
+  현재 셸의 `TF_VAR_redis_auth_token`으로만 공급하고, 실행용 tfvars · 명령 인자에 넣지 않습니다.
+  값이 State · Plan에 남지 않으며 `redis_auth_token_version`이 바뀔 때만 새 Token이 전송됩니다.
+- Data 출력: Data SG ID 2개(rosa 입력) · RDS / Valkey Endpoint · Port · 마스터 Secret ARN · Backup 버킷 · User 이름.
+  비밀값은 출력하지 않습니다.
+
 ### 실제 실행 전에 남은 조건
 
-- Data 코드를 같은 foundation Root/State로 통합
+- Data 코드를 같은 foundation Root/State로 통합 (infra #19 PR — 리뷰 · 병합 후 완료)
 - 필요한 Network/Data 서비스 권한의 bootstrap 변경·리뷰·적용
 - ROSA Account-wide Role/Policy 및 Worker ECR Pull 후속 준비
 - 실제 Data 서비스 지원·AZ 조건과 출력 수신 계약 대조

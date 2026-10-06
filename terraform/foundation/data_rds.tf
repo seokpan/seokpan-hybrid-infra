@@ -1,9 +1,11 @@
+# 작성자: 김상희
+# 작성 날짜: 2026/10/02 (foundation Root 전환 2026/10/06, infra #19)
 # Amazon RDS for MariaDB Multi-AZ (03 §3-D.10.3, infra #17)
 
-resource "aws_db_subnet_group" "this" {
-  name        = "${var.name_prefix}-data"
+resource "aws_db_subnet_group" "data" {
+  name        = "${local.data_name_prefix}-data"
   description = "Data Private Subnet 3 AZ"
-  subnet_ids  = var.data_subnet_ids
+  subnet_ids  = local.data_subnet_ids
 
   tags = {
     Component = "data"
@@ -12,7 +14,7 @@ resource "aws_db_subnet_group" "this" {
 
 # 파라미터 그룹 — 1차 MariaDB와 동작을 맞추는 값만 바꾼다
 resource "aws_db_parameter_group" "mariadb" {
-  name        = "${var.name_prefix}-mariadb118"
+  name        = "${local.data_name_prefix}-mariadb118"
   family      = "mariadb11.8"
   description = "Seokpan MariaDB 11.8 (1st phase compatible)"
 
@@ -57,7 +59,7 @@ resource "aws_db_parameter_group" "mariadb" {
 }
 
 resource "aws_db_instance" "mariadb" {
-  identifier     = "${var.name_prefix}-mariadb"
+  identifier     = "${local.data_name_prefix}-mariadb"
   engine         = "mariadb"
   engine_version = var.rds_engine_version
   instance_class = var.rds_instance_class
@@ -70,7 +72,7 @@ resource "aws_db_instance" "mariadb" {
   max_allocated_storage = 0 # 자동 확장 끔 (늘린 용량은 줄일 수 없음, 03 §3-D.10.3)
   storage_encrypted     = true
 
-  db_subnet_group_name   = aws_db_subnet_group.this.name
+  db_subnet_group_name   = aws_db_subnet_group.data.name
   vpc_security_group_ids = [aws_security_group.rds.id]
   publicly_accessible    = false
   port                   = 3306
@@ -98,14 +100,14 @@ resource "aws_db_instance" "mariadb" {
 
   deletion_protection       = var.rds_deletion_protection
   skip_final_snapshot       = false
-  final_snapshot_identifier = "${var.name_prefix}-mariadb-final"
+  final_snapshot_identifier = "${local.data_name_prefix}-mariadb-final"
 
   # 비용 절감: 고급 모니터링 끔
   performance_insights_enabled = false
   monitoring_interval          = 0
 
   tags = {
-    Name      = "${var.name_prefix}-mariadb"
+    Name      = "${local.data_name_prefix}-mariadb"
     Component = "data"
   }
 }

@@ -1,40 +1,19 @@
+# 작성자: 김상희
+# 작성 날짜: 2026/10/06
 # ---------------------------------------------------------------------------
-# Network에서 받는 값 (foundation Root가 Network 리소스를 연결해 넘겨줌)
+# foundation Data 전용 변수 · 공통 값 (infra #19, #23)
+# - 공통 변수(aws_region, onprem_job_host_cidrs)는 variables.tf에서 관리하며 여기서 다시 선언하지 않는다
+# - Data 전용 변수는 rds_ · redis_ · backup_ 접두사를 쓴다
+# - Network 값은 변수로 받지 않고 같은 Root의 aws_vpc.main · aws_subnet.data를 직접 참조한다
 # ---------------------------------------------------------------------------
 
-variable "name_prefix" {
-  description = "리소스 이름 접두사 — foundation 자원은 seokpan-fnd- (infra #23, bootstrap 권한 ARN 패턴과 일치해야 함)"
-  type        = string
-  default     = "seokpan-fnd"
-}
+locals {
+  # AWS 리소스 이름 접두사. bootstrap의 Data 권한 ARN 패턴(seokpan-fnd-*)과 맞아야 하므로
+  # 입력으로 바꿀 수 없게 local로 고정한다 (infra #23)
+  data_name_prefix = "seokpan-fnd"
 
-variable "vpc_id" {
-  description = "Project VPC ID (192.168.64.0/20)"
-  type        = string
-}
-
-variable "data_subnet_ids" {
-  description = "Data Private Subnet ID 3개 (AZ-A/B/C 순서, 192.168.70~72.0/24)"
-  type        = list(string)
-
-  validation {
-    condition     = length(var.data_subnet_ids) == 3
-    error_message = "Data Private Subnet은 3개(AZ-A/B/C)여야 합니다."
-  }
-}
-
-variable "onprem_job_host_cidrs" {
-  description = <<-EOT
-    RDS 3306 접근을 허용할 온프렘 Data VM 주소 목록(/32만).
-    Data VM 주소가 확정되기 전에는 빈 목록으로 두어 규칙을 만들지 않는다 (03 §3-B.9.2).
-  EOT
-  type        = list(string)
-  default     = []
-
-  validation {
-    condition     = alltrue([for c in var.onprem_job_host_cidrs : endswith(c, "/32")])
-    error_message = "온프렘 허용 주소는 /32 단위로만 넣습니다."
-  }
+  # Data Private Subnet 3개. values()는 키 이름 순서(az_a → az_b → az_c)로 돌려준다
+  data_subnet_ids = [for subnet in values(aws_subnet.data) : subnet.id]
 }
 
 # ---------------------------------------------------------------------------
@@ -42,13 +21,13 @@ variable "onprem_job_host_cidrs" {
 # ---------------------------------------------------------------------------
 
 variable "rds_engine_version" {
-  description = "1차와 같은 MariaDB 11.8.9 (infra #17). 서울 리전 생성 가능 여부는 plan에서 확인"
+  description = "1차와 같은 MariaDB 11.8.9 (infra #17). 서울 db.t4g.small · Multi-AZ · gp3 생성 가능 조회 완료"
   type        = string
   default     = "11.8.9"
 }
 
 variable "rds_instance_class" {
-  description = "03 §3-D.10.3 초기 후보"
+  description = "03 §3-D.10.3 초기 후보. 연결 수 예산은 Data 계약 v2.2 2.6절"
   type        = string
   default     = "db.t4g.small"
 }
@@ -84,19 +63,20 @@ variable "rds_apply_immediately" {
 }
 
 # ---------------------------------------------------------------------------
-# ElastiCache for Redis OSS
+# ElastiCache for Valkey (Redis 프로토콜 Runtime State, Data 계약 v2.2 2.5절)
+# 리소스 · 변수 이름의 redis는 계층 이름으로 유지한다 (엔진만 Valkey)
 # ---------------------------------------------------------------------------
 
 variable "redis_engine_version" {
-  description = "Redis OSS 엔진 버전. App Driver 호환 확인 후 고정 (03 §3-D.10.2)"
+  description = "ElastiCache Valkey 엔진 버전 (팀 결정 10-06, App 시험 기준 Redis 7.2.4와 같은 계열)"
   type        = string
-  default     = "7.1"
+  default     = "7.2"
 }
 
 variable "redis_parameter_family" {
   description = "redis_engine_version과 맞는 파라미터 그룹 계열"
   type        = string
-  default     = "redis7"
+  default     = "valkey7"
 }
 
 variable "redis_node_type" {
@@ -110,11 +90,17 @@ variable "redis_auth_token" {
     Redis AUTH Token (16~128자, 출력 가능한 ASCII 중 @ " / 공백 제외).
     write-only 인자로만 전달되어 State·Plan에 남지 않는다.
     값은 SOPS 원본에서 현재 셸의 TF_VAR_redis_auth_token으로만 공급한다.
+    기본값이 없으므로 값 없이 Plan하면 멈춘다 → AUTH 없는 Redis가 만들어지는 것을 막음.
   EOT
   type        = string
   sensitive   = true
   ephemeral   = true
-  default     = null
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^[!#-.0-?A-~]{16,128}$", var.redis_auth_token))
+    error_message = "redis_auth_token은 16~128자, 출력 가능한 ASCII 중 @ \" / 와 공백을 뺀 문자여야 합니다."
+  }
 }
 
 variable "redis_auth_token_version" {
@@ -124,17 +110,17 @@ variable "redis_auth_token_version" {
 }
 
 # ---------------------------------------------------------------------------
-# Backup S3
+# Backup S3 · Backup IAM User
 # ---------------------------------------------------------------------------
 
 variable "backup_hourly_retention_days" {
-  description = "일반(1시간 주기) 사본 보관 일수 (03 §3-D.9.6)"
+  description = "일반 사본(hourly/ 경로, 현재 15분 주기) 보관 일수 (03 §3-D.9.6, 3-I.14). 경로 이름은 재검토 중"
   type        = number
   default     = 7
 }
 
-variable "create_backup_user" {
-  description = "Backup 전용 IAM User를 이 모듈에서 만들지 여부 (Access Key는 Terraform 밖에서 발급)"
+variable "backup_user_enabled" {
+  description = "Backup 전용 IAM User(seokpan-fnd-backup) 생성 여부 (Access Key는 Terraform 밖에서 발급)"
   type        = bool
   default     = true
 }

@@ -1,4 +1,7 @@
-# 비밀값은 출력하지 않는다.
+# 작성자: 김상희
+# 작성 날짜: 2026/10/02 (foundation Root 전환 2026/10/06, infra #19)
+# foundation Data 출력 (Data 계약 v2.2 5절)
+# 비밀값은 출력하지 않는다. Data 서브넷 ID는 Network 출력 network_subnets에 있어 따로 내보내지 않는다.
 # 아래 값은 03 §3-F.5의 "제한된 입력 파일"로 rosa·GitOps 환경 설정에 전달할 후보다.
 
 output "rds_security_group_id" {
@@ -39,5 +42,5 @@ output "backup_bucket_name" {
 }
 
 output "backup_user_name" {
-  value = var.create_backup_user ? aws_iam_user.backup[0].name : null
+  value = var.backup_user_enabled ? aws_iam_user.backup[0].name : null
 }
