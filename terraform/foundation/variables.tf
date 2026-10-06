@@ -12,7 +12,7 @@ variable "aws_region" {
 #   - Data: RDS SG 규칙 rds_from_onprem (data_security_groups.tf)
 #   - Network/Hybrid(#16 후속): AWS Data Route · VPN 경로
 # 목록이 비어 있으면 관련 SG 규칙 · Route를 만들지 않는다.
-# 실제 주소(Data VM 192.168.52.50 후보)는 VMware 현황 · 팀 IP 할당 확인 전까지 넣지 않는다.
+# 실제 주소(Data VM 192.168.52.50/32, #19 확정)는 기본값에 넣지 않고 Git 밖 실행용 입력 파일로만 공급한다.
 # ---------------------------------------------------------------------------
 variable "onprem_job_host_cidrs" {
   description = "On-Prem job host addresses (/32 only) allowed to reach AWS Data over the VPN. Empty list creates no rule or route."
