@@ -571,6 +571,8 @@ data "aws_iam_policy_document" "tf_foundation_data" {
 # ---------------------------------------------------------------------------
 # Backup IAM User(seokpan-fnd-backup) Permissions Boundary (03 §3-D.9.2)
 # - Backup User의 identity-based 권한이 가질 수 있는 최대 범위를 백업 버킷 업로드·다운로드·목록으로 고정
+# - 삭제 금지·HTTPS 강제는 Allow 조건이 아니라 explicit Deny로 보장 (resource-based Allow가 있어도 Deny가 우선)
+#   Backup User에만 적용되며 다른 주체의 HTTP 요청은 막지 않음
 # - 삭제·버킷 관리 없음 (정리는 Lifecycle 규칙이 담당). Prefix 세부 제한은 foundation의 User inline policy
 # - bootstrap이 소유: foundation Role은 이 Policy를 수정/삭제할 수 없음
 # - apply 순서: bootstrap Role의 ManageCiBoundaryPolicy 권한(tf_bootstrap) 적용 후 생성
@@ -606,6 +608,20 @@ data "aws_iam_policy_document" "backup_boundary" {
     effect    = "Deny"
     actions   = ["s3:DeleteObject*"]
     resources = ["${local.backup_bucket_arn}/*"]
+  }
+
+  # HTTP(비암호화) 요청 차단: resource-based Allow가 있어도 explicit Deny가 이김
+  statement {
+    sid       = "DenyBackupInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [local.backup_bucket_arn, "${local.backup_bucket_arn}/*"]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
   }
 }
 
