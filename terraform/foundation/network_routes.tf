@@ -29,19 +29,25 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# 작성자: 이유빈
+# 작성일: 2026-10-06
+# 작성 내용: NAT/EIP를 Cost Window에서만 생성하고 비용 추적용 태그를 추가 (#23)
+# ---------------------------------------------------------------------------
 resource "aws_eip" "nat" {
-  for_each = var.network_az_ids
+  for_each = var.enable_nat_gateways ? var.network_az_ids : {}
 
   domain = "vpc"
 
   tags = {
     Name      = "seokpan-fnd-nat-${each.key}"
     Component = "network"
+    AZ        = each.value
+    Lifecycle = "re-creatable"
   }
 }
 
 resource "aws_nat_gateway" "main" {
-  for_each = var.network_az_ids
+  for_each = var.enable_nat_gateways ? var.network_az_ids : {}
 
   allocation_id     = aws_eip.nat[each.key].id
   subnet_id         = aws_subnet.public[each.key].id
@@ -52,6 +58,8 @@ resource "aws_nat_gateway" "main" {
   tags = {
     Name      = "seokpan-fnd-nat-${each.key}"
     Component = "network"
+    AZ        = each.value
+    Lifecycle = "re-creatable"
   }
 }
 
@@ -67,7 +75,7 @@ resource "aws_route_table" "rosa" {
 }
 
 resource "aws_route" "rosa_internet" {
-  for_each = var.network_az_ids
+  for_each = var.enable_nat_gateways ? var.network_az_ids : {}
 
   route_table_id         = aws_route_table.rosa[each.key].id
   destination_cidr_block = "0.0.0.0/0"

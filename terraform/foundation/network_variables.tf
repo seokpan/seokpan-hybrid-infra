@@ -16,3 +16,13 @@ variable "network_az_ids" {
     error_message = "Use az_a, az_b and az_c with three distinct AZ IDs."
   }
 }
+
+# 작성자: 이유빈
+# 작성일: 2026-10-06
+# 작성 내용: Cost Window에 맞춘 NAT Gateway 생성·삭제 제어 변수 추가 (#23)
+# ---------------------------------------------------------------------------
+variable "enable_nat_gateways" {
+  description = "Create NAT Gateways, NAT EIPs, and ROSA default Internet routes only during an approved cost window."
+  type        = bool
+  default     = false
+}
