@@ -165,7 +165,7 @@ resource "aws_iam_role_policy" "tf_backend" {
 # - ECR: 이름 접두사 seokpan-fnd-* Repository만 관리 (Lifecycle 관리, Repository Policy는 조회만)
 # - IAM User: seokpan-fnd-ci 한 개만 관리, Permissions Boundary(seokpan-fnd-ci-boundary) 지정 필수
 # - 의도적으로 제외한 Action (Terraform이 CI 자격증명을 만들지 않도록 함):
-#     iam:CreateAccessKey, iam:CreateLoginProfile, iam:AttachUserPolicy, iam:PassRole
+#     iam:CreateAccessKey, iam:CreateLoginProfile, iam:AttachUserPolicy, iam:PassRole, s3:PutBucketPolicy, s3:DeleteBucketPolicy
 #   (CI Access Key는 Terraform 밖에서 발급하여 SOPS+age Automation-CI 번들로 보관)
 # - 실제 plan/apply 중 AccessDenied가 나는 Action만 이 블록에 추가 (기본값을 넓게 잡지 않음)
 # ---------------------------------------------------------------------------
@@ -292,8 +292,8 @@ resource "aws_iam_role_policy" "tf_foundation_registry_ci" {
 #     secretsmanager:GetSecretValue, iam:CreateAccessKey, iam:CreateLoginProfile,
 #     iam:AttachUserPolicy, iam:PassRole, rds:RestoreDBInstance*, elasticache:TestFailover
 #   (Backup Access Key는 Terraform 밖에서 발급해 SOPS+age로 보관, 복원·장애 시험은 담당자 작업)
-# - KMS: RDS·ElastiCache·Secrets Manager 모두 AWS 관리형 키 사용 → 키 정책이 계정 내 서비스 경유 사용을
-#   허용하므로 kms:* 를 추가하지 않음
+# - KMS: RDS 관리형 마스터 Secret용 kms:DescribeKey만 alias/aws/secretsmanager 키로 한정해 허용
+#   (그 외 kms:* 는 추가하지 않음, 실제 AccessDenied가 나는 Action만 보강)
 # - 실제 plan/apply 중 AccessDenied가 나는 Action만 이 블록에 추가 (기본값을 넓게 잡지 않음)
 # ---------------------------------------------------------------------------
 locals {
@@ -342,7 +342,6 @@ data "aws_iam_policy_document" "tf_foundation_data" {
       "rds:CreateDBInstance",
       "rds:ModifyDBInstance",
       "rds:DeleteDBInstance",
-      "rds:CreateDBSnapshot", # 삭제 시 final_snapshot_identifier
       "rds:AddTagsToResource",
       "rds:RemoveTagsFromResource",
       "rds:ListTagsForResource",
@@ -363,15 +362,24 @@ data "aws_iam_policy_document" "tf_foundation_data" {
   }
 
   # ③ manage_master_user_password: RDS가 호출자 권한으로 마스터 Secret을 생성
+  #    기본 aws/secretsmanager 키를 쓰더라도 호출자에게 kms:DescribeKey가 필요 (RDS 공식 요구사항)
   #    GetSecretValue는 주지 않음 → foundation Role은 마스터 비밀번호를 읽을 수 없음
   statement {
-    sid = "CreateRdsManagedMasterSecret"
-    actions = [
-      "secretsmanager:CreateSecret",
-      "secretsmanager:RotateSecret",
-      "secretsmanager:TagResource",
-    ]
+    sid       = "CreateRdsManagedMasterSecret"
+    actions   = ["secretsmanager:CreateSecret", "secretsmanager:TagResource"]
     resources = ["arn:aws:secretsmanager:ap-northeast-2:${local.account_id}:secret:rds!db-*"]
+  }
+
+  statement {
+    sid       = "DescribeDefaultSecretsManagerKey"
+    actions   = ["kms:DescribeKey"]
+    resources = ["arn:aws:kms:ap-northeast-2:${local.account_id}:key/*"]
+
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "kms:ResourceAliases"
+      values   = ["alias/aws/secretsmanager"]
+    }
   }
 
   # ElastiCache: Subnet Group · Parameter Group · Replication Group(멤버 cluster 포함)
@@ -468,6 +476,7 @@ data "aws_iam_policy_document" "tf_foundation_data" {
 
   # ⑤ Backup S3 버킷: 버킷 설정만 관리, 객체 Action 없음
   #    ListBucket은 Terraform의 HeadBucket 확인용 (객체 이름 목록은 보이나 내용은 읽을 수 없음)
+  #    버킷 정책 변경 불가, 객체 접근은 explicit Deny
   statement {
     sid = "ManageBackupBucket"
     actions = [
@@ -484,11 +493,17 @@ data "aws_iam_policy_document" "tf_foundation_data" {
       "s3:PutBucketPublicAccessBlock",
       "s3:PutBucketOwnershipControls",
       "s3:PutLifecycleConfiguration",
-      "s3:PutBucketPolicy",
-      "s3:DeleteBucketPolicy",
       "s3:PutBucketTagging",
     ]
     resources = [local.backup_bucket_arn]
+  }
+
+  # 정책 우회 방어: 같은 계정 Bucket Policy가 Allow를 주더라도 explicit Deny가 이김
+  statement {
+    sid       = "DenyBackupObjectAccess"
+    effect    = "Deny"
+    actions   = ["s3:GetObject*", "s3:PutObject*", "s3:DeleteObject*"]
+    resources = ["${local.backup_bucket_arn}/*"]
   }
 
   # ⑥ Backup IAM User: seokpan-fnd-backup 한 개만 (CI User 블록과 같은 구조)
@@ -565,12 +580,32 @@ data "aws_iam_policy_document" "backup_boundary" {
     sid       = "BackupObjectPutGet"
     actions   = ["s3:PutObject", "s3:GetObject"]
     resources = ["${local.backup_bucket_arn}/*"]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["true"]
+    }
   }
 
   statement {
     sid       = "BackupBucketList"
     actions   = ["s3:ListBucket"]
     resources = [local.backup_bucket_arn]
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["true"]
+    }
+  }
+
+  # Bucket Policy 등 resource-based Allow가 있어도 삭제는 막음 (explicit Deny가 우선)
+  statement {
+    sid       = "DenyBackupObjectDelete"
+    effect    = "Deny"
+    actions   = ["s3:DeleteObject*"]
+    resources = ["${local.backup_bucket_arn}/*"]
   }
 }
 
