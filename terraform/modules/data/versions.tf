@@ -4,10 +4,10 @@
 #   (aws_elasticache_replication_group의 auth_token_wo는 AWS provider 6.62.0부터 지원)
 
 terraform {
-    required_providers {
-        aws = {
-            source = "hashicorp/aws"
-            version = ">= 6.62.0"
-        }
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.62.0"
     }
+  }
 }

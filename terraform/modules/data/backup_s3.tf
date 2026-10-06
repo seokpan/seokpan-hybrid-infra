@@ -6,18 +6,25 @@
 #
 # 이 버킷에는 실사용자 데이터가 들어간 백업이 저장된다 (age 암호화 후 업로드).
 # 프로젝트 종료 시 직접 비우고 삭제한다 (infra #17 취급 조건).
+#
+# 버킷 정책은 두지 않는다 (PR #34).
+#   - HTTPS 강제 · 삭제 금지: Backup User Boundary의 explicit Deny
+#     (DenyBackupInsecureTransport, DenyBackupObjectDelete — bootstrap 소유)
+#   - foundation Role은 PutBucketPolicy 권한이 없고, 백업 객체 접근은 explicit Deny
 
-data "aws_caller_identity" "current" {}
+# Root 전환 후 같은 foundation State에서 다른 담당(CI는 .ci)과 이름이 겹치지 않도록 담당 이름 사용
+data "aws_caller_identity" "data" {}
 
 resource "aws_s3_bucket" "backup" {
   # 버킷 이름은 전 세계 고유해야 하므로 계정 ID를 붙임 (State 버킷과 같은 규칙)
-  bucket = "${var.name_prefix}-backup-${data.aws_caller_identity.current.account_id}"
+  bucket = "${var.name_prefix}-backup-${data.aws_caller_identity.data.account_id}"
 
   # 객체가 남아 있으면 삭제 실패 → 백업이 실수로 함께 지워지는 것을 막음
   force_destroy = false
 
+  # 공통 태그는 Provider default_tags, Data 영역은 Component만 덮어씀 (infra #23)
   tags = {
-    Component = "backup"
+    Component = "data"
   }
 }
 
@@ -99,20 +106,3 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
   depends_on = [aws_s3_bucket_versioning.backup]
 }
 
-# HTTP(비암호화) 요청 거부. 온프렘 HTTPS 경로를 막는 VPC Endpoint 전용 조건은 넣지 않는다 (03 §3-B.8.5)
-resource "aws_s3_bucket_policy" "backup" {
-  bucket = aws_s3_bucket.backup.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Sid       = "DenyInsecureTransport"
-      Effect    = "Deny"
-      Principal = "*"
-      Action    = "s3:*"
-      Resource  = [aws_s3_bucket.backup.arn, "${aws_s3_bucket.backup.arn}/*"]
-      Condition = { Bool = { "aws:SecureTransport" = "false" } }
-    }]
-  })
-
-  depends_on = [aws_s3_bucket_public_access_block.backup]
-}

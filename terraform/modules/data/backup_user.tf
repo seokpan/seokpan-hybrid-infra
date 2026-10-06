@@ -10,10 +10,13 @@ resource "aws_iam_user" "backup" {
   count = var.create_backup_user ? 1 : 0
 
   name = "${var.name_prefix}-backup"
-  path = "/automation/"
+
+  # bootstrap 소유 Boundary (PR #34). 이 값이 정확히 일치할 때만 foundation Role의 CreateUser가 허용된다.
+  # foundation Role에 iam:GetPolicy가 없어 data 소스 대신 ARN 문자열로 조합한다.
+  permissions_boundary = "arn:aws:iam::${data.aws_caller_identity.data.account_id}:policy/seokpan-fnd-backup-boundary"
 
   tags = {
-    Component = "backup"
+    Component = "data"
   }
 }
 

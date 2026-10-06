@@ -3,9 +3,9 @@
 # ---------------------------------------------------------------------------
 
 variable "name_prefix" {
-  description = "리소스 이름 접두사"
+  description = "리소스 이름 접두사 — foundation 자원은 seokpan-fnd- (infra #23, bootstrap 권한 ARN 패턴과 일치해야 함)"
   type        = string
-  default     = "seokpan"
+  default     = "seokpan-fnd"
 }
 
 variable "vpc_id" {
