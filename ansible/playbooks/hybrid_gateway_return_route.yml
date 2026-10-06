@@ -1,0 +1,134 @@
+---
+# Preparation for issue #16: manage one return route only.
+# Supply inventory and these variables from files outside Git:
+# hybrid_gateway_expected_hostname, hybrid_gateway_interface,
+# hybrid_gateway_connection, hybrid_return_host_cidr, hybrid_return_next_hop.
+# Use a dedicated hybrid_gateway inventory group and an explicit single-host limit.
+# Review with --check first. Firewall, forwarding and WireGuard are separate changes.
+- name: Prepare one gateway return route
+  hosts: hybrid_gateway
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Require a single explicitly limited gateway and all inputs
+      ansible.builtin.assert:
+        that:
+          - ansible_limit | default('') | length > 0
+          - ansible_play_hosts_all | length == 1
+          - hybrid_gateway_expected_hostname is defined
+          - hybrid_gateway_interface is defined
+          - hybrid_gateway_connection is defined
+          - hybrid_return_host_cidr is defined
+          - hybrid_return_next_hop is defined
+        fail_msg: Supply reviewed external inputs and an explicit single-host limit.
+
+    - name: Validate IPv4 host route and next hop
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - >-
+            import ipaddress, sys;
+            route = ipaddress.IPv4Network(sys.argv[1], strict=True);
+            hop = ipaddress.IPv4Address(sys.argv[2]);
+            sys.exit(0 if route.prefixlen == 32 else 1)
+          - "{{ hybrid_return_host_cidr }}"
+          - "{{ hybrid_return_next_hop }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Read gateway hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      register: hybrid_hostname
+      changed_when: false
+      check_mode: false
+
+    - name: Read active connection on the requested interface
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - -g
+          - GENERAL.CONNECTION
+          - device
+          - show
+          - "{{ hybrid_gateway_interface }}"
+      register: hybrid_active_connection
+      changed_when: false
+      check_mode: false
+
+    - name: Confirm the intended host and active connection
+      ansible.builtin.assert:
+        that:
+          - hybrid_hostname.stdout | trim == hybrid_gateway_expected_hostname
+          - hybrid_active_connection.stdout | trim == hybrid_gateway_connection
+
+    - name: Read persisted routes without changing them
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - -g
+          - ipv4.routes
+          - connection
+          - show
+          - "{{ hybrid_gateway_connection }}"
+      register: hybrid_saved_routes
+      changed_when: false
+      check_mode: false
+
+    - name: Build the requested route and compare it with stored routes
+      ansible.builtin.set_fact:
+        hybrid_route_spec: "{{ hybrid_return_host_cidr }} {{ hybrid_return_next_hop }}"
+
+    - name: Determine whether the exact route is already saved
+      ansible.builtin.set_fact:
+        hybrid_route_present: >-
+          {{ hybrid_route_spec in
+             (hybrid_saved_routes.stdout.split(',') | map('trim') | list) }}
+
+    - name: Preview the addition in check mode
+      ansible.builtin.debug:
+        msg: The requested return route would be appended; existing routes are preserved.
+      when: ansible_check_mode and not hybrid_route_present
+      changed_when: true
+
+    - name: Append only the missing route to the connection profile
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - connection
+          - modify
+          - "{{ hybrid_gateway_connection }}"
+          - +ipv4.routes
+          - "{{ hybrid_route_spec }}"
+      when: not ansible_check_mode and not hybrid_route_present
+      changed_when: true
+
+    - name: Reapply the profile without a connection down or up
+      ansible.builtin.command:
+        argv:
+          - nmcli
+          - device
+          - reapply
+          - "{{ hybrid_gateway_interface }}"
+      when: not ansible_check_mode
+      changed_when: false
+
+    - name: Verify the active route selection
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - route
+          - get
+          - "{{ hybrid_return_host_cidr.split('/')[0] }}"
+      register: hybrid_selected_route
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Confirm the intended next hop and interface
+      ansible.builtin.assert:
+        that:
+          - "('via ' ~ hybrid_return_next_hop ~ ' ') in hybrid_selected_route.stdout"
+          - "('dev ' ~ hybrid_gateway_interface ~ ' ') in hybrid_selected_route.stdout"
+      when: not ansible_check_mode
