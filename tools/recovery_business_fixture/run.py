@@ -161,7 +161,14 @@ def emit(args, started, finished, events, metrics, result, versions, cleanup, fa
     release["revisions"].update({"schema":"20260902_0002 derived fixture DDL","tool_manifest":data.sha(HERE/"run.py")})
     release["missing_inputs"]=["C_OPERATIONAL_DATA_REVIEW","A_REAL_HOST","D_APPROVED_IMAGES",
        "FE_BROWSER_WSS_PATH","REAL_RDS_S3_VPN","FULL_T18_ACCEPTANCE"]
-    release["known_limitations"] = ["Historical individual-result HTTP requires old Redis room context; outside adopted recovery Must"]
+    release["known_limitations"] = [
+        "Historical individual-result HTTP requires old Redis room context; outside adopted recovery Must (3-I.14.4)",
+        "Observed fixture tool versions: " + json.dumps(versions, sort_keys=True)
+        + "; package MariaDB is not evidence of project 11.8.9 / actual RDS version parity",
+        "Inherited Redis fixture is not acceptance of the selected Valkey 7.2 image, UID, TLS/AUTH and workload combination",
+        "Local administrative and disposable SSL service accounts do not verify the operational RDS backup_dump account or privileges",
+        "One-off scripted continuation does not implement the 15-minute operating backup schedule or prove RTO 10 minutes / persistent DB RPO 30 minutes (3-I.14.5)",
+    ]
     (args.output/"release.json").write_text(json.dumps(release,ensure_ascii=False,indent=2)+"\n")
     with (args.output/"metrics.csv").open("w",newline="") as stream:
         writer=csv.writer(stream);writer.writerow(data.METRIC_HEADER.split(","))
@@ -195,7 +202,7 @@ rto_seconds/rpo_seconds/data_reference_time_utc/incident_at_utc/business_resumed
 
 ## Functional limit and follow-up
 
-The current GET /api/v1/games/{{old-id}}/result first requires Redis participation, current Room and current/last Game. A fresh empty Redis does not provide that old Room association, although completed DB rows survive. Thus SQL/hash/ranking checks do not prove historical individual-result access for the specified client. The adopted recovery scope (Docs PR #30; design/03_DETAILED_DESIGN.md, section 3-I.14.5) distinguishes historical records/relations verified by operator SQL, restored member ranking/rating visible to a fresh client, and new-game completion/result visible in the new Runtime. Historical individual-result HTTP is outside the adopted recovery Must; this known limitation does not reopen design approval or establish full T18 acceptance. This fixture does not add a History feature, invent old Redis state, or present SQL as historical-result client access.
+The current GET /api/v1/games/{{old-id}}/result first requires Redis participation, current Room and current/last Game. A fresh empty Redis does not provide that old Room association, although completed DB rows survive. Thus SQL/hash/ranking checks do not prove historical individual-result access for the specified client. The adopted recovery scope (Docs PR #30; design/03_DETAILED_DESIGN.md, sections 3-I.14.4 (functional boundary) and 3-I.14.5 (targets)) distinguishes historical records/relations verified by operator SQL, restored member ranking/rating visible to a fresh client, and new-game completion/result visible in the new Runtime. Historical individual-result HTTP is outside the adopted recovery Must; this known limitation does not reopen design approval or establish full T18 acceptance. This fixture does not add a History feature, invent old Redis state, or present SQL as historical-result client access.
 
 C reviews dataset/snapshot/accounts/TLS/restore conclusions; B reviews historical read and transient-state policy; A confirms actual isolated Host/storage; D reviews Image and new Run/index. Current architecture choice may use these partial measurements, but retained service targets must be supported by an adequately scoped combined rehearsal, user impact/cost/schedule decision and adopted design artifacts.
 """
