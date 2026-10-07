@@ -69,6 +69,15 @@ class IdentityTests(unittest.TestCase):
             self.assertIn('FULL_T18_ACCEPTANCE',release['missing_inputs'])
             self.assertTrue(release['known_limitations'])
 
+    def test_business_summary_uses_adopted_scope_without_reopening_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args=self.args(Path(directory)/'result');self.emit(BUSINESS,args)
+            summary=(args.output/'summary.md').read_text()
+            self.assertIn('outside the adopted recovery Must',summary)
+            self.assertNotIn('B and the design review must explicitly confirm',summary)
+            self.assertIn('full T18 Acceptance: NOT RUN',summary)
+            self.assertEqual(json.loads((args.output/'release.json').read_text())['recovery']['rto_seconds'],None)
+
     def test_invalid_operator_creates_no_output(self):
         with tempfile.TemporaryDirectory() as directory:
             for i,module in enumerate((DATA,BUSINESS)):
