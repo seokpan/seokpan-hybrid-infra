@@ -38,7 +38,7 @@ are used.
 
 ```bash
 python3 tools/recovery_fixture/run.py \
-  --run-id fixture-20261005-01 \
+  --operator ACTUAL_EXECUTOR_ID --run-id fixture-20261005-01 \
   --output evidence/T18/fixture-20261005-01
 ```
 
@@ -79,3 +79,7 @@ Use the partial evidence to identify current restore-path burden and bottlenecks
 new DR goals/backup interval/structure are finalized, compare the relevant full business
 timeline, data-loss/client scope, practical team schedule/cost and actual backup path;
 record the adopted choice and reflect the affected design/code/diagrams consistently.
+
+## 실행 주체와 검증 범위
+
+새 Run은 `--operator ACTUAL_EXECUTOR_ID`로 실제 수행 주체를 명시한다. 이 값은 기록용 표기이며 인증이나 리뷰·인계 수락 증거가 아니다. 기존 Run을 덮어쓰지 않고 새 Run ID/출력 경로를 사용한다. 고정된 과거 App/Redis 조합을 재현하는 부분 fixture이며 Valkey7.2·전체 T18 또는 DR10분/영속 DB RPO30분·15분 Backup 달성을 검증한 것으로 승계하지 않는다. 기존 Evidence는 변경하지 않는다.

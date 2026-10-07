@@ -138,20 +138,21 @@ def check_tools(args):
     return python,raw.decode().strip()
 
 def emit(args, started, finished, events, metrics, result, versions, cleanup, failure):
+    args.operator = data.operator_id(args.operator)
     args.output.mkdir(parents=True,exist_ok=False)
     release = json.loads((DATA_HERE/"release_template.json").read_text())
     release.update({
         "run_id":args.run_id,"test_id":"T18","environment":"owned ephemeral loopback TCP TLS processes",
         "scope":"partial synthetic Backup/Restore + new Redis TLS/AUTH + production Backend HTTPS login/ranking/new-game",
         "assigned_execution_owner":"kshi1313-gif C/Data; tjung03 B/App; cyj200115-prog D/evidence",
-        "actual_operator":"Codex, user-authorized contribution for tjung03","reviewer":None,
+        "actual_operator":args.operator,"reviewer":None,
         "collaborators":[],
         "observed_principal_ref":"fixture-owned root plus disposable purpose-scoped SSL-required service accounts",
         "account_management_owner_ref":"fixture-owned disposable accounts; operational C ownership unchanged",
         "started_at_utc":data.stamp(started),"finished_at_utc":data.stamp(finished),
         "started_at_kst":data.kst(started),"finished_at_kst":data.kst(finished),
         "conditions_ref":"summary.md#scope","raw_artifact_ref":"summary.md#results",
-        "custodian_ref":"tjung03; source and aggregate evidence only",
+        "custodian_ref":"local output; transfer/custodian acceptance not recorded",
         "access_policy_ref":"synthetic checks/hashes/timing only; no private SQL/backup/key/cookies",
         "retention_ref":"public evidence retained; disposable runtime material cleanup status: "+cleanup,
         "availability_integrity":cleanup,
@@ -159,7 +160,8 @@ def emit(args, started, finished, events, metrics, result, versions, cleanup, fa
     release["source"].update({"app_sha":APP_SHA,"infra_sha":args.infra_sha})
     release["revisions"].update({"schema":"20260902_0002 derived fixture DDL","tool_manifest":data.sha(HERE/"run.py")})
     release["missing_inputs"]=["C_OPERATIONAL_DATA_REVIEW","A_REAL_HOST","D_APPROVED_IMAGES",
-       "FE_BROWSER_WSS_PATH","REAL_RDS_S3_VPN","HISTORICAL_RESULT_HTTP","FULL_T18_ACCEPTANCE"]
+       "FE_BROWSER_WSS_PATH","REAL_RDS_S3_VPN","FULL_T18_ACCEPTANCE"]
+    release["known_limitations"] = ["Historical individual-result HTTP requires old Redis room context; outside adopted recovery Must"]
     (args.output/"release.json").write_text(json.dumps(release,ensure_ascii=False,indent=2)+"\n")
     with (args.output/"metrics.csv").open("w",newline="") as stream:
         writer=csv.writer(stream);writer.writerow(data.METRIC_HEADER.split(","))
@@ -173,7 +175,7 @@ def emit(args, started, finished, events, metrics, result, versions, cleanup, fa
 ## Scope
 
 - Partial T18 only. App source {APP_SHA}; source verified without modifying App. No approved Image/Release, OCP/Pod, Harbor/PVC, actual RDS/S3/VPN, operator detection/decision, Host guidance, browser/FE/WSS or service RTO/RPO achievement.
-- Data owner C/김상희, App B/정태훈, Image/evidence D/최유준, real Host A/이유빈 remain responsible. Actual execution is Codex contribution authorized by tjung03. None of those teammates performed/reviewed this Run unless their separate review is recorded.
+- Data owner C/김상희, App B/정태훈, Image/evidence D/최유준, real Host A/이유빈 remain responsible. Actual operator is `{args.operator}`. Execution label does not imply reviewer, handoff or custodian acceptance.
 - All source/restore datadirs and Redis are new temporary owned processes, loopback only. Redis plaintext port is 0; TLS/AUTH is required. Python verifies explicit CA and localhost hostname to DB/Redis/HTTPS Backend. Fixture root access is local administrative plumbing, not proof of production account/host isolation.
 - Dedicated synthetic identity_svc/game_svc accounts require SSL; Passwords, age identities, SQL dumps, ciphertext, sessions and process logs remain private temporary material intended for removal. Actual cleanup status is recorded below; removal is not claimed when cleanup is incomplete. Operational C credentials, storage policy, supported tool/version and Host capacity are unverified.
 - A quiescent fictional dataset uses the approved eight-table DDL. Its invented draws/moves are row-comparison fixtures, not proof of semantically valid historical games. Existing completed row counts/hashes and rating values are checked without rebuilding old Redis rooms.
@@ -193,7 +195,7 @@ rto_seconds/rpo_seconds/data_reference_time_utc/incident_at_utc/business_resumed
 
 ## Functional limit and follow-up
 
-The current GET /api/v1/games/{{old-id}}/result first requires Redis participation, current Room and current/last Game. A fresh empty Redis does not provide that old Room association, although completed DB rows survive. Thus SQL/hash/ranking checks do not prove historical individual-result access for the specified client. The minimum design clarification distinguishes preserved historical records/relations checked by operator SQL, restored member ranking/rating visible to a fresh client, and new-game completion/result visible in the new Runtime. B and the design review must explicitly confirm this scope. This fixture does not add a History feature, invent old Redis state, or present SQL as historical-result client access.
+The current GET /api/v1/games/{{old-id}}/result first requires Redis participation, current Room and current/last Game. A fresh empty Redis does not provide that old Room association, although completed DB rows survive. Thus SQL/hash/ranking checks do not prove historical individual-result access for the specified client. The adopted recovery scope (Docs PR #30; design/03_DETAILED_DESIGN.md, section 3-I.14.5) distinguishes historical records/relations verified by operator SQL, restored member ranking/rating visible to a fresh client, and new-game completion/result visible in the new Runtime. Historical individual-result HTTP is outside the adopted recovery Must; this known limitation does not reopen design approval or establish full T18 acceptance. This fixture does not add a History feature, invent old Redis state, or present SQL as historical-result client access.
 
 C reviews dataset/snapshot/accounts/TLS/restore conclusions; B reviews historical read and transient-state policy; A confirms actual isolated Host/storage; D reviews Image and new Run/index. Current architecture choice may use these partial measurements, but retained service targets must be supported by an adequately scoped combined rehearsal, user impact/cost/schedule decision and adopted design artifacts.
 """
@@ -202,12 +204,13 @@ C reviews dataset/snapshot/accounts/TLS/restore conclusions; B reviews historica
     (args.output/"checksums.txt").write_text("".join(f"{data.sha(args.output/name)}  {name}\n" for name in names))
 
 def run(args):
+    args.operator = data.operator_id(args.operator)
     if args.output.exists(): raise RuntimeError("Refusing to overwrite existing Run")
     python,_ = check_tools(args)
     started=data.now();events=[];metrics={};result={};versions={};failure=None;temporary_name=None
     def event(label,outcome="OK"):
         timestamp=data.now()
-        events.append([label,data.stamp(timestamp),data.kst(timestamp),"Codex for tjung03",label,outcome,"summary.md#results"])
+        events.append([label,data.stamp(timestamp),data.kst(timestamp),args.operator,label,outcome,"summary.md#results"])
     app_process=redis_process=None
     app_log=redis_log=app_listener=None
     cleanup_errors=[]
@@ -360,6 +363,7 @@ def main():
     parser.add_argument("--app-checkout",type=Path,required=True)
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--run-id",required=True)
+    parser.add_argument("--operator",type=data.operator_id,required=True)
     parser.add_argument("--infra-sha",required=True)
     args=parser.parse_args()
     args.app_checkout=args.app_checkout.resolve();args.output=args.output.resolve()

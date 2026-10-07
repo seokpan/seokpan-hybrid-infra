@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import shutil
 import signal
 import socket
@@ -192,7 +193,15 @@ def canonical(db: Database) -> dict:
             "row_counts_by_table": counts, "revision": revision}
 
 
+
+def operator_id(value):
+    """Validate an explicit execution label; it is not identity authentication."""
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.@-]{0,79}', value):
+        raise argparse.ArgumentTypeError('operator must be an explicit 1-80 character execution label')
+    return value
+
 def emit_evidence(output: Path, args, started, finished, samples, events, versions, cleanup, failure=None):
+    args.operator = operator_id(args.operator)
     # Exclusive output creation prevents replacing an earlier Run.
     output.mkdir(parents=True, exist_ok=False)
     release = json.loads((HERE / "release_template.json").read_text())
@@ -200,7 +209,7 @@ def emit_evidence(output: Path, args, started, finished, samples, events, versio
         "run_id": args.run_id, "test_id": "T18", "environment": f"ephemeral {args.transport} local Ubuntu fixture",
         "scope": "partial T17/T18: synthetic MariaDB Dump/gzip/age/local-copy/decrypt/isolated import/data verification only",
         "assigned_execution_owner": "kshi1313-gif (C/Data)",
-        "actual_operator": "Codex, user-authorized contribution for tjung03",
+        "actual_operator": args.operator,
         "reviewer": None, "collaborators": [],
         "observed_principal_ref": "temporary isolated fixture root; no project/cloud account",
         "account_management_owner_ref": "temporary harness only; C operational account ownership unchanged",
@@ -208,7 +217,7 @@ def emit_evidence(output: Path, args, started, finished, samples, events, versio
         "started_at_kst": kst(started), "finished_at_kst": kst(finished),
         "conditions_ref": "summary.md#identity-and-scope",
         "raw_artifact_ref": "summary.md#evidence-and-recovery",
-        "custodian_ref": "tjung03; public summaries in new Docs Run",
+        "custodian_ref": "local output; transfer/custodian acceptance not recorded",
         "access_policy_ref": "synthetic aggregate/hash outputs only; temporary SQL/backup/key never published",
         "retention_ref": "public source/evidence retained; disposable material cleanup result in summary",
         "availability_integrity": "five-file Run/four payload checksums; " + cleanup,
@@ -240,7 +249,7 @@ def emit_evidence(output: Path, args, started, finished, samples, events, versio
 
 - Test T18, partial T17/T18 Data path; full Acceptance NOT RUN.
 - App reference `{APP_SHA}`; fixture DDL is derived from the two approved App revisions, not the operational Migration CLI. No actual project Backup/schema/data was supplied or changed.
-- Assigned Data owner 김상희/kshi1313-gif; actual contribution by Codex under tjung03 authorization. C did not execute or review this Run; C Data review pending. A Host and D Image/evidence responsibilities remain unchanged; D index review pending.
+- Assigned Data owner 김상희/kshi1313-gif; actual operator `{args.operator}`. Execution label does not imply reviewer or handoff acceptance; C Data review is recorded separately. A Host and D Image/evidence responsibilities remain unchanged; D index review pending.
 - All DBs are newly initialized temporary directories, using `{args.transport}` transport. Unix mode uses `--skip-networking`; TCP mode binds only 127.0.0.1 on separately allocated ephemeral ports and disables the Unix socket. Local disposable fixture root has no password; this is not production TLS/role/account proof. No Docker/registry, project service, AWS/ROSA, S3/VPN, paid environment or Cloud identity used.
 - Planned three repeated small samples (52 completed synthetic games/655 moves each), one larger sample (1000 games/13000 moves). Only those two counts match or scale the published precheck; other row composition/bytes are invented, not actual C data. The larger data is a sensitivity case, not forecast production load. No one sample is selected as an operational bound.
 - Synthetic identities/rows are invented. The password field is a non-login placeholder: no authentication or App business recovery was tested. The quiescent fixture does not measure concurrent-write consistency or DB load under production traffic.
@@ -275,6 +284,7 @@ def emit_evidence(output: Path, args, started, finished, samples, events, versio
 
 
 def run(args):
+    args.operator = operator_id(args.operator)
     for name in ("mariadbd", "mariadb-install-db", "mariadb", "mariadb-dump", "age", "age-keygen"):
         if shutil.which(name) is None:
             raise RuntimeError(f"required local tool absent: {name}")
@@ -284,7 +294,7 @@ def run(args):
     versions = {"python": os.sys.version.split()[0]}
 
     def event(sample_id, label, result="OK"):
-        t = now(); events.append([f"{sample_id}:{label}", stamp(t), kst(t), "Codex for tjung03", label, result, "summary.md#evidence-and-recovery"])
+        t = now(); events.append([f"{sample_id}:{label}", stamp(t), kst(t), args.operator, label, result, "summary.md#evidence-and-recovery"])
         return t
 
     temporary_context = tempfile.TemporaryDirectory(prefix="seokpan-dr-fixture-")
@@ -409,6 +419,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output",type=Path,required=True)
     p.add_argument("--run-id",required=True)
+    p.add_argument("--operator",type=operator_id,required=True)
     p.add_argument("--infra-sha",default=None)
     p.add_argument("--transport", choices=("unix", "tcp"), default="unix")
     p.add_argument("--print-evidence",action="store_true")

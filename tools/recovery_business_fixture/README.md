@@ -12,7 +12,7 @@
 ```bash
 python tools/recovery_business_fixture/run.py \
   --app-checkout /path/to/verified-hybrid-app \
-  --run-id T18-local-backend-business-NEW-ID \
+  --operator ACTUAL_EXECUTOR_ID --run-id T18-local-backend-business-NEW-ID \
   --infra-sha FULL_REVIEWED_INFRA_COMMIT \
   --output /path/to/new-evidence-run
 ```
@@ -32,3 +32,7 @@ DB/Redis/HTTPS 인증서는 별도의 일회성 가상 CA/localhost SAN을 사�
 스크립트가 측정한 `scripted_continuation_seconds`는 준비된 사본 해독 이후의 처리 시간이다. 장애 탐지/사람 판단/대기·실제 Host/Harbor/Image/PVC/OCP/사용자 안내·FE/브라우저/WSS·RDS/S3/VPN은 포함하지 않는다. 따라서 서비스 RTO/RPO, 승인 Release, 최종 T18 Acceptance로 기록하지 않으며 관련 필드는 null/NOT RUN이다. MariaDB/Redis Package 버전 차이·동일 Host 파일 경로·실제 Cloud 부하 부재를 기록한다.
 
 C 김상희의 Data 책임, A 이유빈의 실제 Host/Storage, B 정태훈의 App/접속, D 최유준의 Image/증거 책임을 유지한다. 실제 실행자가 Codex일 때는 tjung03의 허용 범위에서 수행한 기여로 남기며 팀원의 실행·검토를 대신했다고 적지 않는다. C/B/A/D 검토와 실제 환경 후속 증거는 원래 Issue/PR 및 새 Run에서 별도로 연결한다.
+
+## 실행 주체와 검증 범위
+
+새 Run은 `--operator ACTUAL_EXECUTOR_ID`로 실제 수행 주체를 명시한다. 이 값은 기록용 표기이며 인증이나 리뷰·인계 수락 증거가 아니다. 기존 Run을 덮어쓰지 않고 새 Run ID/출력 경로를 사용한다. 고정된 과거 App/Redis 조합을 재현하는 부분 fixture이며 Valkey7.2·전체 T18 또는 DR10분/영속 DB RPO30분·15분 Backup 달성을 검증한 것으로 승계하지 않는다. 기존 Evidence는 변경하지 않는다.
