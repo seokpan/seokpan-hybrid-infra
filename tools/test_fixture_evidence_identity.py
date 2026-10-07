@@ -108,4 +108,24 @@ class IdentityTests(unittest.TestCase):
         for module in (DATA,BUSINESS):
             with self.assertRaises(argparse.ArgumentTypeError): module.run(SimpleNamespace(operator=''))
 
+    def test_business_metadata_preserves_operational_gaps_and_functional_reference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args=self.args(Path(directory)/'result')
+            now=dt.datetime(2026,1,1,tzinfo=dt.timezone.utc)
+            BUSINESS.emit(args,now,now,[],{},{},{'mariadbd':'SYNTHETIC-VERSION-ONLY'},'unit-only','UnitOnly')
+            release=json.loads((args.output/'release.json').read_text())
+            limitations='\n'.join(release['known_limitations'])
+            for marker in ('3-I.14.4','3-I.14.5','SYNTHETIC-VERSION-ONLY','11.8.9',
+                           'Valkey 7.2','backup_dump','15-minute','RTO 10','RPO 30'):
+                self.assertIn(marker,limitations)
+            self.assertIn('C_OPERATIONAL_DATA_REVIEW',release['missing_inputs'])
+            self.assertIn('FULL_T18_ACCEPTANCE',release['missing_inputs'])
+            self.assertNotIn('HISTORICAL_RESULT_HTTP',release['missing_inputs'])
+            self.assertIsNone(release['recovery']['rto_seconds'])
+            self.assertIsNone(release['recovery']['rpo_seconds'])
+            self.assertEqual(release['verification']['acceptance'],'NOT RUN')
+            summary=(args.output/'summary.md').read_text()
+            self.assertIn('3-I.14.4 (functional boundary)',summary)
+            self.assertIn('3-I.14.5 (targets)',summary)
+
 if __name__=='__main__': unittest.main()

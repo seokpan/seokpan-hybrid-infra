@@ -27,7 +27,7 @@ DB/Redis/HTTPS 인증서는 별도의 일회성 가상 CA/localhost SAN을 사�
 
 ## 판정 경계와 담당 기록
 
-기존 완료 DB 기록 보존·SQL 비교와 새 Runtime의 로그인/전적/신규 게임·새 완료 결과 확인을 구분한다. **기존 개별 게임 결과의 사용자 조회**는 새 Redis에 예전 Room/Participation이 없어 현재 App API에서 제공되지 않는다. 이를 통과시키려고 Redis 상태를 재구성하지 않는다. 설계에서 완료 기록 조회 범위를 운영자 SQL과 사용자 전적·Rating으로 명시할지, 별도의 영속 결과 조회 기능이 필요한지는 B와 설계 검토에서 판단한다.
+기존 완료 DB 기록 보존·SQL 비교와 새 Runtime의 로그인/전적/신규 게임·새 완료 결과 확인을 구분한다. **기존 개별 게임 결과의 사용자 조회**는 새 Redis에 예전 Room/Participation이 없어 현재 App API에서 제공되지 않는다. 이를 통과시키려고 Redis 상태를 재구성하지 않는다. 승인된 Docs PR #30·03 §3-I.14.4(기능 경계)·§3-I.14.5(목표)에 따라 과거 영속 기록은 SQL/관계로, 신규 로그인·랭킹/누적 기록·새 게임/현재 결과는 클라이언트로 구분한다. 과거 개별 결과 HTTP/UI 신설은 채택된 복구 Must가 아니며 설계 승인을 다시 기다리지 않는다. 이 기능 경계 확정이 전체 T18 수락은 아니다.
 
 스크립트가 측정한 `scripted_continuation_seconds`는 준비된 사본 해독 이후의 처리 시간이다. 장애 탐지/사람 판단/대기·실제 Host/Harbor/Image/PVC/OCP/사용자 안내·FE/브라우저/WSS·RDS/S3/VPN은 포함하지 않는다. 따라서 서비스 RTO/RPO, 승인 Release, 최종 T18 Acceptance로 기록하지 않으며 관련 필드는 null/NOT RUN이다. MariaDB/Redis Package 버전 차이·동일 Host 파일 경로·실제 Cloud 부하 부재를 기록한다.
 
@@ -35,4 +35,4 @@ C 김상희의 Data 책임, A 이유빈의 실제 Host/Storage, B 정태훈의 A
 
 ## 실행 주체와 검증 범위
 
-새 Run은 `--operator ACTUAL_EXECUTOR_ID`로 실제 수행 주체를 명시한다. 이 값은 기록용 표기이며 인증이나 리뷰·인계 수락 증거가 아니다. 기존 Run을 덮어쓰지 않고 새 Run ID/출력 경로를 사용한다. 고정된 과거 App/Redis 조합을 재현하는 부분 fixture이며 Valkey7.2·전체 T18 또는 DR10분/영속 DB RPO30분·15분 Backup 달성을 검증한 것으로 승계하지 않는다. 기존 Evidence는 변경하지 않는다.
+새 Run은 `--operator ACTUAL_EXECUTOR_ID`로 실제 수행 주체를 명시한다. 이 값은 기록용 표기이며 인증이나 리뷰·인계 수락 증거가 아니다. 기존 Run을 덮어쓰지 않고 새 Run ID/출력 경로를 사용한다. 고정된 과거 App/Redis 조합을 재현하는 부분 fixture이며 Valkey7.2·전체 T18 또는 DR10분/영속 DB RPO30분·15분 Backup 달성을 검증한 것으로 승계하지 않는다. 기존 Evidence는 변경하지 않는다. 새 `release.json`의 `known_limitations`에는 실제 fixture 도구 버전과 운영 버전/Valkey 조합 차이, 로컬 시험 계정과 RDS backup_dump 권한 차이, 일회 실행과 15분 운영 백업의 차이를 기록한다. 기존의 C 합성 자료 검토 수신과 실제 운영 Data 검토는 별개이므로 `C_OPERATIONAL_DATA_REVIEW`는 유지한다.
