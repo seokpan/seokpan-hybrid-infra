@@ -15,7 +15,9 @@
 | Worker→Data SG Binding | rosa/B. Data SG 본체·기반 Rule은 foundation. inline Rule 혼용 금지 |
 | Namespace·GitOps/App/IDP·Secret | 승인된 GitOps/최소 Bootstrap/별도 공급. rosa에 생성하지 않음 |
 
-Root는 `bootstrap/foundation/rosa` 3개다. State Key는 **`phase2/rosa/terraform.tfstate`**, 서울 Region·암호화 요청·S3 native Lock을 사용한다. 기존 State 이전을 반복하지 않는다. Backend Bucket은 Git 밖 보호된 `-backend-config`로 공급한다. Backend/Provider가 같은 지정 목적 Role을 사용하는지는 실행 전에 각각 확인한다.
+Root는 `bootstrap/foundation/rosa` 3개다. State Key는 **`phase2/rosa/terraform.tfstate`**, 서울 Region·암호화 요청·S3 native Lock을 사용한다. Workspace 목록 조회 접두사는 **`phase2/rosa/env`**로 명시해 bootstrap의 자기 Root `phase2/rosa/*` List 범위와 맞춘다. `default` Workspace의 State Key는 그대로이며 새 State나 이전을 만들지 않는다. 실제 Backend 초기화 전에 본인 clone의 선택 Workspace·기존 Backend 설정과 같은 목적 Role의 접근을 확인한다.
+
+S3 기본 접두사는 `env:`다. Core 1.16.4는 이 기본 접두사에서 목록 조회가 AccessDenied일 때 경고 로그와 함께 `default` Workspace만 반환하므로, 접두사 누락만으로 실제 `init` 실패가 관측됐거나 반드시 실패한다고 주장하지 않는다. 이번 명시는 허용된 목록 조회 범위의 정합 수정이며 실제 S3 접근 성공 증거가 아니다. 기존 State 이전을 반복하지 않는다. Backend Bucket은 Git 밖 보호된 `-backend-config`로 공급한다. Backend/Provider가 같은 지정 목적 Role을 사용하는지는 실행 전에 각각 확인한다.
 
 ## 고정 조합과 초기 Worker
 
