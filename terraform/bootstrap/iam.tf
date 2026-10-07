@@ -325,13 +325,16 @@ resource "aws_iam_role_policy" "tf_foundation_registry_ci" {
 # 작성 날짜: 2026/10/06
 # ---------------------------------------------------------------------------
 # foundation Role 추가 권한: Data 계층 (03 §3-C.13, §3-D.9.2, §3-D.10, infra #19)
-# - 대상: RDS for MariaDB · ElastiCache Redis OSS · Data SG(RDS/Redis) · Backup S3 버킷 · Backup IAM User
+# - 대상: RDS for MariaDB · ElastiCache for Valkey 7.2 · Data SG(RDS/Redis) · Backup S3 버킷 · Backup IAM User
+#   (2026/10/07 김상희: 엔진을 Redis OSS에서 Valkey 7.2로 변경 — ElastiCache API · ARN은 같아 권한 변경 없음)
 # - 이름 접두사 seokpan-fnd-* 자원만 관리 (infra #23)
 # - 의도적으로 제외한 Action (Terraform이 데이터·자격증명에 접근하지 않도록 함):
 #     백업 객체 읽기/쓰기/삭제(s3:GetObject, s3:PutObject, s3:DeleteObject),
 #     secretsmanager:GetSecretValue, iam:CreateAccessKey, iam:CreateLoginProfile,
-#     iam:AttachUserPolicy, iam:PassRole, rds:RestoreDBInstance*, elasticache:TestFailover
+#     iam:AttachUserPolicy, iam:PassRole, rds:RestoreDBInstance*, elasticache:TestFailover,
+#     iam:CreateServiceLinkedRole
 #   (Backup Access Key는 Terraform 밖에서 발급해 SOPS+age로 보관, 복원·장애 시험은 담당자 작업)
+#   (RDS · ElastiCache 서비스 연결 Role은 2026/10/06 계정에 미리 생성 — infra PR #37 코멘트)
 # - KMS: RDS 관리형 마스터 Secret용 kms:DescribeKey만 alias/aws/secretsmanager 키로 한정해 허용
 #   (그 외 kms:* 는 추가하지 않음, 실제 AccessDenied가 나는 Action만 보강)
 # - 실제 plan/apply 중 AccessDenied가 나는 Action만 이 블록에 추가 (기본값을 넓게 잡지 않음)
@@ -584,25 +587,6 @@ data "aws_iam_policy_document" "tf_foundation_data" {
     effect    = "Deny"
     actions   = ["iam:DeleteUserPermissionsBoundary"]
     resources = ["arn:aws:iam::${local.account_id}:user/seokpan-fnd-backup"]
-  }
-
-  # ⑦ RDS·ElastiCache 첫 생성 시 서비스 연결 Role
-  #    2026/10/06 확인: 계정에 AWSServiceRoleForRDS · AWSServiceRoleForElastiCache 모두 없음
-  #    → 첫 DB Instance / Replication Group 생성 때 AWS가 자동 생성하며, 이때 호출자에게 이 권한이 필요
-  #    SLR은 이후 destroy해도 남으므로, 두 Role이 생긴 뒤에는 이 statement를 제거해도 됨
-  statement {
-    sid     = "CreateDataServiceLinkedRoles"
-    actions = ["iam:CreateServiceLinkedRole"]
-    resources = [
-      "arn:aws:iam::${local.account_id}:role/aws-service-role/rds.amazonaws.com/AWSServiceRoleForRDS",
-      "arn:aws:iam::${local.account_id}:role/aws-service-role/elasticache.amazonaws.com/AWSServiceRoleForElastiCache",
-    ]
-
-    condition {
-      test     = "StringEquals"
-      variable = "iam:AWSServiceName"
-      values   = ["rds.amazonaws.com", "elasticache.amazonaws.com"]
-    }
   }
 }
 
