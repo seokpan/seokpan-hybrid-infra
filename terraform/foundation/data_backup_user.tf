@@ -25,16 +25,16 @@ resource "aws_iam_user" "backup" {
 data "aws_iam_policy_document" "backup_user" {
   # 업로드는 일반 사본 경로에만
   statement {
-    sid       = "PutHourly"
+    sid       = "PutPeriodic"
     actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.backup.arn}/hourly/*"]
+    resources = ["${aws_s3_bucket.backup.arn}/periodic/*"]
   }
 
   # 다운로드는 일반·보호 사본 모두 (온프렘 Recovery Storage 동기화)
   statement {
     sid       = "GetBackups"
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.backup.arn}/hourly/*", "${aws_s3_bucket.backup.arn}/protected/*"]
+    resources = ["${aws_s3_bucket.backup.arn}/periodic/*", "${aws_s3_bucket.backup.arn}/protected/*"]
   }
 
   # 목록 조회는 두 경로 안에서만
@@ -46,7 +46,7 @@ data "aws_iam_policy_document" "backup_user" {
     condition {
       test     = "StringLike"
       variable = "s3:prefix"
-      values   = ["hourly/*", "protected/*"]
+      values   = ["periodic/*", "protected/*"]
     }
   }
 }

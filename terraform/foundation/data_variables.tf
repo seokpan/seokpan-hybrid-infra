@@ -114,8 +114,8 @@ variable "redis_auth_token_version" {
 # Backup S3 · Backup IAM User
 # ---------------------------------------------------------------------------
 
-variable "backup_hourly_retention_days" {
-  description = "일반 사본(hourly/ 경로, 현재 15분 주기) 보관 일수 (03 §3-D.9.6, 3-I.14). 경로 이름은 재검토 중"
+variable "backup_periodic_retention_days" {
+  description = "일반 사본(periodic/ 경로, DB 운영 중 15분마다) 보관 일수 (03 §3-D.9.6, 3-I.14)"
   type        = number
   default     = 7
 }
