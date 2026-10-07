@@ -1,9 +1,9 @@
 # Isolated synthetic backup/restore rehearsal
 
-This is a user-authorized contribution to C/Data work. Assigned Data ownership remains
-김상희 (`kshi1313-gif`); the actual execution operator must be recorded accurately.
-Codex acting for `tjung03` does not imply C performed or reviewed the work. C Data review
-and D evidence index review are pending. A Host and D Image responsibilities are unchanged.
+Assigned Data ownership remains 김상희 (`kshi1313-gif`). This tool uses a separate
+isolated synthetic rehearsal environment; C did not execute or review the recorded
+Run. C Data review and D evidence index review are pending. A Host and D Image
+responsibilities are unchanged.
 
 The tool measures actual disposable MariaDB CLI Dump, gzip, age encryption, same-machine
 atomic local copy/hash verification, decryption, new isolated DB import, and comparison of
