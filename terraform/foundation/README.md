@@ -157,7 +157,9 @@ Plan과 Apply는 아래처럼 **하나의 하위 셸 안에서 연속 실행**�
 (
   set -euo pipefail
   trap 'unset TF_VAR_redis_auth_token' EXIT
-  export TF_VAR_redis_auth_token="$(sops -d --extract '["redis_auth_token"]' "$SOPS_FILE")"
+  # 대입과 export를 나눔: 한 줄로 쓰면 sops가 실패해도 export의 성공으로 덮여 set -e가 멈추지 않음
+  TF_VAR_redis_auth_token="$(sops -d --extract '["redis_auth_token"]' "$SOPS_FILE")"
+  export TF_VAR_redis_auth_token
 
   terraform -chdir=terraform/foundation plan -var-file="$RUN_TFVARS" -out=foundation.tfplan
   # 사람이 Plan 결과를 검토 · 승인한 뒤 같은 하위 셸에서 Apply (같은 Token이 그대로 남아 있음)
