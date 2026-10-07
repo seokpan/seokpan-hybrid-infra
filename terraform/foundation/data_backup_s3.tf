@@ -3,7 +3,7 @@
 # Backup용 S3 (03 §3-D.9.5~9.6)
 #
 # 경로 규칙
-#   hourly/     주기 백업 일반 사본(10-05부터 15분 주기, 경로 이름은 재검토 중) → 7일 후 자동 삭제
+#   periodic/   주기 백업 일반 사본(DB 운영 중 15분마다, 10-05 변경) → 7일 후 자동 삭제
 #   protected/  마지막 복원 검증 사본·시험 전 사본 등 → 자동 삭제 없음 (사람이 정리)
 #
 # 이 버킷에는 실사용자 데이터가 들어간 백업이 저장된다 (age 암호화 후 업로드).
@@ -67,13 +67,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "backup" {
 
   # 일반 사본: 7일 후 만료, 덮어쓴 이전 버전은 1일 후 삭제
   rule {
-    id     = "expire-hourly"
+    id     = "expire-periodic"
     status = "Enabled"
     filter {
-      prefix = "hourly/"
+      prefix = "periodic/"
     }
     expiration {
-      days = var.backup_hourly_retention_days
+      days = var.backup_periodic_retention_days
     }
     noncurrent_version_expiration {
       noncurrent_days = 1
