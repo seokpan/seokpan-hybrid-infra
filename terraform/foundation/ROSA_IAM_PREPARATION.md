@@ -82,3 +82,73 @@ Support 신뢰 대상과 정책 JSON을 추측해서 채우지 않는다.
 
 이 기록은 이름 선택이며 실제 AWS 역할 존재나 생성 완료를 의미하지 않는다.
 기존 자원 존재 여부와 관리 주체는 실제 생성 전에 확인한다.
+
+## 공식 정책 묶음 수신·무결성 확인 — 2026-10-08
+
+- 자료 참조: `rosa-policy-20261008T061153Z-6caf4295`
+- 기존 Controller의 예비 공급자 계정에서 수신 계정의 Git 밖 보호 영역으로 사본 전달.
+- 원본 17개 파일과 manifest 등록 SHA-256 일치 확인.
+- 원본·사본 18개 파일의 해시 일치 확인.
+- 수신 사본 소유자 ansible, 폴더700·파일600 확인.
+- 원본과 원본 권한은 유지하며 정책 재조회·토큰 전달은 수행하지 않음.
+- manifest SHA-256: `a1702e4cbfb70aaa70a04419b828d45a6d92a6ced281be2a170be44847ade450`
+- 구성: Classic 권한 정책4개·Support Trust1개·Operator 정책7개·OCM 참조4개·manifest·source-records.
+- 미제공 Operator 정책의 실제 필요 여부는 현재 ROSA Operator 목록과 대조 후 판단.
+
+해시 검사는 저장·전달 내용의 일치 확인이며 독립적인 원본 진위 증명이 아니다.
+자료 수신을 실제 AWS 역할 생성·권한 적용·ROSA 준비 완료로 표현하지 않는다.
+
+다음 검토:
+- 역할별 공식 권한 정책의 적용 범위.
+- Installer·Support·ControlPlane·Worker 신뢰 정책과 공식 근거.
+- 실제 Operator policy_name과 제공 정책의 대응.
+- 기존 AWS 자원·State 관리 주체 및 Terraform 실행 역할의 필요 권한.
+
+이번 단계에서 AWS/Red Hat 접속·Terraform Plan·Apply는 미실행이다.
+
+## 공통 IAM 생성 코드·모의시험 결과 — 2026-10-08
+
+### 작성한 코드
+
+- 공통 역할 4개: Installer·Support·ControlPlane·Worker.
+- 역할별 권한 정책 4개와 Operator 정책 6개.
+- 공통 역할과 역할별 권한 정책의 연결 4개.
+- 역할 ARN 4개와 Operator 정책 ARN 6개의 제한 출력 선언.
+- 공식 권한 내용과 전달받은 Operator 소비 이름 유지.
+- 생성 기본값은 false로 유지.
+
+### 실행자가 확인한 검사 결과
+
+- Terraform 형식·구성 검사 통과.
+- Terraform 1.16.4와 기존 AWS Provider 6.67.0을 재사용.
+- 실제 Foundation Backend와 다른 자원을 제외한 임시 구성 사용.
+- 활성·비활성 모의시험 2개 통과.
+- 활성 설정의 역할 4개·정책 10개·연결 4개 확인.
+- 역할·정책 이름, 공식 권한 내용, 신뢰 정책과 연결 확인.
+- 제한 출력의 항목 수 확인.
+- 비활성 설정에서 이번 IAM 자원과 출력 항목 없음 확인.
+- 시험용 버전 0.0과 가짜 ARN은 실제 공급값이 아님.
+- 임시 구성·정책 사본·모의시험 파일은 종료 시 정리.
+- 프로젝트 코드·공식 정책 원본·기존 잠금 파일 유지.
+
+### 검증 범위와 남은 작업
+
+이번 검사는 AWS 모의 기능을 사용한 코드 구조 확인이다.
+실제 AWS 권한 성공·지원 버전·설치 가능 여부를 증명하지 않는다.
+
+실제 계정의 기존 IAM 자원과 State 관리 주체, 실행 권한,
+Installer·Support 신뢰 대상의 사용 가능 여부, 추가 신뢰 조건,
+권한 경계 필요 여부와 실제 지원·소비 버전은 적용 전에 대조한다.
+
+최신 main 반영과 코드 리뷰, 전체 Foundation Plan,
+비용·실행 승인, 실제 Apply 및 제한 출력의 보호 인계가 남아 있다.
+
+이번 단계에서 AWS·Red Hat 접속, 실제 Foundation Plan·Apply,
+실제 역할·정책 생성은 수행하지 않았다.
+
+### 관련 기록
+
+- #47 상세 결과:
+  https://github.com/seokpan/seokpan-hybrid-infra/issues/47#issuecomment-6058853653
+- #25 진행 결과 연결:
+  https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-6058859011
