@@ -1,0 +1,10 @@
+[Unit]
+Description=Seokpan hybrid 15-minute logical backup
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/seokpan-hybrid-backup
+TimeoutStartSec=600
+Nice=10
