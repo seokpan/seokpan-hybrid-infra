@@ -6,7 +6,7 @@
 
 | 저장소 파일 | 설치 위치 | 설치 권한 | SHA-256 앞 12자리 |
 |---|---|---|---|
-| `backup-vm/seokpan-hybrid-backup` | hybrid-backup-01 `/usr/local/sbin/` | 700 root:root | `34bbf46333a8` |
+| `backup-vm/seokpan-hybrid-backup` | hybrid-backup-01 `/usr/local/sbin/` | 700 root:root | `3e368f632dd4` |
 | `backup-vm/seokpan-hybrid-backup.service` | hybrid-backup-01 `/etc/systemd/system/` | 644 root:root | `c5d4df879a19` |
 | `backup-vm/seokpan-hybrid-backup.timer` | hybrid-backup-01 `/etc/systemd/system/` | 644 root:root | `ed1afefbbc1a` |
 | `backup-vm/backup.env.example` | 견본 → hybrid-backup-01 `/etc/seokpan-hybrid-backup/backup.env` | 600 root:root | (견본, 값은 환경별) |
@@ -25,11 +25,12 @@ sha256sum /usr/local/sbin/seokpan-hybrid-backup | cut -c1-12            # 표와
 
 ## 백업 (`seokpan-hybrid-backup`, Timer `*:00/15`)
 
-순서: flock → `paused` 확인 → NTP 동기화 · 시계 오차 1초 미만 → 디스크 여유 100MiB → routines · events · triggers 0개 확인 → mariadb-dump · gzip · age → S3 `periodic/` → 복구 DB VM으로 사본 전송 → 기록
+순서: flock → `paused` 확인 → NTP 동기화 · 시계 오차 1초 미만 → 디스크 여유 100MiB → routines · events · triggers 0개 확인 → Backup ID 결정 → mariadb-dump · gzip · age → S3 `periodic/` → 복구 DB VM으로 사본 전송 → 기록
 
 - 설정은 `backup.env`를 `source`로 읽습니다. 비밀값은 넣지 않고, DB 접속 정보는 `SOURCE_CNF` 파일에, AWS 키는 `AWS_PROFILE` 프로필에 둡니다.
 - `S3_BUCKET`이 비어 있으면 S3를 건너뛰고 PARTIAL로 기록합니다(foundation Apply 전 예행).
 - `/etc/seokpan-hybrid-backup/paused`가 있으면 DB에 접속하지 않고 SKIP으로 정상 종료합니다. 이 파일은 RDS Stop/Start Runbook(#45)만 만들고 지웁니다.
+- Backup ID는 사전 검사를 모두 통과한 뒤 덤프 시작 시각 하나에서 `T_DUMP`와 함께 만듭니다. 따라서 Backup ID 시각 = `T_DUMP` = `last-success` 시각이고, S3 Key · 복구 DB VM 사본명 · 복원 후보 순서 · RPO가 모두 이 시각을 씁니다. 사전 검사 단계의 SKIP · FAIL은 아직 Backup ID가 없어 `history.tsv` 2열이 `-`입니다(1열은 시도 시작 시각).
 - `/srv/seokpan-hybrid-backup/state/last-success`(UTC 시각 · Backup ID · SHA-256)는 S3 업로드와 복구 DB VM 사본 확보가 모두 성공했을 때만 갱신합니다. 시각은 덤프 시작 시각입니다.
 - 결과는 `history.tsv`에 OK / PARTIAL / SKIP / FAIL로 남깁니다. 전송 · 확보 실패는 SKIP으로 바꾸지 않습니다.
 - 로컬 `periodic` 암호문은 `KEEP_DAYS`(7)일 뒤 정리합니다.

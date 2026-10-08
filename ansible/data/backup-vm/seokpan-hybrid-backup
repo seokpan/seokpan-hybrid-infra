@@ -12,10 +12,10 @@ ST=$B/state
 install -d -m 700 "$OUTD" "$ST"
 
 now(){ date -u +%FT%TZ; }
-T_START=$(now)
-ID="$ID_PREFIX-$(date -u +%Y%m%dT%H%M%SZ)"
+T_START=$(now)            # 시도 시작 (history.tsv 1열) — Backup ID에는 쓰지 않음
+ID=-                      # Backup ID는 사전 검사를 모두 통과한 뒤 5단계에서 정함
 log(){ printf '%s\t%s\t%s\t%s\n' "$T_START" "$ID" "$1" "$2" >> "$ST/history.tsv"; echo "$1 $2"; }
-fail(){ rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
+fail(){ [ "$ID" = - ] || rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
 
 # 0. 중복 실행 방지
 exec 9>"$ST/lock"
@@ -46,7 +46,12 @@ CNT=$(mariadb --defaults-extra-file="$SOURCE_CNF" -N -e "SELECT
 # 5. 덤프 → gzip → age (세 단계 모두 성공했을 때만 정상 이름)
 CLIENT=$(mariadb-dump --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-MariaDB' | head -n 1)
 RCPT=$(sha256sum "$ETC/recipients.txt" | cut -c1-12)
-T_DUMP=$(now)
+#    덤프 시작 시각 하나에서 T_DUMP와 Backup ID를 함께 만든다
+#    → Backup ID 시각 = T_DUMP = last-success 시각 = S3 Key · 복구 DB VM 사본명 · 복원 후보 · RPO 기준
+EPOCH=$(date -u +%s)
+T_DUMP=$(date -u -d "@$EPOCH" +%FT%TZ)
+ID="$ID_PREFIX-$(date -u -d "@$EPOCH" +%Y%m%dT%H%M%SZ)"
+[ ! -e "$OUTD/$ID.sql.gz.age" ] || fail "id-exists"
 mariadb-dump --defaults-extra-file="$SOURCE_CNF" \
   --single-transaction --quick --skip-comments --hex-blob \
   --default-character-set=utf8mb4 --skip-triggers --databases stone_game \
