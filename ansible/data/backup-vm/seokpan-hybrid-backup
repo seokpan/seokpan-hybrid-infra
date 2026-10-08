@@ -1,0 +1,111 @@
+#!/bin/bash
+# 석판 2차 15분 주기 논리 백업 (백업 작업 VM hybrid-backup-01)
+# 기준: 03 문서 3-D.9.5절(암호화 · S3 보관 · 로컬 사전 확보), infra #45 0장(백업 스크립트와의 약속)
+set -uo pipefail
+umask 077
+source /etc/seokpan-hybrid-backup/backup.env
+
+ETC=/etc/seokpan-hybrid-backup
+B=/srv/seokpan-hybrid-backup
+OUTD=$B/$ID_PREFIX
+ST=$B/state
+install -d -m 700 "$OUTD" "$ST"
+
+now(){ date -u +%FT%TZ; }
+T_START=$(now)            # 시도 시작 (history.tsv 1열) — Backup ID에는 쓰지 않음
+ID=-                      # Backup ID는 사전 검사를 모두 통과한 뒤 5단계에서 정함
+log(){ printf '%s\t%s\t%s\t%s\n' "$T_START" "$ID" "$1" "$2" >> "$ST/history.tsv"; echo "$1 $2"; }
+fail(){ [ "$ID" = - ] || rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
+
+# 0. 중복 실행 방지
+exec 9>"$ST/lock"
+flock -n 9 || { log SKIP "overlap"; exit 0; }
+
+# 1. 계획 생략 (#45) — paused 파일이 있으면 DB에 접속하지 않음
+if [ -f "$ETC/paused" ]; then
+  log SKIP "paused: $(head -c 200 "$ETC/paused" | tr '\t\n' '  ')"
+  exit 0
+fi
+
+# 2. 시간 동기화 (전원을 켠 직후 하드웨어 시계가 9시간 어긋나는 문제 대비)
+[ "$(timedatectl show -p NTPSynchronized --value)" = yes ] || fail "ntp-not-synced"
+OFF=$(chronyc -c tracking | cut -d, -f5)
+awk -v o="$OFF" 'BEGIN{exit !(o<1 && o>-1)}' || fail "clock-offset:$OFF"
+
+# 3. 임시 공간 (백업 디스크 여유 100MiB 이상)
+FREE_KB=$(df --output=avail -k "$B" | tail -1 | tr -d ' ')
+[ "$FREE_KB" -ge 102400 ] || fail "disk-low:${FREE_KB}KiB"
+
+# 4. routines · events · triggers 0개 (덤프 옵션의 전제, Data 계약 2.3절)
+CNT=$(mariadb --defaults-extra-file="$SOURCE_CNF" -N -e "SELECT
+ (SELECT COUNT(*) FROM information_schema.routines WHERE routine_schema='stone_game')
++(SELECT COUNT(*) FROM information_schema.events   WHERE event_schema='stone_game')
++(SELECT COUNT(*) FROM information_schema.triggers WHERE trigger_schema='stone_game')") || fail "db-connect"
+[ "$CNT" = 0 ] || fail "objects-not-zero:$CNT"
+
+# 5. 덤프 → gzip → age (세 단계 모두 성공했을 때만 정상 이름)
+CLIENT=$(mariadb-dump --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-MariaDB' | head -n 1)
+RCPT=$(sha256sum "$ETC/recipients.txt" | cut -c1-12)
+#    덤프 시작 시각 하나에서 T_DUMP와 Backup ID를 함께 만든다
+#    → Backup ID 시각 = T_DUMP = last-success 시각 = S3 Key · 복구 DB VM 사본명 · 복원 후보 · RPO 기준
+EPOCH=$(date -u +%s)
+T_DUMP=$(date -u -d "@$EPOCH" +%FT%TZ)
+ID="$ID_PREFIX-$(date -u -d "@$EPOCH" +%Y%m%dT%H%M%SZ)"
+[ ! -e "$OUTD/$ID.sql.gz.age" ] || fail "id-exists"
+mariadb-dump --defaults-extra-file="$SOURCE_CNF" \
+  --single-transaction --quick --skip-comments --hex-blob \
+  --default-character-set=utf8mb4 --skip-triggers --databases stone_game \
+  | gzip -c | age -R "$ETC/recipients.txt" -o "$OUTD/$ID.sql.gz.age.part"
+P="${PIPESTATUS[*]}"
+[ "$P" = "0 0 0" ] || fail "dump:$P"
+mv "$OUTD/$ID.sql.gz.age.part" "$OUTD/$ID.sql.gz.age"
+SUM=$(sha256sum "$OUTD/$ID.sql.gz.age" | cut -d' ' -f1)
+SIZE=$(stat -c %s "$OUTD/$ID.sql.gz.age")
+T_LOCAL=$(now)
+
+# 6. S3 업로드 (S3_BUCKET이 빈 값이면 생략 — Apply 전 시험)
+S3=skipped
+KEY="periodic/$ID.sql.gz.age"
+if [ -n "$S3_BUCKET" ]; then
+  if timeout 120 aws --profile "$AWS_PROFILE" s3 cp "$OUTD/$ID.sql.gz.age" \
+       "s3://$S3_BUCKET/$KEY" --only-show-errors; then
+    S3=ok
+  else
+    S3=fail
+    echo "$ID" >> "$ST/s3-pending"      # 실패 사본은 재전송 대상으로 보존 (03 문서 3-D.9.5절)
+  fi
+fi
+T_S3=$(now)
+
+# 7. 복구 DB VM 확보 — S3가 성공했으면 그 S3 객체를 내려받아 보냄 (03 문서 3-D.9.5절 5번)
+#    받는 쪽(sp-copy)이 SHA-256을 대조하고 OK를 돌려줌
+send(){
+  timeout 120 ssh -i /root/.ssh/seokpan-hybrid-copy_ed25519 -o BatchMode=yes \
+    sp-copy@"$COPY_HOST" "$ID $SUM" | grep -qx OK
+}
+CP=fail
+VIA=local
+if [ "$S3" = ok ]; then
+  VIA=s3
+  timeout 120 aws --profile "$AWS_PROFILE" s3 cp "s3://$S3_BUCKET/$KEY" - | send && CP=ok
+else
+  send < "$OUTD/$ID.sql.gz.age" && CP=ok
+fi
+T_COPY=$(now)
+
+# 8. 로컬 보관 정리 (일반 사본 KEEP_DAYS일)
+find "$OUTD" -maxdepth 1 -name "$ID_PREFIX-*.sql.gz.age" -mtime +"$KEEP_DAYS" -delete
+
+# 9. 결과 — last-success는 "S3 보관 + S3 객체로 로컬 확보"가 모두 확인됐을 때만 (#45)
+D="size=$SIZE sha=$SUM client=$CLIENT rcpt=$RCPT dump=$T_DUMP local=$T_LOCAL s3=$S3@$T_S3 copy=$CP/$VIA@$T_COPY offset=$OFF"
+if [ "$S3" = ok ] && [ "$CP" = ok ]; then
+  printf '%s\t%s\t%s\n' "$T_DUMP" "$ID" "$SUM" > "$ST/last-success.part" \
+    && mv "$ST/last-success.part" "$ST/last-success"
+  log OK "$D"
+elif [ "$S3" = skipped ] && [ "$CP" = ok ]; then
+  log PARTIAL "no-s3 $D"
+elif [ "$S3" = fail ] && [ "$CP" = ok ]; then
+  log FAIL "local-only $D"; exit 1
+else
+  log FAIL "transfer $D"; exit 1
+fi
