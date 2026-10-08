@@ -1,0 +1,20 @@
+#!/bin/bash
+# 백업 작업 VM이 보낸 사본 1개를 받아 SHA-256 확인 후 정상 이름으로 저장 (복구 DB VM)
+# sp-copy 계정의 authorized_keys command= 로만 실행됨
+set -euo pipefail
+umask 077
+read -r ID SUM <<< "${SSH_ORIGINAL_COMMAND:-}"
+[[ $ID =~ ^(periodic|rehearsal)-[0-9]{8}T[0-9]{6}Z$ ]] || { echo "BAD-ID"; exit 2; }
+[[ $SUM =~ ^[0-9a-f]{64}$ ]] || { echo "BAD-SUM"; exit 2; }
+C=/srv/seokpan-hybrid-recovery/copies
+F=$ID.sql.gz.age
+cd "$C"
+[ -e "$F" ] && { echo "EXISTS"; exit 4; }
+cat > "$F.part"
+if [ "$(sha256sum "$F.part" | cut -d' ' -f1)" != "$SUM" ]; then
+  rm -f "$F.part"; echo "SUM-MISMATCH"; exit 3
+fi
+echo "$SUM  $F" > "$F.sha256"
+mv "$F.part" "$F"
+find "$C" -maxdepth 1 -name 'periodic-*' -mtime +7 -delete
+echo OK
