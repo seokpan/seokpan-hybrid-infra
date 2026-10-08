@@ -6,15 +6,15 @@
 
 | 저장소 파일 | 설치 위치 | 설치 권한 | SHA-256 앞 12자리 |
 |---|---|---|---|
-| `backup-vm/seokpan-hybrid-backup` | hybrid-backup-01 `/usr/local/sbin/` | 700 root:root | `a1c73c64c219` |
+| `backup-vm/seokpan-hybrid-backup` | hybrid-backup-01 `/usr/local/sbin/` | 700 root:root | `1549be98f06f` |
 | `backup-vm/seokpan-hybrid-backup.service` | hybrid-backup-01 `/etc/systemd/system/` | 644 root:root | `c5d4df879a19` |
 | `backup-vm/seokpan-hybrid-backup.timer` | hybrid-backup-01 `/etc/systemd/system/` | 644 root:root | `ed1afefbbc1a` |
 | `backup-vm/backup.env.example` | 견본 → hybrid-backup-01 `/etc/seokpan-hybrid-backup/backup.env` | 600 root:root | (견본, 값은 환경별) |
 | `recovery-db-vm/seokpan-recv-copy` | hybrid-recovery-db-01 `/usr/local/sbin/` | 755 root:root | `f400647f9ff8` |
 | `controller/restore.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `e6444667ff47` |
 | `controller/table_hashes.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `5beac6da6e9c` |
-| `controller/check_data_apply.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `51f536301969` |
-| `controller/check_backup_gate.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `63e59d8bf0c2` |
+| `controller/check_data_apply.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `d09c6badaf96` |
+| `controller/check_backup_gate.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `92e9b0d4e383` |
 
 Git은 실행 권한을 755 · 644로만 기록하므로, 설치할 때 위 권한을 지정합니다.
 
@@ -35,7 +35,7 @@ sha256sum /usr/local/sbin/seokpan-hybrid-backup | cut -c1-12            # 표와
 - Backup ID는 사전 검사를 모두 통과한 뒤 덤프 시작 시각 하나에서 `T_DUMP`와 함께 만듭니다. 따라서 Backup ID 시각 = `T_DUMP` = `last-success` 시각이고, S3 Key · 복구 DB VM 사본명 · 복원 후보 순서 · RPO가 모두 이 시각을 씁니다. 사전 검사 단계의 SKIP · FAIL은 아직 Backup ID가 없어 `history.tsv` 2열이 `-`입니다(1열은 시도 시작 시각).
 - `/srv/seokpan-hybrid-backup/state/last-success`(UTC 시각 · Backup ID · SHA-256)는 S3 업로드와 복구 DB VM 사본 확보가 모두 성공했을 때만 갱신합니다. 시각은 덤프 시작 시각입니다.
 - 결과는 `history.tsv`에 OK / PARTIAL / SKIP / FAIL로 남깁니다. 전송 · 확보 실패는 SKIP으로 바꾸지 않습니다.
-- **S3 실패 사본 재전송:** S3 업로드에 실패한 회차의 Backup ID는 `state/s3-pending`에 남습니다. 이후 회차의 S3 업로드가 성공하면, 그 회차 백업을 끝낸 뒤 같은 Backup ID의 로컬 암호문을 다시 올립니다(03 문서 3-D.9.5절 실패 재시도). 회당 최대 `RESEND_MAX`(4)개이고, 시작 후 `RESEND_BUDGET`(300)초가 지나면 새 재전송을 시작하지 않습니다. SHA-256 체크섬을 붙여 올리고, S3가 기록한 SHA-256이 로컬과 같을 때만 완료로 봅니다(이미 올라가 있으면 다시 올리지 않음). 결과는 `state/s3-resend.tsv`(시각 · 재전송한 회차 · 대상 Backup ID · `ok` / `ok:already` / `fail` / `drop:no-local` / `drop:bad-id`)에 따로 남기며, 원래 회차의 `history.tsv` 기록(FAIL local-only)은 바꾸지 않습니다. 로컬 사본이 `KEEP_DAYS`로 정리된 ID는 `drop:no-local`로 목록에서 뺍니다.
+- **S3 실패 사본 재전송:** S3 업로드에 실패한 회차의 Backup ID는 `state/s3-pending`에 남습니다. 이후 회차의 S3 업로드가 성공하면, 그 회차 백업을 끝낸 뒤 같은 Backup ID의 로컬 암호문을 다시 올립니다(03 문서 3-D.9.5절 실패 재시도). 회당 최대 `RESEND_MAX`(4)개이고, 시작 후 `RESEND_BUDGET`(300)초가 지나면 새 재전송을 시작하지 않습니다. 항목 하나는 최대 240초라 기본값이면 약 540초에 끝나 서비스 `TimeoutStartSec=600` 안에 들어갑니다. `RESEND_BUDGET`을 올리면 서비스가 중간에 강제 종료될 수 있으므로 `TimeoutStartSec`도 함께 검토합니다. 재전송은 `s3api put-object`(한 번에 올리기, 멀티파트 없음)에 로컬 SHA-256을 함께 보내 S3가 받으면서 검증하고, 다시 S3가 기록한 SHA-256이 로컬과 같을 때만 완료로 봅니다(이미 같은 해시로 올라가 있으면 다시 올리지 않음). 로컬 SHA-256을 구하지 못하면(빈 값 · 형식 오류) 비교하지 않고 실패로 남깁니다. 결과는 `state/s3-resend.tsv`(시각 · 재전송한 회차 · 대상 Backup ID · `ok` / `ok:already` / `fail` / `fail:local-sum` / `drop:no-local` / `drop:bad-id`)에 따로 남기며, 원래 회차의 `history.tsv` 기록(FAIL local-only)은 바꾸지 않습니다. 로컬 사본이 `KEEP_DAYS`로 정리된 ID는 `drop:no-local`로 목록에서 뺍니다.
 - 로컬 `periodic` 암호문은 `KEEP_DAYS`(7)일 뒤 정리합니다. `find -mtime +7`은 만 8일이 된 파일부터 지우므로 실제 잔존은 7~8일입니다(받는 쪽 `seokpan-recv-copy`도 같음).
 
 ## 사본 받기 (`seokpan-recv-copy`)
@@ -55,10 +55,10 @@ sha256sum /usr/local/sbin/seokpan-hybrid-backup | cut -c1-12            # 표와
 
 ## Apply 당일 확인 (`check_data_apply.sh` · `check_backup_gate.sh`)
 
-둘 다 조회만 하고, SG ID · VPC ID · 계정 번호 · Endpoint 주소를 출력하지 않습니다. 결과(OK · NG 줄)를 Issue에 그대로 남길 수 있습니다. 사용 순서는 이관 Runbook(#44) 0-1행과 10장입니다.
+둘 다 조회만 하고, SG ID · VPC ID · 계정 번호 · Endpoint 주소를 출력하지 않습니다. AWS 오류 메시지(stderr, 예: `AccessDenied`의 ARN)에 섞인 12자리 계정 번호는 스크립트가 `<계정>`으로 가려서 내보냅니다. 그래도 Issue에 붙이기 전에 계정 번호 · ID가 없는지 한 번 더 확인합니다. 종료 코드는 0 = 모두 OK, 1 = NG가 하나 이상, 2 = 판정 불가(도구 · 자격증명 · 접속 실패 등)입니다. 사용 순서는 이관 Runbook(#44) 0-1행과 10장입니다.
 
-- `check_data_apply.sh` — foundation Apply 직후. Data SG 2개를 ID가 아니라 이름(`seokpan-fnd-rds` · `seokpan-fnd-redis`)으로 찾아 VPC · `Component=data` · 규칙(온프렘 `/32` · Worker · 그 밖의 규칙 없음 · egress 없음)을 보고, RDS · Valkey · Backup S3 · Backup User 설정을 코드 값과 대조합니다. `RDS_SG_ID` · `REDIS_SG_ID`로 rosa에 넘긴 ID를 주면 서로 바뀌지 않았는지도 봅니다. rosa Apply 뒤에는 `ROSA_APPLIED=1`.
-- `check_backup_gate.sh` — RDS 원본 백업의 Timer 회차가 2번 OK로 쌓인 뒤. PR #53 운영 Gate(Backup ID 시각 = `T_DUMP` = `last-success`, history · S3 객체 · 복구 DB VM 사본의 SHA-256, 15분 간격, 로컬 확보 지연, 데이터 나이 30분)를 확인합니다. 백업 작업 VM은 SSH 1회로 읽습니다.
+- `check_data_apply.sh` — foundation Apply 직후. Data SG 2개를 ID가 아니라 이름(`seokpan-fnd-rds` · `seokpan-fnd-redis`)과 `seokpan-fnd-vpc`로 찾아 VPC · `Component=data` · 규칙(온프렘 `/32` · Worker · 그 밖의 규칙 없음 · egress 없음)을 보고, RDS · Valkey(엔진은 노드 응답의 `Engine`으로 확인) · Backup S3 · Backup User 설정을 코드 값과 대조합니다. `RDS_SG_ID` · `REDIS_SG_ID`로 rosa에 넘긴 ID를 주면 서로 바뀌지 않았는지도 봅니다. rosa Apply 뒤에는 `ROSA_APPLIED=1`.
+- `check_backup_gate.sh` — RDS 원본 백업의 Timer 회차가 2번 OK로 쌓인 뒤. PR #53 운영 Gate(Backup ID 시각 = `T_DUMP` = `last-success`, history · S3 객체 · 복구 DB VM 사본의 SHA-256, 15분 간격, 로컬 확보 지연, 데이터 나이 30분)를 확인합니다. 백업 작업 VM은 SSH 1회로 읽습니다. `MIN_OK`(기본 2, 2 이상)는 볼 OK 회차 수이고 간격 수는 `MIN_OK - 1`입니다(1시간 = `MIN_OK=5`). OK 회차가 아직 `MIN_OK`개가 안 되거나 `last-success`가 없으면 판정 불가(종료 2)로 끝납니다.
 
 ## 저장소에 넣지 않는 것
 
@@ -67,7 +67,7 @@ sha256sum /usr/local/sbin/seokpan-hybrid-backup | cut -c1-12            # 표와
 ## 검증 기록
 
 - 2026-10-08 온프렘 예행(S3 제외): 첫 실행 PARTIAL · 복원 0~4단계 23초 · 원본과 행 수 · 행 해시 · Schema 해시 일치, Timer 4회 15분 간격, SKIP · FAIL 경로 확인 — #48
-- 2026-10-08 실패 사본 재전송 · 확인 스크립트 2개: 실제 경로에 설치한 스크립트를 가짜 DB · age · S3 · SSH로 실행해 재전송 8가지(실패 후 복구 · 회당 상한 · 이미 올라간 사본 · 로컬 정리된 ID · 잘못된 ID · S3 해시 불일치 · 시간 예산 · `S3_BUCKET` 빈 값의 기존 동작)와 확인 스크립트의 정상 · 결함 경우를 확인. 실제 AWS에서는 자원이 없는 상태로 `check_data_apply.sh` 호출 7가지가 "찾지 못함"으로 끝나는 것까지 확인
+- 2026-10-08 실패 사본 재전송 · 확인 스크립트 2개: 실제 경로에 설치한 스크립트를 가짜 DB · age · S3 · SSH로 실행해 재전송 10가지(실패 후 복구 · 회당 상한 · 이미 올라간 사본 · 로컬 정리된 ID · 잘못된 ID · S3 해시 불일치 · 시간 예산 · `S3_BUCKET` 빈 값의 기존 동작 · 로컬 SHA-256 계산 실패 → `fail:local-sum`으로 목록 유지 · 업로드 중 내용 변경 → S3 체크섬 거부)와 확인 스크립트의 정상 · 결함 경우를 확인. 실제 AWS에서는 자원이 없는 상태로 `check_data_apply.sh` 호출 7가지가 "찾지 못함"으로 끝나는 것까지 확인
 - S3 경로 · RDS 원본 · 실패 사본 재전송의 실제 S3 동작은 foundation Apply 후 검증
 
 관련: #45(RDS Stop/Start · 백업 약속) · #46(복구 DB VM) · #48(복원 Runbook) · #44(이관 Runbook)

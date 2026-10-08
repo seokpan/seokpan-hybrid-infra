@@ -20,8 +20,11 @@ fail(){ [ "$ID" = - ] || rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
 # S3 실패 사본 재전송 (03 문서 3-D.9.5절 "실패 재시도": 같은 Backup ID 암호문만, 제한 재전송)
 #   - 이번 회차 S3 업로드가 성공했을 때만 호출 (S3가 살아난 것을 확인한 뒤)
 #   - 회당 최대 RESEND_MAX개, 시작 후 RESEND_BUDGET초가 지나면 새 재전송을 시작하지 않음
-#     (서비스 TimeoutStartSec=600 안에서 끝나도록)
-#   - SHA-256 체크섬을 붙여 올리고, S3가 기록한 SHA-256이 로컬과 같을 때만 완료
+#     항목 하나는 최대 240초(확인 60 + 업로드 120 + 확인 60)라, 기본값(300초)이면 마지막 항목이
+#     약 540초에 끝나 서비스 TimeoutStartSec=600 안에 들어감. RESEND_BUDGET을 300보다 올리면
+#     서비스가 중간에 강제 종료될 수 있으므로 TimeoutStartSec도 함께 검토할 것
+#   - put-object(한 번에 올리기, 멀티파트 없음)에 로컬 SHA-256을 함께 보내 S3가 받으면서 검증하고,
+#     다시 S3가 기록한 SHA-256이 로컬과 같을 때만 완료. 로컬 해시를 못 구하면 실패로 남김
 #   - 결과는 s3-resend.tsv에 따로 남김. 원래 회차의 history.tsv 기록(FAIL local-only)은 바꾸지 않음
 resend_pending(){
   local q=$ST/s3-pending n=0 rid f b64 got res
@@ -34,14 +37,20 @@ resend_pending(){
     elif [ ! -f "$f" ]; then res=drop:no-local
     else
       n=$((n + 1))
-      b64=$(openssl dgst -sha256 -binary "$f" | base64)
-      got=$(timeout 60 aws --profile "$AWS_PROFILE" s3api head-object --bucket "$S3_BUCKET" \
+      b64=$(set -o pipefail; openssl dgst -sha256 -binary "$f" | base64) || b64=
+      # SHA-256(32바이트)의 base64는 항상 44자. 빈 값 · 이상한 값끼리 같다고 판정하지 않도록 먼저 막음
+      [[ $b64 =~ ^[A-Za-z0-9+/]{43}=$ ]] || b64=
+      got=
+      [ -n "$b64" ] && { got=$(timeout 60 aws --profile "$AWS_PROFILE" s3api head-object --bucket "$S3_BUCKET" \
               --key "periodic/$rid.sql.gz.age" --checksum-mode ENABLED \
-              --query ChecksumSHA256 --output text 2>/dev/null) || got=
-      if [ "$got" = "$b64" ]; then
+              --query ChecksumSHA256 --output text 2>/dev/null) || got=; }
+      if [ -z "$b64" ]; then
+        res=fail:local-sum; keep+=("$rid")
+      elif [ "$got" = "$b64" ]; then
         res=ok:already
-      elif timeout 120 aws --profile "$AWS_PROFILE" s3 cp "$f" "s3://$S3_BUCKET/periodic/$rid.sql.gz.age" \
-             --checksum-algorithm SHA256 --only-show-errors \
+      elif timeout 120 aws --profile "$AWS_PROFILE" s3api put-object --bucket "$S3_BUCKET" \
+             --key "periodic/$rid.sql.gz.age" --body "$f" \
+             --checksum-algorithm SHA256 --checksum-sha256 "$b64" >/dev/null \
         && got=$(timeout 60 aws --profile "$AWS_PROFILE" s3api head-object --bucket "$S3_BUCKET" \
                    --key "periodic/$rid.sql.gz.age" --checksum-mode ENABLED \
                    --query ChecksumSHA256 --output text) \

@@ -5,6 +5,7 @@
 #
 # - AWS 조회(describe · get · list)만 한다. 아무것도 만들거나 바꾸지 않는다.
 # - SG ID · 계정 번호 · Endpoint 주소를 화면에 출력하지 않는다 → 결과를 그대로 Issue에 붙여도 된다.
+#   AWS 오류 메시지(stderr)에는 ARN이 섞일 수 있어, 12자리 숫자를 <계정>으로 가려서 내보낸다.
 # - SG는 ID가 아니라 이름(seokpan-fnd-rds / -redis)으로 찾는다.
 #   이유빈 님이 정태훈 님께 넘긴 ID를 RDS_SG_ID · REDIS_SG_ID로 주면 대응(서로 바뀌지 않았는지)도 비교한다.
 #
@@ -17,6 +18,7 @@
 # 종료 코드: 0 = 모두 OK, 1 = NG가 하나 이상, 2 = 실행 조건 미충족(도구 · 자격증명)
 
 set -uo pipefail
+exec 2> >(sed -u -E 's/[0-9]{12}/<계정>/g' >&2)   # AccessDenied 등 오류 메시지의 계정 번호 가리기
 
 REGION="ap-northeast-2"
 P="seokpan-fnd"
@@ -47,8 +49,9 @@ VPC_ID=$(aws_ ec2 describe-vpcs --filters "Name=tag:Name,Values=${P}-vpc" \
 
 # ---------------------------------------------------------------- 2. Data SG
 echo "[2] Data SG"
-sg_id_by_name() {
-  aws_ ec2 describe-security-groups --filters "Name=group-name,Values=$1" \
+sg_id_by_name() { # 이름 + ${P}-vpc 안에서만 찾는다 (다른 VPC의 같은 이름 SG를 집지 않도록)
+  [ -n "$VPC_ID" ] || { echo ""; return; }
+  aws_ ec2 describe-security-groups --filters "Name=group-name,Values=$1" "Name=vpc-id,Values=$VPC_ID" \
     --query 'SecurityGroups[].GroupId' | jq -r 'if length==1 then .[0] else "" end'
 }
 check_sg() { # check_sg <이름> <포트> <온프렘 규칙 기대 수> <ID를 받을 변수 이름>
@@ -123,7 +126,6 @@ echo "[4] Valkey ${P}-redis"
 RG=$(aws_ elasticache describe-replication-groups --replication-group-id "${P}-redis" --query 'ReplicationGroups[0]' 2>/dev/null || echo null)
 if [ "$RG" = "null" ]; then ng "Replication Group을 찾지 못함"; else
   chk "상태"              "$(jq -r '.Status' <<<"$RG")" "available"
-  chk "엔진"              "$(jq -r '.Engine // "-"' <<<"$RG")" "valkey"
   chk "노드 타입"         "$(jq -r '.CacheNodeType' <<<"$RG")" "cache.t4g.small"
   chk "노드 수"           "$(jq -r '.MemberClusters | length' <<<"$RG")" "2"
   chk "Multi-AZ · 자동 승격" "$(jq -r '"\(.MultiAZ) \(.AutomaticFailover)"' <<<"$RG")" "enabled enabled"
@@ -133,6 +135,7 @@ if [ "$RG" = "null" ]; then ng "Replication Group을 찾지 못함"; else
 
   NODES=$(aws_ elasticache describe-cache-clusters --show-cache-node-info \
     --query "CacheClusters[?ReplicationGroupId=='${P}-redis']")
+  chk "엔진 (노드 2개)" "$(jq -r '[.[].Engine] | unique | join(",")' <<<"$NODES")" "valkey"
   chk "엔진 버전 7.2.x (노드 2개)" \
     "$(jq -r '[.[] | select(.EngineVersion|startswith("7.2"))] | length' <<<"$NODES")" "2"
   chk "두 노드 AZ 다름" "$(jq -r '[.[].PreferredAvailabilityZone] | unique | length' <<<"$NODES")" "2"
