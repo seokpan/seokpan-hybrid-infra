@@ -17,6 +17,45 @@ ID=-                      # Backup ID는 사전 검사를 모두 통과한 뒤 5
 log(){ printf '%s\t%s\t%s\t%s\n' "$T_START" "$ID" "$1" "$2" >> "$ST/history.tsv"; echo "$1 $2"; }
 fail(){ [ "$ID" = - ] || rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
 
+# S3 실패 사본 재전송 (03 문서 3-D.9.5절 "실패 재시도": 같은 Backup ID 암호문만, 제한 재전송)
+#   - 이번 회차 S3 업로드가 성공했을 때만 호출 (S3가 살아난 것을 확인한 뒤)
+#   - 회당 최대 RESEND_MAX개, 시작 후 RESEND_BUDGET초가 지나면 새 재전송을 시작하지 않음
+#     (서비스 TimeoutStartSec=600 안에서 끝나도록)
+#   - SHA-256 체크섬을 붙여 올리고, S3가 기록한 SHA-256이 로컬과 같을 때만 완료
+#   - 결과는 s3-resend.tsv에 따로 남김. 원래 회차의 history.tsv 기록(FAIL local-only)은 바꾸지 않음
+resend_pending(){
+  local q=$ST/s3-pending n=0 rid f b64 got res
+  local -a keep=()
+  while read -r rid; do
+    [ -n "$rid" ] || continue
+    if [ "$n" -ge "$RESEND_MAX" ] || [ "$SECONDS" -ge "$RESEND_BUDGET" ]; then keep+=("$rid"); continue; fi
+    f="$OUTD/$rid.sql.gz.age"
+    if [[ ! $rid =~ ^periodic-[0-9]{8}T[0-9]{6}Z$ ]]; then res=drop:bad-id
+    elif [ ! -f "$f" ]; then res=drop:no-local
+    else
+      n=$((n + 1))
+      b64=$(openssl dgst -sha256 -binary "$f" | base64)
+      got=$(timeout 60 aws --profile "$AWS_PROFILE" s3api head-object --bucket "$S3_BUCKET" \
+              --key "periodic/$rid.sql.gz.age" --checksum-mode ENABLED \
+              --query ChecksumSHA256 --output text 2>/dev/null) || got=
+      if [ "$got" = "$b64" ]; then
+        res=ok:already
+      elif timeout 120 aws --profile "$AWS_PROFILE" s3 cp "$f" "s3://$S3_BUCKET/periodic/$rid.sql.gz.age" \
+             --checksum-algorithm SHA256 --only-show-errors \
+        && got=$(timeout 60 aws --profile "$AWS_PROFILE" s3api head-object --bucket "$S3_BUCKET" \
+                   --key "periodic/$rid.sql.gz.age" --checksum-mode ENABLED \
+                   --query ChecksumSHA256 --output text) \
+        && [ "$got" = "$b64" ]; then
+        res=ok
+      else
+        res=fail; keep+=("$rid")
+      fi
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$(now)" "$ID" "$rid" "$res" >> "$ST/s3-resend.tsv"
+  done < "$q"
+  { [ "${#keep[@]}" -eq 0 ] || printf '%s\n' "${keep[@]}"; } > "$q.part" && mv "$q.part" "$q"
+}
+
 # 0. 중복 실행 방지
 exec 9>"$ST/lock"
 flock -n 9 || { log SKIP "overlap"; exit 0; }
@@ -92,6 +131,13 @@ else
   send < "$OUTD/$ID.sql.gz.age" && CP=ok
 fi
 T_COPY=$(now)
+
+# 7-1. S3 실패 사본 재전송 — 이번 회차 S3가 성공했을 때만 (재전송 결과는 s3-resend.tsv)
+RESEND_MAX=${RESEND_MAX:-4}
+RESEND_BUDGET=${RESEND_BUDGET:-300}
+if [ "$S3" = ok ] && [ -s "$ST/s3-pending" ]; then
+  resend_pending
+fi
 
 # 8. 로컬 보관 정리 (일반 사본 KEEP_DAYS일)
 find "$OUTD" -maxdepth 1 -name "$ID_PREFIX-*.sql.gz.age" -mtime +"$KEEP_DAYS" -delete
