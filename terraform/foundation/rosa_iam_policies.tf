@@ -74,11 +74,32 @@ resource "aws_iam_policy" "rosa_operator" {
     "${local.rosa_bundle_directory}/${each.value}"
   )
 
+  # 공식 Operator 식별 정보를 정책에 연결합니다.
+  tags = {
+    rosa_openshift_version = var.rosa_iam_openshift_minor_version
+    rosa_role_prefix       = var.rosa_account_role_prefix
+    operator_namespace     = local.rosa_operator_policy_metadata[each.value].operator_namespace
+    operator_name          = local.rosa_operator_policy_metadata[each.value].operator_name
+  }
+
   depends_on = [
     terraform_data.rosa_policy_bundle_guard
   ]
 
   lifecycle {
+    precondition {
+      condition     = var.rosa_iam_openshift_minor_version != null
+      error_message = "Operator 정책 생성 전에 확인한 OpenShift 버전 계열을 공급해야 합니다."
+    }
+
+    precondition {
+      condition = (
+        toset(keys(local.rosa_operator_policy_metadata))
+        == toset(values(local.rosa_operator_permission_policy_files))
+      )
+      error_message = "Operator 정책 파일과 공식 담당 정보의 대응이 일치해야 합니다."
+    }
+
     precondition {
       condition     = length(each.key) <= 64
       error_message = "Operator 정책 이름은 AWS IAM 정책 이름의 64자 제한을 지켜야 합니다."

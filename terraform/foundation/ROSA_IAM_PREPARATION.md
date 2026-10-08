@@ -199,3 +199,41 @@ B의 ROSA 서비스 실행 권한, OIDC·클러스터 전용 역할·PassRole은
   https://github.com/seokpan/seokpan-hybrid-infra/issues/47#issuecomment-6059326439
 - #25:
   https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-6059330987
+
+## PR #54 Operator 정책 식별 태그 보완 — 2026-10-08
+
+### 수정 내용
+
+- 공식 terraform-rhcs-rosa-classic v1.7.2의 Operator 담당 정보 대응을 추가했다.
+- Operator 정책 6개에 다음 식별 태그를 연결했다.
+  - rosa_openshift_version
+  - rosa_role_prefix
+  - operator_namespace
+  - operator_name
+- 기존 소비 정책 이름과 공식 권한 파일 내용은 유지했다.
+- 실제 OpenShift 버전은 기존 입력으로 받으며 임의로 지정하지 않았다.
+- 정책 파일과 담당 정보 대응의 일치 조건 및 버전 입력 조건을 추가했다.
+
+### 검사 결과
+
+- 격리된 활성·비활성 모의시험 2개 통과.
+- Operator 정책 6개 각각의 식별 태그 4개 값 확인.
+- 기존 정책 이름과 공식 권한 내용 일치 확인.
+- 공통 역할 4개·정책 10개·연결 4개 유지 확인.
+- 역할별 정책 연결 및 제한 출력 항목 수 확인.
+- 비활성 설정의 이번 IAM 자원과 출력 없음 확인.
+- 시험용 버전 0.0과 가짜 ARN은 실제 공급값이 아니다.
+- 시험 초기화는 기존 Provider 폴더 전체를 재사용하도록 보완했다.
+- 시험용 값은 override_during = plan으로 Plan 단계부터 공급한다.
+- 임시 시험 구성·정책 사본·로그는 정리했다.
+- 재실행 절차는 scripts/test-rosa-operator-tags.py에 유지한다.
+
+### 남은 검증
+
+- 추가한 bootstrap 실행 권한의 활성·비활성 동작과 정책 크기 검사.
+- 실제 지원 버전·신뢰 대상·기존 자원 및 State 관리 주체 확인.
+- 실제 실행 권한과 상위 제한 확인.
+- 승인된 실제 Plan·Apply 및 제한 출력 인계.
+
+이번 결과는 태그 보완과 격리 모의시험의 결과다.
+실제 AWS 접속·Foundation Plan·Apply 또는 ROSA 설치 완료를 의미하지 않는다.
