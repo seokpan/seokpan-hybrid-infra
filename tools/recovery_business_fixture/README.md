@@ -31,7 +31,7 @@ DB/Redis/HTTPS 인증서는 별도의 일회성 가상 CA/localhost SAN을 사�
 
 스크립트가 측정한 `scripted_continuation_seconds`는 준비된 사본 해독 이후의 처리 시간이다. 장애 탐지/사람 판단/대기·실제 Host/Harbor/Image/PVC/OCP/사용자 안내·FE/브라우저/WSS·RDS/S3/VPN은 포함하지 않는다. 따라서 서비스 RTO/RPO, 승인 Release, 최종 T18 Acceptance로 기록하지 않으며 관련 필드는 null/NOT RUN이다. MariaDB/Redis Package 버전 차이·동일 Host 파일 경로·실제 Cloud 부하 부재를 기록한다.
 
-C 김상희의 Data 책임, A 이유빈의 실제 Host/Storage, B 정태훈의 App/접속, D 최유준의 Image/증거 책임을 유지한다. 실제 실행자가 Codex일 때는 tjung03의 허용 범위에서 수행한 기여로 남기며 팀원의 실행·검토를 대신했다고 적지 않는다. C/B/A/D 검토와 실제 환경 후속 증거는 원래 Issue/PR 및 새 Run에서 별도로 연결한다.
+C 김상희의 Data 책임, A 이유빈의 실제 Host/Storage, B 정태훈의 App/접속, D 최유준의 Image/증거 책임을 유지한다. 합성 격리 시험의 실행 환경·계정·검사 결과는 해당 Run에 기록한다. 팀원의 실제 실행·검토와 별도로 관리한다. C/B/A/D 검토와 실제 환경 후속 증거는 원래 Issue/PR 및 새 Run에서 별도로 연결한다.
 
 ## 실행 주체와 검증 범위
 
