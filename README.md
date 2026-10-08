@@ -156,7 +156,7 @@ aws iam delete-virtual-mfa-device --serial-number <기존 ARN>
 본인이 MFA를 증명할 수 없는 상태이므로 직접 해제하지 않고, 다른 팀원에게 복구를 요청합니다.
 
 1. 요청자가 Issue를 등록합니다. (대상 IAM User, 사유)
-2. 다른 팀원(IAM 관리 권한 보유)이 요청자 본인 여부를 직접 확인한 뒤, 대상 사용자에 대해 B의 1) 해제와 2) 삭제를 실행합니다.
+2. 다른 팀원(IAM 관리 권한 보유 — 현재 4명 모두 `AdministratorAccess`, [#5 10-01 조회](https://github.com/seokpan/seokpan-hybrid-infra/issues/5#issuecomment-5927222058))이 요청자 본인 여부를 직접 확인한 뒤, 대상 사용자에 대해 B의 1) 해제와 2) 삭제를 실행합니다.
 3. 요청자가 A로 다시 등록하고 `personal` 세션 발급을 확인합니다.
 4. Issue에 요청자, 실행자, 대상 IAM User, 처리 시각, 결과를 기록합니다. 계정 ID와 ARN은 기록하지 않습니다.
 
@@ -197,7 +197,7 @@ cd ../.. && source scripts/tf-session.sh clear
 | 다른 Root State | 거부 | 거부 |
 | State 삭제·Version 삭제·버킷 삭제 | 거부 | 거부 |
 | State 버킷 설정 | 관리 | 거부 |
-| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` · `seokpan-fnd-backup-boundary` · Network 관리형 정책 관리 | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)), Network(VPC · Subnet · IGW · Route Table/Route · NAT Gateway · EIP · S3 Gateway Endpoint) 관리, Data 계층(RDS · ElastiCache · Data SG · Backup S3 버킷 설정 · Backup IAM User) 관리(RDS 관리형 마스터 Secret 생성용 Secrets Manager·`kms:DescribeKey`(`alias/aws/secretsmanager` 한정) 포함)([h-infra #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19)). CI · Backup Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy`·`s3:PutBucketPolicy`(버킷 정책 변경)·백업 객체 읽기/쓰기·`secretsmanager:GetSecretValue`·`iam:CreateServiceLinkedRole`(RDS · ElastiCache 서비스 연결 Role은 계정에 미리 생성) 권한은 부여하지 않음(백업 객체 접근은 explicit Deny, Backup User는 Boundary에서 삭제·비HTTPS 요청 explicit Deny); rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
+| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` · `seokpan-fnd-backup-boundary` · Network 관리형 정책 관리 | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)), Network(VPC · Subnet · IGW · Route Table/Route · NAT Gateway · EIP · S3 Gateway Endpoint) 관리, Data 계층(RDS · ElastiCache · Data SG · Backup S3 버킷 설정 · Backup IAM User) 관리(RDS 관리형 마스터 Secret 생성용 Secrets Manager·`kms:DescribeKey`(`alias/aws/secretsmanager` 한정) 포함)([h-infra #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19)). CI · Backup Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy`·`s3:PutBucketPolicy`(버킷 정책 변경)·백업 객체 읽기/쓰기·`secretsmanager:GetSecretValue`·`iam:CreateServiceLinkedRole`(RDS · ElastiCache 서비스 연결 Role은 계정에 미리 생성, [절차](#서비스-연결-role-새-계정--role이-지워졌을-때)) 권한은 부여하지 않음(백업 객체 접근은 explicit Deny, Backup User는 Boundary에서 삭제·비HTTPS 요청 explicit Deny); rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
 
 - foundation / rosa에 필요한 권한은 각 Root 구현 PR에서 **필요한 Service / Action / Resource만** `terraform/bootstrap/iam.tf`에 추가합니다. bootstrap apply 후 해당 Root를 실행합니다.
 - `iam:PassRole`은 대상 Role ARN과 `iam:PassedToService` 조건으로 제한합니다. 생성하는 IAM Role에는 필요하면 Permissions Boundary를 둡니다.
@@ -308,3 +308,24 @@ State 버킷이 유실되면 bootstrap Root도 init할 수 없습니다. 복구�
 4. `backend.tf` 원복 후 `terraform init -migrate-state`로 state 재이전
 
 > 버킷은 `prevent_destroy`와 버저닝으로 보호됩니다. 버킷이 유실되면 다른 state도 함께 유실되므로 버킷 삭제는 팀 합의 없이 진행하지 않습니다.
+
+### 서비스 연결 Role (새 계정 · Role이 지워졌을 때)
+
+foundation Role에는 `iam:CreateServiceLinkedRole` 권한이 없습니다. RDS · ElastiCache의 서비스 연결 Role은 계정에 한 번만 있으면 되므로, foundation 첫 Apply 전에 `personal` 세션으로 확인하고 **없을 때만** 만듭니다(현재 계정은 2026-10-06 생성, [#37](https://github.com/seokpan/seokpan-hybrid-infra/pull/37#issuecomment-6015927016)). 팀원 4명 모두 IAM User에 `AdministratorAccess`가 있어(2026-10-08 재조회, 첫 확인은 [#5 10-01 조회](https://github.com/seokpan/seokpan-hybrid-infra/issues/5#issuecomment-5927222058)) 권한상 누구나 본인 `personal` 세션으로 실행할 수 있습니다. 다만 생성은 foundation 담당(이유빈)의 동의를 받은 뒤 진행합니다.
+
+```bash
+source scripts/tf-session.sh personal
+for pair in rds:AWSServiceRoleForRDS elasticache:AWSServiceRoleForElastiCache; do
+  s=${pair%%:*}; r=${pair#*:}
+  if out=$(aws iam get-role --role-name "$r" --query Role.RoleName --output text 2>&1); then
+    echo "있음: $out"
+  elif grep -q NoSuchEntity <<<"$out"; then
+    aws iam create-service-linked-role --aws-service-name "$s.amazonaws.com" --query Role.RoleName --output text
+  else
+    echo "조회 실패(생성 안 함): $out" >&2; break
+  fi
+done
+source scripts/tf-session.sh clear
+```
+
+각 Role마다 `있음: 이름` 또는 새로 만든 Role 이름이 나오면 됩니다. `조회 실패`가 나오면 세션 만료 · 권한 · 네트워크 문제이므로 생성하지 않고 멈춥니다. 원인을 확인한 뒤 다시 실행합니다. Role을 새로 만들었을 때는 Terraform 밖에서 만든 자원이므로 배정 실행자 · 실제 수행자 · 시각을 Issue에 함께 남깁니다(04 문서 2.4절, 예: [#37 코멘트](https://github.com/seokpan/seokpan-hybrid-infra/pull/37#issuecomment-6015927016)).
