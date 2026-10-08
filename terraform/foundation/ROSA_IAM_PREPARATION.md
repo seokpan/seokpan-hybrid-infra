@@ -152,3 +152,50 @@ Installer·Support 신뢰 대상의 사용 가능 여부, 추가 신뢰 조건,
   https://github.com/seokpan/seokpan-hybrid-infra/issues/47#issuecomment-6058853653
 - #25 진행 결과 연결:
   https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-6058859011
+
+## Foundation 실행 권한 코드 추가 — 2026-10-08
+
+### 작성한 내용
+
+- bootstrap에 Foundation의 ROSA 공통 IAM 관리 권한 코드 추가.
+- 관리 대상은 합의한 역할 4개와 정책 10개로 제한.
+- 역할별 정책 연결·해제는 각 역할의 짝 정책으로 제한.
+- 관리용 정책 seokpan-tf-foundation-rosa-iam은
+  seokpan-tf-foundation 실행 역할에만 연결.
+- 기존 bootstrap 정책에 조건부 문서 연결 추가.
+- enable_rosa_account_iam_permissions 기본값은 false.
+
+### 확인 결과와 검증 범위
+
+실행자가 공유한 출력 기준으로 Terraform 형식·구성 검사와
+Git 변경 공백 검사가 통과했다.
+
+이번 실행 권한 코드의 활성·비활성 동작, 생성 정책의 대상·조건,
+정책 크기 및 실제 실효 권한 검사는 아직 수행하지 않았다.
+앞선 Foundation 생성 코드의 모의시험 결과와 구분한다.
+
+현재 권한 선언은 승인한 접두사와 경로 /,
+권한 경계 미지정 구성을 대상으로 한다.
+실제 계정에서 권한 경계가 필요하면 조건을 보완한다.
+
+B의 ROSA 서비스 실행 권한, OIDC·클러스터 전용 역할·PassRole은
+이번 Foundation 관리 권한과 별도로 검토한다.
+
+### 남은 작업
+
+- 실행 권한 코드의 범위·동작 검사와 관련 권한 수요 대조.
+- PR 리뷰 및 병합.
+- 기존 자원·State 관리 주체와 실제 실행 조건 확인.
+- 승인된 bootstrap 권한 적용과 재확인.
+- Foundation 전체 Plan·비용 검토·실행 승인·Apply.
+- 실제 역할·정책 ARN 및 제한 출력의 보호 인계.
+
+이번 단계에서 AWS·Red Hat 접속, 권한 적용,
+실제 Plan·Apply는 수행하지 않았다.
+
+### 관련 기록
+
+- #47:
+  https://github.com/seokpan/seokpan-hybrid-infra/issues/47#issuecomment-6059326439
+- #25:
+  https://github.com/seokpan/seokpan-hybrid-infra/issues/25#issuecomment-6059330987
