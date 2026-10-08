@@ -308,3 +308,18 @@ State 버킷이 유실되면 bootstrap Root도 init할 수 없습니다. 복구�
 4. `backend.tf` 원복 후 `terraform init -migrate-state`로 state 재이전
 
 > 버킷은 `prevent_destroy`와 버저닝으로 보호됩니다. 버킷이 유실되면 다른 state도 함께 유실되므로 버킷 삭제는 팀 합의 없이 진행하지 않습니다.
+
+### 서비스 연결 Role (새 계정 · Role이 지워졌을 때)
+
+foundation Role에는 `iam:CreateServiceLinkedRole` 권한이 없습니다. RDS · ElastiCache의 서비스 연결 Role은 계정에 한 번만 있으면 되므로, foundation 첫 Apply 전에 `personal` 세션으로 확인하고 없을 때만 만듭니다(현재 계정은 2026-10-06 생성, [#37](https://github.com/seokpan/seokpan-hybrid-infra/pull/37#issuecomment-6015927016)).
+
+```bash
+source scripts/tf-session.sh personal
+for s in rds elasticache; do
+  case $s in rds) r=AWSServiceRoleForRDS ;; elasticache) r=AWSServiceRoleForElastiCache ;; esac
+  aws iam get-role --role-name "$r" --query Role.RoleName --output text 2>/dev/null \
+    || aws iam create-service-linked-role --aws-service-name "$s.amazonaws.com" --query Role.RoleName --output text
+done
+```
+
+두 줄 모두 Role 이름이 나오면 됩니다. Terraform 밖에서 만든 자원이므로 만들었을 때는 실행자 · 시각을 Issue에 남깁니다.
