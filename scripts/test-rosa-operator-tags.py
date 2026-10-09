@@ -317,6 +317,34 @@ with tempfile.TemporaryDirectory(
         "비활성 설정에 IAM 자원 또는 출력이 남았습니다.",
     )
     test += "}\n"
+    # 지원하지 않는 입력이 Plan 단계에서 차단되는지 확인합니다.
+    # 경로와 권한 경계는 각각 별도의 시험으로 검사합니다.
+    test += (
+        '\n'
+        'run "unsupported_path" {\n'
+        '  command = plan\n'
+        '  variables {\n'
+        '    enable_rosa_account_iam = true\n'
+        '    rosa_iam_path = "/team/"\n'
+        '    rosa_account_permissions_boundary = null\n'
+        '  }\n'
+        '  expect_failures = [\n'
+        '    terraform_data.rosa_policy_bundle_guard,\n'
+        '  ]\n'
+        '}\n'
+        '\n'
+        'run "unsupported_boundary" {\n'
+        '  command = plan\n'
+        '  variables {\n'
+        '    enable_rosa_account_iam = true\n'
+        '    rosa_iam_path = "/"\n'
+        '    rosa_account_permissions_boundary = "arn:aws:iam::000000000000:policy/test-boundary"\n'
+        '  }\n'
+        '  expect_failures = [\n'
+        '    terraform_data.rosa_policy_bundle_guard,\n'
+        '  ]\n'
+        '}\n'
+    )
     (tests / "operator_tags.tftest.hcl").write_text(test, encoding="utf-8")
 
     print("1. 기존 Provider로 격리 시험 구성을 준비합니다.", flush=True)
@@ -338,7 +366,7 @@ with tempfile.TemporaryDirectory(
             "새 Provider 설치는 시도하지 않았습니다."
         )
 
-    print("2. 활성·비활성 모의시험을 실행합니다.", flush=True)
+    print("2. 정상·비활성 및 지원하지 않는 입력의 차단 시험을 실행합니다.", flush=True)
     result = subprocess.run(
         ["terraform", "test", "-var-file=test.tfvars.json", "-json"],
         cwd=work, env=env, capture_output=True, text=True,
@@ -370,14 +398,22 @@ with tempfile.TemporaryDirectory(
         event["test_summary"] for event in events
         if "test_summary" in event
     ]
-    if not summaries or summaries[-1].get("passed") != 2:
-        raise SystemExit("중단: 모의시험 두 개의 통과 결과를 확인하지 못했습니다.")
+    if (
+        not summaries
+        or summaries[-1].get("passed") != 4
+        or summaries[-1].get("failed", 0) != 0
+        or summaries[-1].get("skipped", 0) != 0
+    ):
+        raise SystemExit("중단: 모의시험 네 개의 통과 결과를 확인하지 못했습니다.")
 
     print("통과: Operator 정책 6개의 공식 식별 태그 4개")
     print("통과: 기존 정책 이름 및 공식 권한 내용")
     print("통과: 공통 역할 4개·정책 10개·연결 4개")
     print("통과: 역할별 정책 연결 및 제한 출력 항목 수")
     print("통과: 비활성 설정의 IAM 자원과 출력 없음")
+    print("통과: 지원하지 않는 IAM 경로를 Plan 단계에서 차단")
+    print("통과: 권한 경계 지정 입력을 Plan 단계에서 차단")
+    print("통과: 전체 모의시험 4개")
     print("확인: 버전 0.0과 시험용 ARN은 실제 공급값이 아닙니다.")
 
 print("완료: 임시 시험 구성·정책 사본·로그 자동 정리")

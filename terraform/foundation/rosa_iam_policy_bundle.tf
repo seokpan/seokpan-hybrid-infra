@@ -70,6 +70,18 @@ resource "terraform_data" "rosa_policy_bundle_guard" {
   count = var.enable_rosa_account_iam ? 1 : 0
 
   lifecycle {
+    # 현재 bootstrap 실행 권한과 지원 입력 범위를 일치시킵니다.
+    # 생성 비활성 상태에서는 이 검사 자원이 만들어지지 않습니다.
+    precondition {
+      condition     = var.rosa_iam_path == "/"
+      error_message = "현재 ROSA 공통 IAM 실행 권한은 경로 /만 지원합니다. 다른 경로를 사용하려면 bootstrap 권한과 함께 별도 검토해야 합니다."
+    }
+
+    precondition {
+      condition     = var.rosa_account_permissions_boundary == null
+      error_message = "현재 ROSA 공통 IAM 실행 권한은 권한 경계 미지정만 지원합니다. 권한 경계가 필요하면 bootstrap 권한과 함께 별도 검토해야 합니다."
+    }
+
     precondition {
       condition = (
         var.rosa_policy_bundle_directory != null &&

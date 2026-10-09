@@ -25,7 +25,7 @@ variable "rosa_account_role_prefix" {
 }
 
 variable "rosa_iam_path" {
-  description = "ROSA 공통 IAM 경로입니다. 기존 ROSA 입력 예시의 기본 경로를 사용합니다."
+  description = "ROSA 공통 IAM 경로입니다. 현재 생성 활성 시 /만 지원하며 다른 경로는 정책 묶음 검사에서 차단합니다."
   type        = string
   default     = "/"
   nullable    = false
