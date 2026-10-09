@@ -197,11 +197,29 @@ cd ../.. && source scripts/tf-session.sh clear
 | 다른 Root State | 거부 | 거부 |
 | State 삭제·Version 삭제·버킷 삭제 | 거부 | 거부 |
 | State 버킷 설정 | 관리 | 거부 |
-| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` · `seokpan-fnd-backup-boundary` · Network 관리형 정책 관리 | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)), Network(VPC · Subnet · IGW · Route Table/Route · NAT Gateway · EIP · S3 Gateway Endpoint) 관리, Data 계층(RDS · ElastiCache · Data SG · Backup S3 버킷 설정 · Backup IAM User) 관리(RDS 관리형 마스터 Secret 생성용 Secrets Manager·`kms:DescribeKey`(`alias/aws/secretsmanager` 한정) 포함)([h-infra #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19)). CI · Backup Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy`·`s3:PutBucketPolicy`(버킷 정책 변경)·백업 객체 읽기/쓰기·`secretsmanager:GetSecretValue`·`iam:CreateServiceLinkedRole`(RDS · ElastiCache 서비스 연결 Role은 계정에 미리 생성, [절차](#서비스-연결-role-새-계정--role이-지워졌을-때)) 권한은 부여하지 않음(백업 객체 접근은 explicit Deny, Backup User는 Boundary에서 삭제·비HTTPS 요청 explicit Deny); rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
+| AWS 서비스·IAM | `seokpan-tf-*` Role 및 `seokpan-fnd-ci-boundary` · `seokpan-fnd-backup-boundary` · Network 관리형 정책 관리 · ROSA 공통 IAM 관리용 정책 하나의 관리 및 Foundation 실행 역할 연결(이번 권한 설정 활성화·적용 후) | foundation: 지정 ECR·CI IAM User 관리([h-infra PR #21](https://github.com/seokpan/seokpan-hybrid-infra/pull/21)), Network(VPC · Subnet · IGW · Route Table/Route · NAT Gateway · EIP · S3 Gateway Endpoint) 관리, Data 계층(RDS · ElastiCache · Data SG · Backup S3 버킷 설정 · Backup IAM User) 관리(RDS 관리형 마스터 Secret 생성용 Secrets Manager·`kms:DescribeKey`(`alias/aws/secretsmanager` 한정) 포함)([h-infra #19](https://github.com/seokpan/seokpan-hybrid-infra/issues/19)). CI · Backup Access Key 발급·`iam:AttachUserPolicy`·`iam:PassRole`·`ecr:SetRepositoryPolicy`·`s3:PutBucketPolicy`(버킷 정책 변경)·백업 객체 읽기/쓰기·`secretsmanager:GetSecretValue`·`iam:CreateServiceLinkedRole`(RDS · ElastiCache 서비스 연결 Role은 계정에 미리 생성, [절차](#서비스-연결-role-새-계정--role이-지워졌을-때)) 권한은 부여하지 않음(백업 객체 접근은 explicit Deny, Backup User는 Boundary에서 삭제·비HTTPS 요청 explicit Deny); 추가 ROSA 관리 정책 활성화·적용 후에는 지정한 공통 역할 4개·정책 10개와 역할별 짝 정책 연결을 관리(접두사 seokpan-fnd-rosa, 경로 /, 권한 경계 미지정); rosa: 자기 Backend 외 서비스·IAM 권한은 아직 없음 |
 
 - foundation / rosa에 필요한 권한은 각 Root 구현 PR에서 **필요한 Service / Action / Resource만** `terraform/bootstrap/iam.tf`에 추가합니다. bootstrap apply 후 해당 Root를 실행합니다.
 - `iam:PassRole`은 대상 Role ARN과 `iam:PassedToService` 조건으로 제한합니다. 생성하는 IAM Role에는 필요하면 Permissions Boundary를 둡니다.
 - ROSA Role의 기반 자원 확인은 읽기 전용 조회 권한으로 해결하며, foundation State 읽기 권한을 주지 않습니다. (03 §3-F.15.2)
+
+### ROSA 공통 IAM 추가 권한의 지원 범위
+
+- bootstrap의 추가 권한 생성 설정은 기본적으로 비활성이다.
+- 활성화·적용하면 `seokpan-tf-foundation-rosa-iam` 관리형 정책을
+  `seokpan-tf-foundation` 실행 역할에 연결한다.
+- Foundation의 공통 IAM 자원 생성 설정도 기본적으로 비활성이다.
+- 현재 지원하는 공통 IAM 입력은 접두사 `seokpan-fnd-rosa`,
+  IAM 경로 `/`, 공통 역할의 권한 경계 미지정(`null`)이다.
+- 생성 활성 시 다른 경로나 권한 경계를 지정하면
+  정책 묶음 검사 조건이 Plan 단계에서 중단한다.
+- 다른 경로나 권한 경계가 필요하면 Foundation 입력과 bootstrap
+  실행 권한을 함께 보완하고 별도로 리뷰한다.
+- 클러스터 전용 Operator 역할·OIDC·ROSA 클러스터 및 ROSA 실행
+  역할의 서비스 권한은 이번 Foundation 관리 정책의 범위가 아니다.
+- 이 설명은 코드의 선언 범위다. 실제 권한 적용과 실효 권한 검증
+  완료를 의미하지 않는다.
+- 상세 준비 절차와 모의시험 결과는 [ROSA 공통 IAM 준비 문서](terraform/foundation/ROSA_IAM_PREPARATION.md)를 확인합니다.
 
 후속 foundation / rosa 서비스·IAM 권한 변경 PR 확인 항목:
 

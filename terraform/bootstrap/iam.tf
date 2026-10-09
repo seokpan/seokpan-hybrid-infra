@@ -1,8 +1,10 @@
 # Terraform 실행 Role (03 §3-C.4, §3-F.4.2, §3-F.15)
 # - Root(bootstrap / foundation / rosa)별 실행 Role을 bootstrap이 소유
 # - 사람 IAM User + MFA 조건으로만 AssumeRole 허용
-# - 현재 단계: foundation Role은 자기 State/Lock 및 아래 tf_foundation_registry_ci(Registry/CI),
-#   tf_foundation_data(Data 계층) 블록의 지정 자원 관리 권한을 가짐
+# - foundation 실행 역할의 선언 범위: 자기 State/Lock, Registry/CI, Data 및 Network 관리 권한
+# - ROSA 공통 IAM 추가 관리 권한은 rosa_iam_execution.tf의 활성화 설정과 적용을 통해 연결
+#   지정한 역할 4개·정책 10개, 경로 /, 권한 경계 미지정 구성을 대상으로 함
+# - 실제 적용·실효 권한 확인은 각 실행 결과로 별도 기록
 #   각 Root 구현 PR에서 필요한 Action/Resource만 이 파일에 추가
 #   (PassRole은 대상 Role ARN + iam:PassedToService 조건으로 제한, bootstrap apply 후 해당 Root 실행)
 
@@ -60,6 +62,12 @@ resource "aws_iam_role" "tf" {
 # 객체 접근 범위(자기 접두사), State/Version/버킷 삭제 금지는 버킷 정책(main.tf)에서 제한
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "tf_bootstrap" {
+  source_policy_documents = (
+    var.enable_rosa_account_iam_permissions
+    ? [data.aws_iam_policy_document.tf_bootstrap_rosa_iam.json]
+    : []
+  )
+
   statement {
     sid       = "ManageStateBucket"
     actions   = ["s3:*"]
