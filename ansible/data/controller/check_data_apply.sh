@@ -105,7 +105,7 @@ if [ "$DB" = "null" ]; then ng "RDS를 찾지 못함"; else
   chk "클래스"            "$(jq -r '.DBInstanceClass' <<<"$DB")" "db.t4g.small"
   chk "Multi-AZ"          "$(jq -r '.MultiAZ' <<<"$DB")" "true"
   chk "Primary · Standby AZ 다름" "$(jq -r '(.AvailabilityZone != .SecondaryAvailabilityZone) and (.SecondaryAvailabilityZone != null)' <<<"$DB")" "true"
-  chk "스토리지"          "$(jq -r '"\(.StorageType) \(.AllocatedStorage)GiB 암호화=\(.StorageEncrypted) 자동확장=\(.MaxAllocatedStorage // "끔")"' <<<"$DB")" "gp3 20GiB 암호화=true 자동확장=끔"
+  chk "스토리지"          "$(jq -r '"\(.StorageType) \(.AllocatedStorage)GiB 암호화=\(.StorageEncrypted) 자동확장=\(if (.MaxAllocatedStorage // 0) == 0 then "끔" else .MaxAllocatedStorage end)"' <<<"$DB")" "gp3 20GiB 암호화=true 자동확장=끔"
   chk "공개 접근"         "$(jq -r '.PubliclyAccessible' <<<"$DB")" "false"
   chk "CA"                "$(jq -r '.CACertificateIdentifier' <<<"$DB")" "rds-ca-rsa2048-g1"
   chk "SG = ${P}-rds 하나" "$(jq -r --arg s "$RDS_SG" '[.VpcSecurityGroups[].VpcSecurityGroupId] == [$s]' <<<"$DB")" "true"

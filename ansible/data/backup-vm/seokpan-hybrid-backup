@@ -18,7 +18,7 @@ log(){ printf '%s\t%s\t%s\t%s\n' "$T_START" "$ID" "$1" "$2" >> "$ST/history.tsv"
 fail(){ [ "$ID" = - ] || rm -f "$OUTD/$ID".*.part; log FAIL "$1"; exit 1; }
 
 # S3 실패 사본 재전송 (03 문서 3-D.9.5절 "실패 재시도": 같은 Backup ID 암호문만, 제한 재전송)
-#   - 이번 회차 S3 업로드가 성공했을 때만 호출 (S3가 살아난 것을 확인한 뒤)
+#   - 이번 회차 S3 업로드가 성공하고, 이번 회차 결과를 기록한 뒤에만 호출 (10단계)
 #   - 회당 최대 RESEND_MAX개, 시작 후 RESEND_BUDGET초가 지나면 새 재전송을 시작하지 않음
 #     항목 하나는 최대 240초(확인 60 + 업로드 120 + 확인 60)라, 기본값(300초)이면 마지막 항목이
 #     약 540초에 끝나 서비스 TimeoutStartSec=600 안에 들어감. RESEND_BUDGET을 300보다 올리면
@@ -141,13 +141,6 @@ else
 fi
 T_COPY=$(now)
 
-# 7-1. S3 실패 사본 재전송 — 이번 회차 S3가 성공했을 때만 (재전송 결과는 s3-resend.tsv)
-RESEND_MAX=${RESEND_MAX:-4}
-RESEND_BUDGET=${RESEND_BUDGET:-300}
-if [ "$S3" = ok ] && [ -s "$ST/s3-pending" ]; then
-  resend_pending
-fi
-
 # 8. 로컬 보관 정리 (일반 사본 KEEP_DAYS일)
 find "$OUTD" -maxdepth 1 -name "$ID_PREFIX-*.sql.gz.age" -mtime +"$KEEP_DAYS" -delete
 
@@ -164,3 +157,15 @@ elif [ "$S3" = fail ] && [ "$CP" = ok ]; then
 else
   log FAIL "transfer $D"; exit 1
 fi
+
+# 10. S3 실패 사본 재전송 — 이번 회차 결과(history.tsv · last-success)를 먼저 기록한 뒤에만
+#     재전송이 길어져 서비스가 TimeoutStartSec에 강제 종료돼도 이번 회차 기록은 이미 남아 있음.
+#     FAIL 회차는 위에서 exit 1로 끝나므로 여기에 오지 않음. S3=ok인 OK 회차에서만 실행 (결과는 s3-resend.tsv)
+RESEND_MAX=${RESEND_MAX:-4}
+RESEND_BUDGET=${RESEND_BUDGET:-300}
+if [ "$S3" = ok ] && [ -s "$ST/s3-pending" ]; then
+  resend_pending
+fi
+
+# 이번 회차는 9단계에서 OK · PARTIAL로 기록됨 — 재전송 결과는 서비스 종료 코드에 넣지 않음 (s3-resend.tsv에 남음)
+exit 0
