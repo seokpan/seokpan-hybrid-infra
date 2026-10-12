@@ -23,6 +23,7 @@
 #
 # 종료 코드: 0 = 모두 OK, 1 = NG가 하나 이상,
 #            2 = 판정 불가 (도구 · 자격증명 · 접속 실패, MIN_OK가 2 미만, OK 회차가 아직 MIN_OK개 안 됨)
+#            판정 불가여도 그 앞 단계에서 NG가 하나라도 나왔으면 1
 
 set -uo pipefail
 exec 2> >(sed -u -E 's/[0-9]{12}/<계정>/g' >&2)   # AccessDenied 등 오류 메시지의 계정 번호 가리기
@@ -82,6 +83,7 @@ TIMER=$(sed -n '/^#TIMER$/,$p' <<<"$RAW" | sed '1d' | paste -sd' ')
 echo "[1] last-success · Backup ID · T_DUMP가 같은 시각인가"
 if [ "$LAST" = "NO-LAST-SUCCESS" ]; then
   echo "  --  last-success 없음 — OK 회차가 아직 없음 (history.tsv의 FAIL 이유 확인)"
+  [ "$NG" -gt 0 ] && { echo "== 결과: NG ${NG}개 (나머지는 판정 불가)"; exit 1; }
   echo "== 결과: 판정 불가"; exit 2
 fi
 IFS=$'\t' read -r L_TIME L_ID L_SUM <<<"$LAST"
@@ -122,7 +124,8 @@ echo "[3] 최근 OK 회차 간격 (기대 ${INTERVAL}초 ± ${TOL}초)"
 mapfile -t OKS < <(awk -F'\t' '$3=="OK" && $2 ~ /^periodic-/' <<<"$HIST" | tail -n "$MIN_OK")
 if [ "${#OKS[@]}" -lt "$MIN_OK" ]; then
   echo "  --  OK 회차 ${#OKS[@]}개 — ${MIN_OK}개 이상 쌓인 뒤 다시 실행"
-  echo "== 결과: 판정 불가 (NG ${NG}개는 위 항목 참고)"; exit 2
+  [ "$NG" -gt 0 ] && { echo "== 결과: NG ${NG}개 (간격은 판정 불가)"; exit 1; }
+  echo "== 결과: 판정 불가"; exit 2
 else
   prev=""
   for line in "${OKS[@]}"; do
