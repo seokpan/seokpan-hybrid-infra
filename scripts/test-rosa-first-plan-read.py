@@ -75,17 +75,12 @@ for node in tree.body:
 
 require(isinstance(fixtures, str), "기존 시험용 구성을 찾지 못했습니다.")
 
-old = "    ]\n  )\n\n  test_inline_totals"
-new = (
-    "    ],\n"
-    "    aws_iam_role_policy.tf_rosa_first_plan_read,\n"
-    "  )\n\n  test_inline_totals"
-)
 require(
-    fixtures.count(old) == 1,
-    "기존 정책 합계 계산 구조를 확인해야 합니다."
+    fixtures.count(
+        "    aws_iam_role_policy.tf_rosa_first_plan_read,"
+    ) == 1,
+    "기존 시험 구성에 조회 정책이 정확히 한 번 포함돼야 합니다."
 )
-fixtures = fixtures.replace(old, new, 1)
 
 fixtures += '''
 variable "test_expected_read" {
