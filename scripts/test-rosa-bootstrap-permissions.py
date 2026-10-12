@@ -72,14 +72,16 @@ if len(binaries) != 1:
 
 iam_path = bootstrap / "iam.tf"
 execution_path = bootstrap / "rosa_iam_execution.tf"
+read_path = bootstrap / "rosa_plan_read_permissions.tf"
 lock = bootstrap / ".terraform.lock.hcl"
 
-for path in (iam_path, execution_path, lock):
+for path in (iam_path, execution_path, read_path, lock):
     if path.is_symlink() or not path.is_file():
         stop("기존 bootstrap 코드 또는 잠금 파일을 확인해야 합니다.")
 
 iam = iam_path.read_text(encoding="utf-8")
 execution = execution_path.read_text(encoding="utf-8")
+read_source = read_path.read_text(encoding="utf-8")
 
 inline_declarations = set()
 for path in bootstrap.glob("*.tf"):
@@ -93,6 +95,7 @@ if inline_declarations != {
     "tf_backend",
     "tf_foundation_registry_ci",
     "tf_foundation_data",
+    "tf_rosa_first_plan_read",
 }:
     stop("개별 역할 정책 선언이 달라졌습니다. 합계 검사 범위를 보완해야 합니다.")
 
@@ -135,7 +138,7 @@ def canonical_source(text):
 
 
 if canonical_source(iam.replace(hook, "", 1)) != canonical_source(
-    baseline.stdout
+    baseline.stdout.replace(hook, "", 1)
 ):
     stop("조건부 연결 외에 기존 IAM 선언의 차이가 있습니다. 별도 검토가 필요합니다.")
 
@@ -309,7 +312,8 @@ locals {
       aws_iam_role_policy.tf_bootstrap,
       aws_iam_role_policy.tf_foundation_registry_ci,
       aws_iam_role_policy.tf_foundation_data,
-    ]
+    ],
+    aws_iam_role_policy.tf_rosa_first_plan_read,
   )
 
   test_inline_totals = {
@@ -459,6 +463,9 @@ with tempfile.TemporaryDirectory(
     (work / "rosa_iam_execution.tf").write_text(
         annotate_documents(execution), encoding="utf-8"
     )
+    (work / "rosa_plan_read_permissions.tf").write_text(
+        annotate_documents(read_source), encoding="utf-8"
+    )
     (work / "fixtures.tf").write_text(fixtures, encoding="utf-8")
     (work / "versions.tf").write_text(
         'terraform {\n  required_version = "1.16.4"\n'
@@ -545,6 +552,8 @@ with tempfile.TemporaryDirectory(
         '  command = apply\n'
         '  variables {\n'
         '    enable_rosa_account_iam_permissions = true\n'
+        '    enable_rosa_plan_read_permissions = true\n'
+        '    rosa_plan_foundation_vpc_id = "vpc-0123456789abcdef0"\n'
         '  }\n'
     )
     test += assertion(
@@ -560,6 +569,12 @@ with tempfile.TemporaryDirectory(
     test += assertion(
         "jsonencode(output.test_new_documents) == jsonencode(var.test_expected_documents)",
         "생성된 정책 문서의 작업·대상·조건이 승인한 범위와 다릅니다.",
+    )
+
+    test += assertion(
+        "length(aws_iam_role_policy.tf_rosa_first_plan_read) == 1"
+        ' && aws_iam_role_policy.tf_rosa_first_plan_read[0].role == "seokpan-tf-rosa"',
+        "활성 상태의 조회 정책 개수 또는 연결 역할이 다릅니다.",
     )
 
     bootstrap_sids = [
@@ -653,6 +668,7 @@ with tempfile.TemporaryDirectory(
         '  command = apply\n'
         '  variables {\n'
         '    enable_rosa_account_iam_permissions = false\n'
+        '    enable_rosa_plan_read_permissions = false\n'
         '  }\n'
     )
     test += assertion(
@@ -672,6 +688,18 @@ with tempfile.TemporaryDirectory(
     test += assertion(
         "alltrue([for size in values(output.test_sizes.inline_totals) : size <= 10240])",
         "비활성 설정에서 역할별 개별 정책 합계가 크기 제한을 초과합니다.",
+    )
+    test += "}\n"
+
+    test = test[:-2]
+    test += assertion(
+        "length(aws_iam_role_policy.tf_rosa_first_plan_read) == 0",
+        "비활성 상태에서 조회 정책이 남았습니다.",
+    )
+    test += assertion(
+        "run.enabled.test_sizes.inline_totals.rosa"
+        " > output.test_sizes.inline_totals.rosa",
+        "조회 정책이 ROSA 역할의 전체 정책 합계에 반영되지 않았습니다.",
     )
     test += "}\n"
 
@@ -772,6 +800,7 @@ with tempfile.TemporaryDirectory(
     print("통과: 권한 경계 미지정 역할 생성 조건")
     print("통과: 관리형 정책 6144자 및 역할별 개별 정책 합계 10240자 제한")
     print("통과: 지원 범위 밖 요청의 구조적 차단 10개")
+    print("통과: 선택적 조회 정책의 활성·비활성 및 합계 반영")
     print("통과: 활성·비활성 모의시험 2개")
     print("확인: 계정·ARN·버킷은 시험용 값입니다.")
 
