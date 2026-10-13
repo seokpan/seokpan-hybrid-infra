@@ -16,7 +16,7 @@
 | `controller/restore.sh` (controller 없는 복원용 사본) | hybrid-recovery-db-01 `/usr/local/lib/seokpan-hybrid-recovery/` | 700 root:root | (위와 같음) |
 | `controller/table_hashes.sh` (controller 없는 복원용 사본) | hybrid-recovery-db-01 `/usr/local/lib/seokpan-hybrid-recovery/` | 700 root:root | (위와 같음) |
 | `controller/check_data_apply.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `359e779d0e33` |
-| `controller/check_backup_gate.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `9d21774a4255` |
+| `controller/check_backup_gate.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `fe3d3c3dd03f` |
 
 Git은 실행 권한을 755 · 644로만 기록하므로, 설치할 때 위 권한을 지정합니다.
 

@@ -117,8 +117,12 @@ if [ "$DB" = "null" ]; then ng "RDS를 찾지 못함"; else
 
   PARAMS=$(aws_ rds describe-db-parameters --db-parameter-group-name "${P}-mariadb118" --source user \
     --query 'Parameters[].[ParameterName,ParameterValue]' | jq -r 'map("\(.[0])=\(.[1])") | sort | join(" ")')
-  chk "사용자 지정 파라미터 5개" "$PARAMS" \
-    "character_set_server=utf8mb4 collation_server=utf8mb4_unicode_ci require_secure_transport=1 sql_mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION time_zone=Asia/Seoul"
+  # require_secure_transport는 값이 엔진 기본값(1)과 같으면 Source가 user로 잡히지 않으므로 값만 따로 본다
+  chk "사용자 지정 파라미터 4개" "$(tr ' ' '\n' <<<"$PARAMS" | grep -v '^require_secure_transport=' | paste -sd' ')" \
+    "character_set_server=utf8mb4 collation_server=utf8mb4_unicode_ci sql_mode=STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION time_zone=Asia/Seoul"
+  chk "TLS 강제 (require_secure_transport)" \
+    "$(aws_ rds describe-db-parameters --db-parameter-group-name "${P}-mariadb118" \
+      --query "Parameters[?ParameterName=='require_secure_transport'].ParameterValue | [0]" | jq -r '.')" "1"
 fi
 
 # ---------------------------------------------------------------- 4. Valkey
