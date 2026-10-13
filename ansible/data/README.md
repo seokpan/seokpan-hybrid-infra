@@ -11,8 +11,10 @@
 | `backup-vm/seokpan-hybrid-backup.timer` | hybrid-backup-01 `/etc/systemd/system/` | 644 root:root | `ed1afefbbc1a` |
 | `backup-vm/backup.env.example` | 견본 → hybrid-backup-01 `/etc/seokpan-hybrid-backup/backup.env` | 600 root:root | (견본, 값은 환경별) |
 | `recovery-db-vm/seokpan-recv-copy` | hybrid-recovery-db-01 `/usr/local/sbin/` | 755 root:root | `f400647f9ff8` |
-| `controller/restore.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `e6444667ff47` |
+| `controller/restore.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `0440f66554ab` |
 | `controller/table_hashes.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `5beac6da6e9c` |
+| `controller/restore.sh` (controller 없는 복원용 사본) | hybrid-recovery-db-01 `/usr/local/lib/seokpan-hybrid-recovery/` | 700 root:root | (위와 같음) |
+| `controller/table_hashes.sh` (controller 없는 복원용 사본) | hybrid-recovery-db-01 `/usr/local/lib/seokpan-hybrid-recovery/` | 700 root:root | (위와 같음) |
 | `controller/check_data_apply.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `359e779d0e33` |
 | `controller/check_backup_gate.sh` | controller(ksh) `~/recovery/` | 700 ksh:ksh | `9d21774a4255` |
 
@@ -50,6 +52,8 @@ sha256sum /usr/local/sbin/seokpan-hybrid-backup | cut -c1-12            # 표와
 - **예행 사본:** `rehearsal-*`는 `--rehearsal`(자동 선택 대상을 예행 사본으로) 또는 `--id`로 지정했을 때만 선택되고, 결과와 기록에 `TEST`로 남습니다. 운영 판정에 쓰지 않습니다.
 - **`--id`:** 원격 명령에 넣기 전에 형식 · 날짜 · 미래 시각을 검사하고, 틀리면 종료 코드 2로 멈춥니다. 지정한 사본의 SHA-256이 틀리면 다른 사본으로 대체하지 않고 멈춥니다.
 - **`--select-only`:** 1단계(선택 · SHA-256)까지만 실행하고 선택 결과만 출력합니다. 복구 DB를 바꾸지 않습니다.
+- **`--key <경로>`:** 해독 키를 지정합니다(기본: 김상희 키). 이유빈 키나 오프라인 사본으로 복원할 때 씁니다. 키 파일은 600 · 400 권한이고 age 개인키 줄이 있어야 하며, 기록(`.times`)에는 키 파일의 SHA-256 앞 12자리만 남깁니다.
+- **`--local`:** controller 없이 복구 DB VM에서 root로 직접 실행합니다. SSH를 쓰지 않고 같은 단계(선택 · SHA-256 · 해독 · 가져오기 · 검증)를 그 호스트에서 실행하며, 호스트 이름이 `hybrid-recovery-db-01`이 아니면 멈춥니다. 원본 비교 수단이 없으므로 `--compare-src`는 함께 쓸 수 없습니다. 키는 메모리 파일시스템(`/dev/shm`)에 두고 끝나면 지웁니다(절차는 #48 C장). 기록은 실행 계정의 `~/recovery/`(VM에서는 `/root/recovery/`)에 남습니다.
 
 `table_hashes.sh`는 8개 테이블의 행 수 · 행 해시 · Schema 해시를 출력해 원본과 복원본을 비교합니다. 조회가 하나라도 실패하거나(접속 실패 · 쿼리 오류 · PK 없음) 테이블 수가 `--expect-tables` 값과 다르면 stderr에 이유를 쓰고 종료 코드 1로 끝나며, `restore.sh`는 그때 T4로 진행하지 않습니다. 장애 시에는 원본이 없으므로 SHA-256 · 해독 · 가져오기 종료 코드 · Revision · 테이블 8개로 판정합니다(#48).
 
