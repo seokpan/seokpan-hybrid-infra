@@ -32,9 +32,13 @@ resource "aws_db_parameter_group" "mariadb" {
   }
 
   # 11.8은 기본값이 이미 1이지만, 설계 요구(TLS 필수)를 코드에 드러내기 위해 명시
+  # 기본값과 같은 값은 AWS가 engine-default로 저장해 조회 시 적용 방식이 pending-reboot으로 돌아온다.
+  # 코드도 같은 값으로 맞춰 매 plan마다 수정 1개가 남는 영구 드리프트를 막는다.
+  # Terraform은 이 설정으로 DB를 재부팅하지 않으며, 값이 이미 1이라 실제로 바뀌는 것은 없다.
   parameter {
-    name  = "require_secure_transport"
-    value = "1"
+    name         = "require_secure_transport"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   # 1차 stone_game 기본 문자셋과 동일
