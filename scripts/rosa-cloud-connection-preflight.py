@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
-"""Human-run Cloud connection probe. No application start, migration or DB writes.
+"""Human-run Cloud Pull authentication, connection and protected input preparation.
+No application start, migration or database writes.
 
 Reuses management/SG/Data receipts. Creates an owned application Namespace if
 absent and one bounded, temporary Pod using the approved Backend image. Secret
 values travel in memory/stdin only; output contains status and counts.
 """
 import argparse
+import base64
 import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import ssl
 import subprocess
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 
 
 class Stop(Exception):
@@ -203,6 +207,243 @@ class Runner:
         return json.loads(result.stdout) if result.stdout.strip() else None
 
 
+PULL_SECRET = 'seokpan-cloud-ecr-pull'
+PULL_SERVICE_ACCOUNT = 'seokpan-cloud-runtime'
+OWNERSHIP_LABELS = {'app.kubernetes.io/part-of': 'seokpan', 'seokpan.io/environment': 'cloud'}
+ECR_READ = ['ecr:BatchGetImage', 'ecr:GetDownloadUrlForLayer',
+            'ecr:BatchCheckLayerAvailability', 'ecr:DescribeImages']
+
+
+def pull_session_policy(account):
+    require(re.fullmatch(r'[0-9]{12}', account) is not None, 'AWS_ACCOUNT_FORMAT')
+    repos = ['arn:aws:ecr:ap-northeast-2:' + account + ':repository/seokpan-fnd-' + k
+             for k in ('backend', 'frontend')]
+    # Explicit denies also constrain resource-policy grants to the session.
+    return {'Version': '2012-10-17', 'Statement': [
+        {'Effect': 'Allow', 'Action': ['ecr:GetAuthorizationToken'], 'Resource': '*',
+         'Condition': {'StringEquals': {'aws:RequestedRegion': 'ap-northeast-2'}}},
+        {'Effect': 'Allow', 'Action': ECR_READ, 'Resource': repos,
+         'Condition': {'StringEquals': {'aws:RequestedRegion': 'ap-northeast-2'}}},
+        {'Effect': 'Deny', 'NotAction': ECR_READ + ['ecr:GetAuthorizationToken', 'sts:GetCallerIdentity'], 'Resource': '*'},
+        {'Effect': 'Deny', 'Action': ECR_READ, 'NotResource': repos}]}
+
+
+def pull_error_classes(text):
+    rules = {
+        'AUTHENTICATION_REQUIRED': r'no basic auth credentials|authentication required|unauthorized|status.?code.?401|401 Unauthorized',
+        'REGISTRY_ACCESS_DENIED': r'pull access denied|403 Forbidden|status.?code.?403|denied:|AccessDenied',
+        'IMAGE_OR_DIGEST_NOT_FOUND': r'manifest unknown|name unknown|not found|ImageNotFound',
+        'NETWORK_DNS_OR_TIMEOUT': r'no such host|lookup .* failed|i/o timeout|timed out|network is unreachable|connection refused',
+        'REGISTRY_TLS': r'x509:|certificate.*(?:unknown|invalid|expired)|certificate verify',
+        'PLATFORM_MANIFEST': r'no matching manifest|no image found.*architecture'}
+    return [key for key, pattern in rules.items() if re.search(pattern, text, re.I)]
+
+
+def previous_pull_diagnostic(r, previous, namespace, root):
+    previous = previous.resolve()
+    require(previous.parent == root.resolve() and previous.name.startswith('cloud-connection-'),
+            'PREVIOUS_CLOUD_RESULT_SCOPE')
+    require(read_json(previous / 'stop.json').get('phase') == 'NAMESPACE_AND_APPROVED_IMAGE_PROBE',
+            'PREVIOUS_IMAGE_PULL_STOP_REQUIRED')
+    name = 'cloud-connection-probe-' + hashlib.sha256(previous.name.encode()).hexdigest()[:12]
+    events = r.get(['get', 'events', '-n', namespace, '--field-selector', 'involvedObject.name=' + name], 'previous-pull-events')
+    rows = events.get('items', [])
+    write_json(r.folder / 'previous-pull-events.json', events)
+    text = '\n'.join(str(x.get('message', '')) for x in rows)
+    result = {'event_count': len(rows), 'classes': pull_error_classes(text) or ['EVENTS_EXPIRED_OR_UNCLASSIFIED'],
+              'raw_messages': 'PROTECTED_NOT_EMITTED'}
+    write_json(r.folder / 'previous-pull-diagnostic.json', result)
+    emit('PREVIOUS_IMAGE_PULL_DIAGNOSTIC', **result)
+    return result
+
+
+def aws_json(args, env, label):
+    result = subprocess.run(['aws', '--region', 'ap-northeast-2', '--output', 'json',
+                             '--cli-connect-timeout', '10', '--cli-read-timeout', '30', *args],
+                            env=env, capture_output=True, timeout=50)
+    if result.returncode:
+        text = result.stderr.decode(errors='replace')
+        classes = pull_error_classes(text)
+        if re.search(r'AccessDenied|not authorized|UnauthorizedOperation', text, re.I):
+            classes = ['AWS_ACCESS_DENIED']
+        if re.search(r'ExpiredToken|InvalidClientTokenId|Unable to locate credentials|SignatureDoesNotMatch', text, re.I):
+            classes.append('AWS_CREDENTIALS')
+        emit('ECR_AUTH_STEP_FAILED', operation=label, classes=classes or ['UNCLASSIFIED'], raw_output='NOT_EMITTED')
+        raise Stop(label + '_FAILED_NO_IAM_CHANGE_OR_CREDENTIAL_FALLBACK')
+    return json.loads(result.stdout)
+
+
+def configure_ecr_pull(r, namespace, account, expected_user, image):
+    require(shutil.which('aws') is not None, 'EXISTING_AWS_CLI_REQUIRED')
+    require(re.fullmatch(r'[a-zA-Z0-9_+=,.@-]{1,64}', expected_user) is not None, 'EXPECTED_AWS_USERNAME_REQUIRED')
+    base_env = dict(r.env)
+    for key in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN',
+                'AWS_ROLE_ARN', 'AWS_WEB_IDENTITY_TOKEN_FILE', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE'):
+        base_env.pop(key, None)
+    base_env.update(AWS_PAGER='', AWS_MAX_ATTEMPTS='1')
+    caller = aws_json(['sts', 'get-caller-identity'], base_env, 'CONFIRMED_HUMAN_CALLER')
+    require(caller.get('Arn') == 'arn:aws:iam::' + account + ':user/' + expected_user,
+            'EXPECTED_HUMAN_IAM_USER_REQUIRED_NO_ROOT_OR_OTHER_ROLE')
+    policy = pull_session_policy(account)
+    policy_text = json.dumps(policy, separators=(',', ':'))
+    require(len(policy_text) <= 2048, 'ECR_SESSION_POLICY_SIZE')
+    session_name = 'seokpan-cloud-pull-' + hashlib.sha256(r.folder.name.encode()).hexdigest()[:8]
+    emit('CREATING_SCOPED_ECR_READ_SESSION', aws_iam_username=expected_user,
+         repositories=2, duration_seconds=43200, iam_policy_changes=0, push_or_delete_allowed=False)
+    session = aws_json(['sts', 'get-federation-token', '--name', session_name,
+                        '--duration-seconds', '43200', '--policy', policy_text], base_env, 'READ_ONLY_FEDERATION')
+    expected_arn = 'arn:aws:sts::' + account + ':federated-user/' + session_name
+    require(session.get('FederatedUser', {}).get('Arn') == expected_arn, 'FEDERATED_ECR_IDENTITY_MISMATCH')
+    credentials = session['Credentials']
+    env = dict(base_env, AWS_ACCESS_KEY_ID=credentials['AccessKeyId'],
+               AWS_SECRET_ACCESS_KEY=credentials['SecretAccessKey'], AWS_SESSION_TOKEN=credentials['SessionToken'])
+    require(aws_json(['sts', 'get-caller-identity'], env, 'SCOPED_PULL_CALLER').get('Arn') == expected_arn,
+            'SCOPED_ECR_CALLER_NOT_CONFIRMED')
+    digest = image.rsplit('@', 1)[1]
+    metadata = aws_json(['ecr', 'describe-images', '--repository-name', 'seokpan-fnd-backend',
+                         '--image-ids', 'imageDigest=' + digest], env, 'APPROVED_ECR_DIGEST_READ')
+    require(any(x.get('imageDigest') == digest for x in metadata.get('imageDetails', [])), 'APPROVED_DIGEST_NOT_PRESENT')
+    registry = account + '.dkr.ecr.ap-northeast-2.amazonaws.com'
+    tokens = aws_json(['ecr', 'get-authorization-token', '--registry-ids', account], env, 'SCOPED_ECR_AUTH_TOKEN')
+    rows = [x for x in tokens.get('authorizationData', []) if x.get('proxyEndpoint') == 'https://' + registry]
+    require(len(rows) == 1, 'ONE_EXACT_ECR_REGISTRY_TOKEN_REQUIRED')
+    token = rows[0]['authorizationToken']
+    require(base64.b64decode(token, validate=True).startswith(b'AWS:'), 'ECR_TOKEN_FORMAT')
+    def parse_time(value):
+        if isinstance(value, (int, float)):
+            return datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    expiry = min(parse_time(credentials['Expiration']), parse_time(rows[0]['expiresAt']))
+    require(expiry > datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1), 'ECR_SESSION_EXPIRY_TOO_CLOSE')
+    expiry_text = expiry.astimezone(datetime.timezone.utc).isoformat()
+    renew_text = (expiry - datetime.timedelta(hours=1)).astimezone(datetime.timezone.utc).isoformat()
+    secret_old = r.get(['get', 'secret', PULL_SECRET, '-n', namespace, '--ignore-not-found'], 'existing-pull-secret')
+    if secret_old is not None:
+        require(all(secret_old['metadata'].get('labels', {}).get(k) == v for k, v in OWNERSHIP_LABELS.items()) and
+                secret_old.get('type') == 'kubernetes.io/dockerconfigjson', 'EXISTING_PULL_SECRET_OWNERSHIP')
+    config = json.dumps({'auths': {registry: {'auth': token}}}, separators=(',', ':')).encode()
+    secret = {'apiVersion': 'v1', 'kind': 'Secret', 'type': 'kubernetes.io/dockerconfigjson',
+              'metadata': {'name': PULL_SECRET, 'namespace': namespace, 'labels': OWNERSHIP_LABELS,
+                           'annotations': {'seokpan.io/pull-expires-at': expiry_text,
+                                           'seokpan.io/pull-renew-before': renew_text,
+                                           'seokpan.io/pull-scope': 'two-project-repositories-read-only'}},
+              'data': {'.dockerconfigjson': base64.b64encode(config).decode()}}
+    # Server-side apply avoids a second credential copy in last-applied annotations.
+    r.run(['apply', '--server-side', '--field-manager=seokpan-cloud-pull', '-f', '-'], 'supply-ecr-pull-secret', json.dumps(secret).encode())
+    sa = r.get(['get', 'serviceaccount', PULL_SERVICE_ACCOUNT, '-n', namespace, '--ignore-not-found'], 'pull-service-account')
+    if sa is None:
+        sa = {'apiVersion': 'v1', 'kind': 'ServiceAccount', 'metadata': {
+              'name': PULL_SERVICE_ACCOUNT, 'namespace': namespace, 'labels': OWNERSHIP_LABELS},
+              'automountServiceAccountToken': False, 'imagePullSecrets': [{'name': PULL_SECRET}]}
+        r.run(['create', '-f', '-'], 'create-pull-service-account', json.dumps(sa).encode())
+    else:
+        require(all(sa['metadata'].get('labels', {}).get(k) == v for k, v in OWNERSHIP_LABELS.items()),
+                'EXISTING_RUNTIME_SERVICE_ACCOUNT_OWNERSHIP')
+        refs = sa.get('imagePullSecrets', [])
+        if not any(x.get('name') == PULL_SECRET for x in refs):
+            patch = {'imagePullSecrets': refs + [{'name': PULL_SECRET}]}
+            r.run(['patch', 'serviceaccount', PULL_SERVICE_ACCOUNT, '-n', namespace, '--type=merge',
+                   '-p', json.dumps(patch)], 'link-runtime-pull-secret')
+    receipt = {'status': 'PASS_NAMESPACE_SCOPED_READ_ONLY_ECR_PULL_CONFIGURED', 'repositories': 2,
+               'session_policy_sha256': hashlib.sha256(policy_text.encode()).hexdigest(),
+               'expires_at_utc': expiry_text, 'renew_before_utc': renew_text,
+               'iam_changes': 0, 'credentials_saved_outside_kubernetes_secret': False,
+               'service_account': PULL_SERVICE_ACCOUNT, 'secret': PULL_SECRET}
+    write_json(r.folder / 'ecr-pull-receipt.json', receipt)
+    env.clear();credentials.clear();session.clear();tokens.clear();config=b'';token='';secret.clear()
+    emit(**receipt)
+    return receipt
+
+
+ATS_ROOTS = (
+    ('AmazonRootCA1.pem', '8ecde6884f3d87b1125ba31ac3fcb13d7016de7f57cc904fe1cb97c6ae98196e'),
+    ('AmazonRootCA2.pem', '1ba5b2aa8c65401a82960118f80bec4f62304d83cec4713a19c39c011ea46db4'),
+    ('AmazonRootCA3.pem', '18ce6cfe7bf14e60b2e347b8dfe868cb31d02ebb3ada271569f50343b46db3a4'),
+    ('AmazonRootCA4.pem', 'e35d28419ed02025cfa69038cd623962458da5c695fbdea3c22b0bfb25897092'),
+    ('SFSRootCAG2.pem', '568d6905a2c88708a4b3025190edcfedb1974a606a13c6e5290fcb2ae63edab5'))
+
+
+def public_cas(previous=None):
+    if previous is not None:
+        for name in ('rds-ca.pem', 'valkey-ca-candidate.pem'):
+            require((previous/name).is_file() and not (previous/name).is_symlink(), 'PREVIOUS_PUBLIC_CA_REQUIRED')
+        rds_ca = (previous/'rds-ca.pem').read_bytes()
+        redis_ca = (previous/'valkey-ca-candidate.pem').read_text()
+    else:
+        rds_ca = download('https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem')
+        redis_ca = ''.join(download('https://www.amazontrust.com/repository/' + name).decode('ascii').strip()+'\n'
+                           for name, _ in ATS_ROOTS)
+    require(hashlib.sha256(rds_ca).hexdigest() == '913fb5b814f17af79d4c1622584a8d0ceddf5b0d76fe353d0c7d1186cdd6b229', 'ACCEPTED_RDS_CA_CHANGED')
+    roots = re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', redis_ca, re.S)
+    require(len(roots) == 5 and [hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() for pem in roots] ==
+            [digest for _, digest in ATS_ROOTS], 'OFFICIAL_ATS_ROOT_CHANGED')
+    return rds_ca, redis_ca
+
+
+def collect_probe_failure(r, pod, namespace):
+    events = r.get(['get', 'events', '-n', namespace, '--field-selector',
+                    'involvedObject.uid=' + pod['metadata']['uid']], 'probe-failure-events')
+    write_json(r.folder/'probe-failure-events.json', events)
+    text = '\n'.join(str(x.get('message', '')) for x in events.get('items', []))
+    emit('CURRENT_IMAGE_PULL_DIAGNOSTIC', event_count=len(events.get('items', [])),
+         classes=pull_error_classes(text) or ['UNCLASSIFIED_PROTECTED_EVENTS_SAVED'], raw_output='NOT_EMITTED')
+
+
+def cloud_input_objects(data, sql, auth, rds_ca, redis_ca, namespace):
+    require(all(isinstance(sql.get(k), str) and sql[k] for k in ('identity_svc', 'game_svc')) and
+            isinstance(auth.get('redis_auth_token'), str) and bool(auth['redis_auth_token']), 'CLOUD_RUNTIME_SECRET_FIELDS_REQUIRED')
+    def url(user):
+        return 'mysql+asyncmy://' + user + ':' + urllib.parse.quote(sql[user], safe='') + '@' + data['rds_address'] + ':3306/stone_game?charset=utf8mb4'
+    def obj(kind, name, values):
+        item = {'apiVersion': 'v1', 'kind': kind, 'metadata': {
+                'name': name, 'namespace': namespace, 'labels': OWNERSHIP_LABELS}}
+        if kind == 'Secret':
+            item.update(type='Opaque', data={k: base64.b64encode(v.encode()).decode() for k, v in values.items()})
+        else:item['data'] = values
+        return item
+    return [obj('Secret', 'backend-db-runtime', {'SEOKPAN_IDENTITY_DATABASE_URL': url('identity_svc'),
+                                               'SEOKPAN_GAME_DATABASE_URL': url('game_svc')}),
+            obj('Secret', 'backend-redis-runtime', {'SEOKPAN_REDIS_AUTH_TOKEN': auth['redis_auth_token']}),
+            obj('ConfigMap', 'backend-database-ca', {'ca.crt': rds_ca.decode('ascii')}),
+            obj('ConfigMap', 'backend-redis-ca', {'ca.crt': redis_ca})]
+
+
+def supply_cloud_inputs(r, data, sql, auth, rds_ca, redis_ca, namespace, actual):
+    require(actual.get('rds_tls', {}).get('status') == 'PASS' and
+            actual.get('valkey_tls', {}).get('status') == 'PASS' and
+            actual.get('valkey_auth_ping', {}).get('status') == 'PASS', 'VERIFIED_TLS_AND_VALKEY_AUTH_REQUIRED_BEFORE_SUPPLY')
+    objects = cloud_input_objects(data, sql, auth, rds_ca, redis_ca, namespace)
+    for item in objects:
+        old = r.get(['get', item['kind'].lower(), item['metadata']['name'], '-n', namespace, '--ignore-not-found'],
+                    'existing-' + item['metadata']['name'])
+        require(old is None or all(old['metadata'].get('labels', {}).get(k) == v for k, v in OWNERSHIP_LABELS.items()),
+                'EXISTING_APP_INPUT_OWNERSHIP_REQUIRES_REVIEW')
+    for item in objects:
+        r.run(['apply', '--server-side', '--field-manager=seokpan-cloud-inputs', '-f', '-'],
+              'supply-' + item['metadata']['name'], json.dumps(item).encode())
+    for item in objects:
+        observed = r.get(['get', item['kind'].lower(), item['metadata']['name'], '-n', namespace],
+                         'verify-' + item['metadata']['name'])
+        require(observed.get('data') == item['data'] and
+                (item['kind'] != 'Secret' or observed.get('type') == 'Opaque'),
+                'ACTUAL_CLOUD_INPUT_CONTENT_MISMATCH_NO_APP_ACTIVATION')
+    result = {'status': 'PASS_CLOUD_RUNTIME_SECRETS_AND_CA_SUPPLIED', 'secrets': 2, 'configmaps': 2, 'actual_contents_match': True,
+              'runtime_accounts_grants_and_schema': 'NOT_ACCEPTED_BY_SUPPLY', 'application_started': False}
+    objects.clear()
+    emit(**result)
+    return result
+
+
+def pool_candidate(maximum):
+    # Proposed only: 2 engines x 1 process x (3 replicas + surge + terminating) + reserve 10.
+    if type(maximum) is not int or maximum < 20:return None
+    size = 2 if maximum >= 30 else 1
+    return {'pool_size_per_engine': size, 'max_overflow': 0, 'pool_timeout_seconds': 1,
+            'engines_per_process': 2, 'processes_per_pod': 1, 'simultaneous_pod_budget': 5,
+            'reserved_connections': 10, 'total_connections_budget': 2 * size * 5 + 10,
+            'observed_max_connections': maximum, 'adopted': False}
+
+
 def load_optional_secret(path, expected_prefix, fields):
     status = {'available': path.is_file(), 'decrypt': 'NOT_RUN'}
     if not path.is_file():
@@ -230,9 +471,15 @@ def main():
     parser.add_argument('--data-sha256', required=True)
     parser.add_argument('--backend-image', required=True)
     parser.add_argument('--namespace', default='seokpan-cloud')
+    parser.add_argument('--resume-from', type=Path, help='Reuse the preceding failed Pull result and its public CA files')
+    parser.add_argument('--configure-ecr-pull', action='store_true', help='Create a separately restricted read-only federation session and Namespace pull secret')
+    parser.add_argument('--expected-aws-user', help='Confirmed human IAM user used only to mint the restricted ECR session')
+    parser.add_argument('--refresh-ecr-pull-only', action='store_true', help='Renew the namespaced pull secret without starting a probe or reading Data secrets')
+    parser.add_argument('--supply-cloud-inputs', action='store_true', help='After verified TLS/AUTH, supply only the two runtime Secrets and two CA ConfigMaps')
     args = parser.parse_args()
     require(os.name == 'posix' and os.getuid() != 0, 'USE_PERSONAL_CONTROLLER_LINUX_ACCOUNT')
     require(re.fullmatch(r'seokpan-cloud(?:-[a-z0-9]+)?', args.namespace) is not None, 'DEDICATED_CLOUD_NAMESPACE_REQUIRED')
+    require(not args.refresh_ecr_pull_only or args.configure_ecr_pull, 'REFRESH_REQUIRES_SCOPED_ECR_CONFIGURATION')
     os.umask(0o077)
     root = args.input_root
     # Derive the already accepted cluster identity without repeating creation/readiness.
@@ -264,33 +511,14 @@ def main():
     try:
         server = r.run(['whoami', '--show-server'], 'server').stdout.decode().strip()
         require(server.rstrip('/') == handoff['api_url'].rstrip('/'), 'WRONG_CLUSTER_CONTEXT')
+        if args.resume_from is not None:
+            previous_pull_diagnostic(r, args.resume_from, args.namespace, root)
         data = approved_data(args.data_file.read_bytes(), args.data_sha256)
         ingress = r.get(['get', 'ingress.config.openshift.io', 'cluster'], 'ingress-domain')
         domain = ingress['spec']['domain']
         require(isinstance(domain, str) and re.fullmatch(r'apps\.[a-z0-9.-]+\.openshiftapps\.com', domain) is not None,
                 'ACTUAL_ROSA_INGRESS_DOMAIN_REQUIRED')
         origin = 'https://' + args.namespace + '.' + domain
-        rds_ca = download('https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem')
-        require(hashlib.sha256(rds_ca).hexdigest() == '913fb5b814f17af79d4c1622584a8d0ceddf5b0d76fe353d0c7d1186cdd6b229', 'ACCEPTED_RDS_CA_CHANGED')
-        # ATS recommends all five roots for custom trust stores. Verify each
-        # official root; never trust a certificate copied from an unverified peer.
-        root_specs = (
-            ('AmazonRootCA1.pem', '8ecde6884f3d87b1125ba31ac3fcb13d7016de7f57cc904fe1cb97c6ae98196e'),
-            ('AmazonRootCA2.pem', '1ba5b2aa8c65401a82960118f80bec4f62304d83cec4713a19c39c011ea46db4'),
-            ('AmazonRootCA3.pem', '18ce6cfe7bf14e60b2e347b8dfe868cb31d02ebb3ada271569f50343b46db3a4'),
-            ('AmazonRootCA4.pem', 'e35d28419ed02025cfa69038cd623962458da5c695fbdea3c22b0bfb25897092'),
-            ('SFSRootCAG2.pem', '568d6905a2c88708a4b3025190edcfedb1974a606a13c6e5290fcb2ae63edab5'))
-        roots = []
-        for name, digest in root_specs:
-            pem = download('https://www.amazontrust.com/repository/' + name).decode('ascii')
-            require(hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() == digest, 'OFFICIAL_ATS_ROOT_CHANGED')
-            roots.append(pem.strip() + '\n')
-        redis_ca = ''.join(roots)
-        (folder / 'rds-ca.pem').write_bytes(rds_ca)
-        (folder / 'valkey-ca-candidate.pem').write_text(redis_ca)
-        sql, sql_status = load_optional_secret(Path.home() / 'secrets/seokpan/data-sql-accounts.sops.yaml', '021bd0da994a', ('db_admin', 'identity_svc', 'game_svc'))
-        auth, auth_status = load_optional_secret(Path.home() / 'secrets/seokpan/foundation-data.sops.yaml', '9a86f90e6ba6', ('redis_auth_token',))
-        emit('CLOUD_PROTECTED_INPUTS_READ', sql=sql_status, valkey=auth_status, secret_values_printed=False)
         phase = 'NAMESPACE_AND_APPROVED_IMAGE_PROBE'
         ns = r.get(['get', 'namespace', args.namespace, '--ignore-not-found'], 'namespace')
         if ns is None:
@@ -302,9 +530,26 @@ def main():
             labels = ns['metadata'].get('labels', {})
             require(labels.get('app.kubernetes.io/part-of') == 'seokpan' and labels.get('seokpan.io/environment') == 'cloud',
                     'EXISTING_NAMESPACE_OWNERSHIP_REQUIRES_REVIEW')
+        if args.configure_ecr_pull:
+            phase = 'SCOPED_ECR_PULL_CONFIGURATION'
+            configure_ecr_pull(r, args.namespace, account, args.expected_aws_user or '', args.backend_image)
+            renew = folder/'refresh-ecr-pull.sh'
+            argv = ['python3', str(Path(__file__).resolve()), str(root.resolve()),
+                    '--data-file', str(args.data_file.resolve()), '--data-sha256', args.data_sha256,
+                    '--backend-image', args.backend_image, '--namespace', args.namespace,
+                    '--expected-aws-user', args.expected_aws_user, '--configure-ecr-pull', '--refresh-ecr-pull-only']
+            renew.write_text('#!/usr/bin/env bash\nset -euo pipefail\nexec '+shlex.join(argv)+'\n')
+            renew.chmod(0o700)
+            print('ECR refresh command: bash '+shlex.quote(str(renew)), flush=True)
+        if args.refresh_ecr_pull_only:
+            return 0
+        phase = 'NAMESPACE_AND_APPROVED_IMAGE_PROBE'
         run_id = hashlib.sha256(folder.name.encode()).hexdigest()[:12]
         name = 'cloud-connection-probe-' + run_id
         obj = probe_pod(name, args.namespace, args.backend_image, run_id)
+        if args.configure_ecr_pull:
+            obj['spec']['serviceAccountName'] = PULL_SERVICE_ACCOUNT
+            obj['spec']['imagePullSecrets'] = [{'name': PULL_SECRET}]
         pod = json.loads(r.run(['create', '-f', '-', '-o', 'json'], 'probe-create', json.dumps(obj).encode()).stdout)
         deadline = time.monotonic() + 150
         observed = pod
@@ -313,6 +558,11 @@ def main():
             state = observed.get('status', {})
             if state.get('phase') in ('Failed', 'Succeeded'):
                 raise Stop('PROBE_TERMINATED_BEFORE_CONNECTION_CHECK')
+            waiting = [x.get('state', {}).get('waiting', {}).get('reason')
+                       for x in state.get('containerStatuses', [])]
+            if any(x in ('ImagePullBackOff', 'ErrImagePull') for x in waiting):
+                write_json(folder/'probe-failed-pod.json', observed)
+                raise Stop('APPROVED_IMAGE_PULL_FAILED_DIAGNOSTIC_SAVED_BEFORE_CLEANUP')
             if any(x.get('type') == 'Ready' and x.get('status') == 'True' for x in state.get('conditions', [])):
                 break
             time.sleep(5)
@@ -326,17 +576,36 @@ def main():
         write_json(folder / 'probe-pod.json', observed)
         emit('PASS_APPROVED_ECR_BACKEND_POD_RUNNING', compute_node=True, pod_count=1, app_server_started=False)
         phase = 'CLOUD_TLS_AUTH_AND_READ_ONLY_SQL'
+        rds_ca, redis_ca = public_cas(args.resume_from)
+        (folder/'rds-ca.pem').write_bytes(rds_ca)
+        (folder/'valkey-ca-candidate.pem').write_text(redis_ca)
+        sql, sql_status = load_optional_secret(Path.home() / 'secrets/seokpan/data-sql-accounts.sops.yaml', '021bd0da994a', ('db_admin', 'identity_svc', 'game_svc'))
+        auth, auth_status = load_optional_secret(Path.home() / 'secrets/seokpan/foundation-data.sops.yaml', '9a86f90e6ba6', ('redis_auth_token',))
+        emit('CLOUD_PROTECTED_INPUTS_LOADED_FOR_CONNECTION', sql=sql_status, valkey=auth_status, secret_values_printed=False)
         payload = dict(data, rds_ca=rds_ca.decode('ascii'), redis_ca=redis_ca,
                        db_admin_password=sql.get('db_admin'), redis_auth_token=auth.get('redis_auth_token'))
         result = r.run(['exec', '-i', '-n', args.namespace, name, '--', 'python', '-c', PROBE],
                        'connection-probe', json.dumps(payload).encode(), timeout=110)
-        sql.clear();auth.clear();payload.clear()
+        payload.clear()
         actual = json.loads(result.stdout)
         write_json(folder / 'connection-result.json', actual)
         emit('CLOUD_ACTUAL_CONNECTION_RESULTS', **actual)
+        supply = {'status': 'NOT_REQUESTED'}
+        if args.supply_cloud_inputs:
+            if (actual.get('rds_tls', {}).get('status') == 'PASS' and actual.get('valkey_tls', {}).get('status') == 'PASS'
+                    and actual.get('valkey_auth_ping', {}).get('status') == 'PASS'
+                    and all(sql.get(k) for k in ('identity_svc', 'game_svc'))):
+                phase = 'CLOUD_RUNTIME_SECRET_AND_CA_SUPPLY'
+                supply = supply_cloud_inputs(r, data, sql, auth, rds_ca, redis_ca, args.namespace, actual)
+            else:
+                supply = {'status': 'PENDING_TLS_AUTH_OR_PROTECTED_RUNTIME_FIELDS'}
+                emit('CLOUD_INPUT_SUPPLY_PENDING', reason=supply['status'])
+        sql.clear();auth.clear()
         ca_accepted = actual.get('valkey_tls', {}).get('status') == 'PASS'
         sql_result = actual.get('sql_read_only', {})
         budget = sql_result.get('max_connections') if sql_result.get('status') == 'PASS' else None
+        pool = pool_candidate(budget)
+        if pool:emit('DB_POOL_CANDIDATE_FROM_MEASUREMENT', **pool)
         # This is a proposal. Never silently adopt a pool budget or start writers.
         pending = []
         if not budget:pending.append('C_RDS_MAX_CONNECTIONS_OR_DB_ADMIN_ACCOUNT')
@@ -353,14 +622,20 @@ def main():
         write_json(folder / 'cloud-platform-inputs.json', {'cluster_id': management.name, 'namespace': args.namespace,
                    'route_origin_candidate': origin, 'game_lifecycle_candidate': 'captured', 'backend_initial_replica_candidate': 1,
                    'database_pool_adopted': False, 'database_max_connections_observed': budget,
+                   'database_pool_candidate': pool, 'runtime_service_account': PULL_SERVICE_ACCOUNT if args.configure_ecr_pull else None,
+                   'runtime_inputs_supply': supply,
                    'valkey_ca_candidate_verified_on_actual_endpoint': ca_accepted, 'ready_for_app_activation': False,
                    'pending': pending})
         receipt = {'status': 'CLOUD_CONNECTION_PREFLIGHT_COMPLETED', 'actual': actual, 'namespace_prepared': True,
                    'protected_runtime_candidate_prepared': True, 'valkey_ca_endpoint_verified': ca_accepted,
+                   'runtime_inputs_supply': supply, 'database_pool_candidate': pool,
                    'app_started': False, 'migration': 'NOT_RUN', 'pending': pending}
         write_json(folder / 'receipt.json', receipt)
         emit('CLOUD_PRIVATE_RUNTIME_CANDIDATE_PREPARED', pending=pending, app_started=False)
     except Exception as exc:
+        if pod is not None and phase == 'NAMESPACE_AND_APPROVED_IMAGE_PROBE':
+            try:collect_probe_failure(r, pod, args.namespace)
+            except Exception:emit('PULL_EVENT_COLLECTION_UNAVAILABLE', raw_output='NOT_EMITTED')
         reason = str(exc) if isinstance(exc, Stop) else type(exc).__name__
         emit('STOP_CLOUD_CONNECTION_PREFLIGHT', phase=phase, reason=reason, app_started=False, database_writes=0)
         write_json(folder / 'stop.json', {'phase': phase, 'reason': reason})
