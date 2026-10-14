@@ -119,8 +119,16 @@ for address, r in n.items():
     require(o[address]['change']['actions'] == ['create'], 'ORIGINAL_SCOPE_UNEXPECTED')
     expected = ['no-op'] if address == 'terraform_data.input_contract' else ['create']
     require(r['change']['actions'] == expected, 'UNEXPECTED_ACTION')
-    require(known_equal(o[address]['change']['after'], r['change']['after']), 'KNOWN_VALUE_DELTA')
-require(n['terraform_data.input_contract']['change']['after'].get('id') == sys.argv[3], 'CONTRACT_STATE_MISMATCH')
+    before, after = o[address]['change']['after'], r['change']['after']
+    if address == 'terraform_data.input_contract':
+        require(before.get('id') is None and before.get('output') is None, 'ORIGINAL_CONTRACT_UNEXPECTED')
+        require(set(after) == set(before) | {'id', 'output'}, 'CONTRACT_FIELD_DELTA')
+        require(after.get('id') == sys.argv[3], 'CONTRACT_STATE_MISMATCH')
+        require('input' in after and after['output'] == after['input'], 'CONTRACT_OUTPUT_NOT_INPUT')
+        strip = lambda value: {k: v for k, v in value.items() if k not in ('id', 'output')}
+        require(known_equal(strip(before), strip(after)), 'CONTRACT_INPUT_DELTA')
+    else:
+        require(known_equal(before, after), 'KNOWN_VALUE_DELTA')
 require(not new.get('resource_drift'), 'UNEXPECTED_DRIFT')
 checks = new.get('checks', [])
 require(len(checks) == 17 and all(c.get('status') == 'pass' for c in checks), 'PLAN_CHECK_NOT_PASS')
