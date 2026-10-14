@@ -57,7 +57,7 @@ if version["terraform_version"] != "1.16.4":
 
 platform = version["platform"]
 provider_folder = (
-    foundation
+    Path(os.environ.get("SEOKPAN_TEST_PROVIDER_ROOT", str(foundation)))
     / ".terraform/providers/registry.terraform.io/hashicorp/aws"
     / "6.67.0"
     / platform
@@ -73,15 +73,17 @@ if len(binaries) != 1:
 iam_path = bootstrap / "iam.tf"
 execution_path = bootstrap / "rosa_iam_execution.tf"
 read_path = bootstrap / "rosa_plan_read_permissions.tf"
+cluster_path = bootstrap / "rosa_cluster_iam_execution.tf"
 lock = bootstrap / ".terraform.lock.hcl"
 
-for path in (iam_path, execution_path, read_path, lock):
+for path in (iam_path, execution_path, read_path, cluster_path, lock):
     if path.is_symlink() or not path.is_file():
         stop("기존 bootstrap 코드 또는 잠금 파일을 확인해야 합니다.")
 
 iam = iam_path.read_text(encoding="utf-8")
 execution = execution_path.read_text(encoding="utf-8")
 read_source = read_path.read_text(encoding="utf-8")
+cluster_source = cluster_path.read_text(encoding="utf-8")
 
 inline_declarations = set()
 for path in bootstrap.glob("*.tf"):
@@ -96,6 +98,7 @@ if inline_declarations != {
     "tf_foundation_registry_ci",
     "tf_foundation_data",
     "tf_rosa_first_plan_read",
+    "tf_rosa_cluster_iam",
 }:
     stop("개별 역할 정책 선언이 달라졌습니다. 합계 검사 범위를 보완해야 합니다.")
 
@@ -253,6 +256,284 @@ expected_bootstrap = {
     ),
 }
 
+
+import fnmatch
+
+def check_cluster_scope(document, account, policy_names):
+    statements = document.get("Statement", [])
+    tails = [
+        "openshift-cloud-credential-operator-cloud-crede",
+        "openshift-cloud-network-config-controller-cloud",
+        "openshift-cluster-csi-drivers-ebs-cloud-credent",
+        "openshift-image-registry-installer-cloud-creden",
+        "openshift-ingress-operator-cloud-credentials",
+        "openshift-machine-api-aws-cloud-credentials",
+    ]
+    roles = [
+        "arn:aws:iam::" + account + ":role/seokpan-cloud-op-" + tail
+        for tail in tails
+    ]
+    policies = [
+        "arn:aws:iam::" + account + ":policy/seokpan-fnd-rosa-" + tail
+        for tail in tails
+    ]
+    role_actions = [
+        "iam:CreateRole", "iam:GetRole", "iam:TagRole",
+        "iam:ListRolePolicies", "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole", "iam:DeleteRole",
+    ]
+    oidc_actions = [
+        "iam:CreateOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:TagOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviderTags",
+        "iam:DeleteOpenIDConnectProvider",
+    ]
+
+    def values(value):
+        return value if isinstance(value, list) else [value]
+
+    expected_actions = set(
+        role_actions + oidc_actions
+        + ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+    )
+    actual_actions = {
+        action
+        for statement in statements
+        for action in values(statement.get("Action", []))
+    }
+    if actual_actions != expected_actions:
+        raise ValueError("새 정책의 작업 목록이 요청 범위와 다릅니다.")
+
+    for statement in statements:
+        if set(statement) - {
+            "Sid", "Effect", "Action", "Resource", "Condition"
+        }:
+            raise ValueError("검사하지 못하는 정책 문법이 있습니다.")
+
+    def allowed(action, resource, context=None):
+        context = {
+            key.lower(): value
+            for key, value in (context or {}).items()
+        }
+        effects = []
+
+        for statement in statements:
+            if not any(
+                fnmatch.fnmatchcase(action.lower(), item.lower())
+                for item in values(statement.get("Action", []))
+            ):
+                continue
+
+            if not any(
+                fnmatch.fnmatchcase(resource, item)
+                for item in values(statement.get("Resource", []))
+            ):
+                continue
+
+            matched = True
+
+            for operator, entries in statement.get("Condition", {}).items():
+                if operator not in (
+                    "StringEquals", "StringEqualsIfExists", "ArnEquals"
+                ):
+                    raise ValueError("조건 연산자의 검사 보완이 필요합니다.")
+
+                for key, expected in entries.items():
+                    present = key.lower() in context
+
+                    if not present:
+                        if operator != "StringEqualsIfExists":
+                            matched = False
+                    elif context[key.lower()] not in values(expected):
+                        matched = False
+
+            if matched:
+                effects.append(statement.get("Effect"))
+
+        return "Allow" in effects and "Deny" not in effects
+
+    cases = []
+
+    def case(label, expected, action, resource, context=None):
+        cases.append(
+            (label, expected, allowed(action, resource, context))
+        )
+
+    other_account = (
+        "111111111111"
+        if account != "111111111111"
+        else "222222222222"
+    )
+
+    for role in roles:
+        for action in role_actions:
+            case("지정 역할 작업 허용", True, action, role)
+
+    for action in role_actions:
+        case(
+            "다른 역할 거부", False, action,
+            "arn:aws:iam::" + account + ":role/unrelated-role"
+        )
+        case(
+            "다른 IAM 경로 거부", False, action,
+            roles[0].replace(":role/", ":role/other/")
+        )
+        case(
+            "다른 계정 역할 거부", False, action,
+            roles[0].replace(account, other_account)
+        )
+
+    for index, role in enumerate(roles):
+        for action in ("iam:AttachRolePolicy", "iam:DetachRolePolicy"):
+            for policy_index, policy in enumerate(policies):
+                case(
+                    "역할별 짝 정책 제한",
+                    index == policy_index,
+                    action, role,
+                    {"iam:PolicyARN": policy}
+                )
+
+            case("정책 조건 누락 거부", False, action, role)
+            case(
+                "다른 정책 거부", False, action, role,
+                {
+                    "iam:PolicyARN":
+                        "arn:aws:iam::" + account + ":policy/unrelated-policy"
+                }
+            )
+
+    for action in (
+        "iam:PassRole", "iam:PutRolePolicy",
+        "iam:UpdateAssumeRolePolicy", "iam:CreatePolicy"
+    ):
+        case("요청하지 않은 작업 거부", False, action, roles[0])
+
+    oidc = (
+        "arn:aws:iam::" + account
+        + ":oidc-provider/example.invalid/project"
+    )
+    tags = {
+        "Project": "seokpan",
+        "Phase": "2",
+        "Component": "rosa",
+    }
+    request_tags = {
+        "aws:RequestTag/" + key: value
+        for key, value in tags.items()
+    }
+    resource_tags = {
+        "aws:ResourceTag/" + key: value
+        for key, value in tags.items()
+    }
+
+    case(
+        "생성 요청 태그 일치", True,
+        "iam:CreateOpenIDConnectProvider", oidc, request_tags
+    )
+
+    for key in request_tags:
+        missing = dict(request_tags)
+        missing.pop(key)
+        wrong = dict(request_tags)
+        wrong[key] = "other"
+
+        case(
+            "생성 요청 태그 누락 거부", False,
+            "iam:CreateOpenIDConnectProvider", oidc, missing
+        )
+        case(
+            "생성 요청 태그 불일치 거부", False,
+            "iam:CreateOpenIDConnectProvider", oidc, wrong
+        )
+
+    for action in (
+        "iam:GetOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviderTags",
+        "iam:DeleteOpenIDConnectProvider"
+    ):
+        case("소유 OIDC 관리 허용", True, action, oidc, resource_tags)
+        case("태그 없는 기존 OIDC 관리 거부", False, action, oidc)
+
+        for key in resource_tags:
+            wrong = dict(resource_tags)
+            wrong[key] = "other"
+            case("다른 소유 OIDC 관리 거부", False, action, oidc, wrong)
+
+    case(
+        "소유 OIDC 태그 변경 허용", True,
+        "iam:TagOpenIDConnectProvider", oidc,
+        {**resource_tags, **request_tags}
+    )
+    case(
+        "소유 OIDC 일반 태그 추가 허용", True,
+        "iam:TagOpenIDConnectProvider", oidc, resource_tags
+    )
+    case(
+        "소유 표시 변경 거부", False,
+        "iam:TagOpenIDConnectProvider", oidc,
+        {
+            **resource_tags,
+            **request_tags,
+            "aws:RequestTag/Project": "other",
+        }
+    )
+    case(
+        "태그 없는 기존 OIDC 표시 추가 거부", False,
+        "iam:TagOpenIDConnectProvider", oidc, request_tags
+    )
+    case(
+        "다른 계정 OIDC 생성 거부", False,
+        "iam:CreateOpenIDConnectProvider",
+        oidc.replace(account, other_account), request_tags
+    )
+
+    # 태그 포함 생성 요청에도 자원 태그가 제공된다는 공식 문서를 반영합니다.
+    # https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html
+    creation_context = {**resource_tags, **request_tags}
+    case('태그 포함 생성 요청 허용', True, 'iam:CreateOpenIDConnectProvider', oidc, creation_context)
+    case('태그 포함 생성의 태그 권한 허용', True, 'iam:TagOpenIDConnectProvider', oidc, creation_context)
+    for key in list(request_tags) + list(resource_tags):
+        missing = dict(creation_context)
+        missing.pop(key)
+        wrong = dict(creation_context)
+        wrong[key] = 'other'
+        # 요청 태그 누락은 생성 작업에서 검사합니다.
+        # 자원 태그 누락은 태그 작업에서 검사합니다.
+        action = 'iam:CreateOpenIDConnectProvider' if key in request_tags else 'iam:TagOpenIDConnectProvider'
+        case('생성 맥락의 필수 태그 누락 차단', False, action, oidc, missing)
+        case('생성 맥락의 필수 태그 불일치 차단', False, 'iam:TagOpenIDConnectProvider', oidc, wrong)
+    failures = [
+        label
+        for label, expected, actual in cases
+        if expected != actual
+    ]
+
+    creation_tag_allowed = allowed('iam:TagOpenIDConnectProvider', oidc, creation_context)
+    print('태그 없는 기존 자원의 표시 추가 차단:', '통과' if not allowed('iam:TagOpenIDConnectProvider', oidc, request_tags) else '실패')
+
+    print("새 정책의 오프라인 허용·차단 사례:", len(cases), "개")
+    print("예상과 일치한 사례:", len(cases) - len(failures), "개")
+    print("예상과 다른 사례:", len(failures), "개")
+    print(
+        "태그 포함 생성 맥락의 태그 부착 허용:",
+        "예" if creation_tag_allowed else "아니오"
+    )
+    print("확인: 태그 포함 생성과 태그 없는 기존 자원을 구분해 검사했습니다.")
+    print("확인: 공식 문서에 따른 모의검사이며 실제 생성 성공 확인은 별도입니다.")
+    print("확인: 실제 AWS 정책 시뮬레이터나 생성 시험은 아닙니다.")
+
+    if failures:
+        raise ValueError("허용·차단 사례가 요청 범위와 다릅니다.")
+
+    return creation_tag_allowed
+
+cluster_test_policies = {
+    name: f"arn:aws:iam::{account}:policy/{name}"
+    for name in operator_names
+}
+
 fixtures = r'''
 # 이 Provider는 로컬 IAM 문서 생성에만 사용합니다.
 # 자원과 호출자 조회는 모의 Provider가 처리합니다.
@@ -314,6 +595,7 @@ locals {
       aws_iam_role_policy.tf_foundation_data,
     ],
     aws_iam_role_policy.tf_rosa_first_plan_read,
+    aws_iam_role_policy.tf_rosa_cluster_iam,
   )
 
   test_inline_totals = {
@@ -372,6 +654,9 @@ output "test_sizes" {
     )))
     inline_totals = local.test_inline_totals
   }
+}
+output "test_cluster_document" {
+  value = try(data.aws_iam_policy_document.tf_rosa_cluster_iam[0].json, null)
 }
 '''
 
@@ -466,6 +751,9 @@ with tempfile.TemporaryDirectory(
     (work / "rosa_plan_read_permissions.tf").write_text(
         annotate_documents(read_source), encoding="utf-8"
     )
+    (work / "rosa_cluster_iam_execution.tf").write_text(
+        annotate_documents(cluster_source), encoding="utf-8"
+    )
     (work / "fixtures.tf").write_text(fixtures, encoding="utf-8")
     (work / "versions.tf").write_text(
         'terraform {\n  required_version = "1.16.4"\n'
@@ -553,6 +841,8 @@ with tempfile.TemporaryDirectory(
         '  variables {\n'
         '    enable_rosa_account_iam_permissions = true\n'
         '    enable_rosa_plan_read_permissions = true\n'
+        '    enable_rosa_cluster_iam_permissions = true\n'
+        '    rosa_cluster_operator_policy_arns = ' + json.dumps(cluster_test_policies) + '\n'
         '    rosa_plan_foundation_vpc_id = "vpc-0123456789abcdef0"\n'
         '  }\n'
     )
@@ -661,6 +951,12 @@ with tempfile.TemporaryDirectory(
             ),
             f"승인한 역할과 짝 정책의 연결이 허용되지 않습니다: {key}",
         )
+    test += assertion(
+        "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 1"
+        ' && aws_iam_role_policy.tf_rosa_cluster_iam[0].name == "seokpan-tf-rosa-cluster-iam"'
+        ' && aws_iam_role_policy.tf_rosa_cluster_iam[0].role == "seokpan-tf-rosa"',
+        "새 설치권한 정책의 개수 또는 대상이 다릅니다.",
+    )
     test += "}\n"
 
     test += (
@@ -669,6 +965,7 @@ with tempfile.TemporaryDirectory(
         '  variables {\n'
         '    enable_rosa_account_iam_permissions = false\n'
         '    enable_rosa_plan_read_permissions = false\n'
+        '    enable_rosa_cluster_iam_permissions = false\n'
         '  }\n'
     )
     test += assertion(
@@ -700,6 +997,13 @@ with tempfile.TemporaryDirectory(
         "run.enabled.test_sizes.inline_totals.rosa"
         " > output.test_sizes.inline_totals.rosa",
         "조회 정책이 ROSA 역할의 전체 정책 합계에 반영되지 않았습니다.",
+    )
+    test += "}\n"
+
+    test = test[:-2]
+    test += assertion(
+        "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 0",
+        "비활성 상태에서 설치권한 정책이 남았습니다.",
     )
     test += "}\n"
 
@@ -807,3 +1111,56 @@ with tempfile.TemporaryDirectory(
 print("완료: 임시 구성·시험용 상태 파일·로그 자동 정리")
 print("확인: 실제 AWS 권한과 권한 경계·조직 정책의 성공을 뜻하지 않습니다.")
 print("미실행: 실제 Backend·AWS API 접속·실제 Foundation Plan·Apply")
+
+
+def find_cluster_documents(value):
+    if isinstance(value, dict):
+        entry = value.get("test_cluster_document")
+        if isinstance(entry, dict) and isinstance(entry.get("value"), str):
+            yield json.loads(entry["value"])
+        for child in value.values():
+            yield from find_cluster_documents(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from find_cluster_documents(child)
+
+documents = []
+for event in events:
+    documents.extend(find_cluster_documents(event))
+
+if not documents or not sizes:
+    stop("새 정책 문서 또는 전체 합계 결과를 읽지 못했습니다.")
+
+new_document = documents[0]
+creation_tag_allowed = check_cluster_scope(
+    new_document, account, operator_names
+)
+
+result_path = os.environ.get("SEOKPAN_CLUSTER_REVIEW_RESULT")
+
+if result_path:
+    Path(result_path).write_text(
+        json.dumps(
+            {
+                "기존 모의시험": "활성·비활성 2개 통과",
+                "새 정책 문자 수": len(json.dumps(
+                    new_document, separators=(",", ":")
+                )),
+                "활성 상태 역할별 전체 정책 합계":
+                    sizes[0]["inline_totals"],
+                "태그 포함 생성 맥락의 태그 부착 허용":
+                    creation_tag_allowed,
+                "PR 게시 준비 완료": creation_tag_allowed,
+                "확인 범위":
+                    "오프라인 검사이며 실제 AWS 생성 성공은 별도 검증",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(result_path, 0o600)
+
+if not creation_tag_allowed:
+    print("확인 필요: 생성 요청 태그만 있는 경우 태그 부착이 허용되지 않습니다.")
+    print("PR 게시 보류: 실제 생성 시 태그 권한 조건을 확정해야 합니다.")
