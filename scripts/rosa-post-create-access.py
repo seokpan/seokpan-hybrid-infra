@@ -119,6 +119,58 @@ def select_worker_group(instances, groups, ids, vpc, account, infra):
     require(len(candidates)==1,'WORKER_SG_NOT_UNIQUELY_PROVEN')
     return candidates[0]
 
+def diagnose_worker_error(path):
+    if not path.is_file() or path.is_symlink():
+        return {'classes':['NO_PREVIOUS_LOG'],'raw_output':'NOT_EMITTED'}
+    text=path.read_text(errors='replace')
+    rules={'ACCESS_DENIED':r'UnauthorizedOperation|AccessDenied|not authorized',
+           'EXPIRED_CREDENTIALS':r'ExpiredToken|InvalidClientTokenId|SignatureDoesNotMatch',
+           'NETWORK_TLS':r'timed out|Could not connect|SSL validation|certificate verify|NameResolutionError',
+           'CLI_ARGUMENTS':r'Unknown options|InvalidParameter|InvalidInstanceID|usage:'}
+    classes=[k for k,v in rules.items() if re.search(v,text,re.I)]
+    return {'classes':classes or ['UNCLASSIFIED'],'failed_action':'ec2:DescribeInstances','raw_output':'NOT_EMITTED'}
+
+def reference_matches_group(ref, group, account):
+    variants=[k for k in ('id','arn','filters') if ref.get(k)]
+    if len(variants)!=1:return False
+    if variants[0]=='id':return ref['id']==group['GroupId']
+    if variants[0]=='arn':return ref['arn']=='arn:aws:ec2:ap-northeast-2:'+account+':security-group/'+group['GroupId']
+    tags={t['Key']:t['Value'] for t in group.get('Tags',[])}
+    for f in ref['filters']:
+        key=f.get('name','');values=f.get('values',[])
+        if not isinstance(values,list) or not values or not all(isinstance(v,str) for v in values):return False
+        actual=tags.get(key[4:]) if key.startswith('tag:') else {'group-name':group.get('GroupName'),'group-id':group.get('GroupId'),'vpc-id':group.get('VpcId')}.get(key)
+        if actual not in values:return False
+    return True
+
+def select_machine_worker_group(nodes, machines, groups, vpc, account, infra):
+    _,ids=validate_nodes(nodes)
+    compute={n['metadata']['name']:n for n in nodes['items'] if 'node-role.kubernetes.io/worker' in n['metadata'].get('labels',{}) and not any(k in n['metadata'].get('labels',{}) for k in ('node-role.kubernetes.io/master','node-role.kubernetes.io/control-plane','node-role.kubernetes.io/infra'))}
+    linked={}
+    for machine in machines.get('items',[]):
+        node=machine.get('status',{}).get('nodeRef',{}).get('name')
+        if node not in compute:continue
+        require(node not in linked,'MULTIPLE_MACHINES_FOR_ONE_COMPUTE_NODE')
+        state=machine.get('status',{}).get('providerStatus') or {}
+        require(isinstance(state,dict),'MACHINE_PROVIDER_STATUS_FORMAT')
+        actual_id=compute[node]['spec']['providerID'].rsplit('/',1)[1]
+        require(state.get('instanceId')==actual_id and state.get('instanceState')=='running','MACHINE_NODE_INSTANCE_ID_OR_STATE_MISMATCH')
+        value=machine.get('spec',{}).get('providerSpec',{}).get('value',{})
+        require(value.get('kind')=='AWSMachineProviderConfig','AWS_MACHINE_PROVIDER_CONFIG_REQUIRED')
+        refs=value.get('securityGroups',[])
+        require(isinstance(refs,list) and bool(refs),'MACHINE_SECURITY_GROUP_REFERENCES_MISSING')
+        linked[node]=refs
+    require(set(linked)==set(compute) and len(linked)==3,'THREE_COMPUTE_MACHINES_NOT_LINKED')
+    candidates=[]
+    tag='kubernetes.io/cluster/'+infra
+    for g in groups.get('SecurityGroups',[]):
+        tags={t['Key']:t['Value'] for t in g.get('Tags',[])}
+        if g.get('VpcId')!=vpc or g.get('OwnerId')!=account or tags.get(tag) not in ('owned','shared'):continue
+        if infra+'-worker-sg' not in (g.get('GroupName'),tags.get('Name')):continue
+        if all(any(reference_matches_group(ref,g,account) for ref in refs) for refs in linked.values()):candidates.append(g['GroupId'])
+    require(len(candidates)==1,'WORKER_SG_NOT_UNIQUELY_PROVEN_FROM_MACHINE_REFERENCES')
+    return candidates[0]
+
 def extract_oc(archive, checksums, destination):
     rows=[]
     for line in checksums.splitlines():
@@ -349,6 +401,8 @@ def main():
     parser.add_argument('prior_result',type=Path)
     parser.add_argument('rosa_cli',type=Path)
     parser.add_argument('--input-sha256',required=True)
+    parser.add_argument('--resume-worker-sg',action='store_true',help='Reuse completed management access and continue only Worker SG/Data work')
+    parser.add_argument('--expected-aws-user',required=True,help='The human IAM username whose MFA is used')
     parser.add_argument('--connect-data',action='store_true',help='Apply only an automatically reviewed full Plan adding the two Worker-to-Data rules')
     a=parser.parse_args()
     os.umask(0o077)
@@ -368,66 +422,93 @@ def main():
     folder.mkdir(mode=0o700,parents=True,exist_ok=True);folder.chmod(0o700)
     r=Runner(folder)
     try:
-        r.phase='CLI_INSTALL'
-        tools=Path.home()/'.local/share/seokpan/oc-cli-4.20'
-        tools.mkdir(mode=0o700,parents=True,exist_ok=True)
-        oc=tools/'oc';tool_receipt=tools/'receipt.json'
-        if oc.exists():
-            require(not oc.is_symlink() and read_json(tool_receipt)['oc_sha256']==hashlib.sha256(oc.read_bytes()).hexdigest(),'CACHED_OC_CHANGED_OR_UNTRACKED')
+        if a.resume_worker_sg:
+            r.phase='REUSE_COMPLETED_MANAGEMENT'
+            tools=Path.home()/'.local/share/seokpan/oc-cli-4.20'
+            oc=tools/'oc'
+            require(oc.is_file() and not oc.is_symlink() and read_json(tools/'receipt.json')['oc_sha256']==hashlib.sha256(oc.read_bytes()).hexdigest(),'CACHED_OC_CHANGED_OR_MISSING')
+            kubeconfig=folder/'kubeconfig'
+            require(kubeconfig.is_file() and not kubeconfig.is_symlink(),'EXISTING_ROSA_KUBECONFIG_REQUIRED')
+            r.env['KUBECONFIG']=str(kubeconfig)
+            server=r.command([oc,'whoami','--show-server'],'management-server').stdout.decode().strip()
+            require(server.rstrip('/')==api.rstrip('/'),'EXISTING_MANAGEMENT_TARGET_CHANGED')
+            nodes=r.json_command([oc,'get','nodes','-o','json','--request-timeout=30s'],'nodes')
+            counts,worker_ids=validate_nodes(nodes)
+            operators=operator_summary(read_json(folder/'operators.json'))
+            require(not operators['not_settled'],'PREVIOUS_OPERATOR_PASS_RECEIPT_REQUIRED')
+            activate=folder/'activate.sh'
+            emit('REUSED_MANAGEMENT_ACCESS_AND_CONFIRMED_CURRENT_NODES',counts=counts,admin_creation_repeated=False,oc_installation_repeated=False)
+            diagnostic=diagnose_worker_error(folder/'worker-instances.stderr.log')
+            write_json(folder/'previous-worker-error-diagnostic.json',diagnostic)
+            emit('PREVIOUS_WORKER_QUERY_DIAGNOSTIC',**diagnostic)
         else:
-            emit('INSTALLING_OFFICIAL_OC_4_20')
-            base='https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable-4.20/'
-            for name in ('sha256sum.txt','openshift-client-linux.tar.gz'):
-                with urllib.request.urlopen(base+name,timeout=60) as response,(tools/name).open('wb') as f:
-                    shutil.copyfileobj(response,f)
-            receipt=extract_oc(tools/'openshift-client-linux.tar.gz',(tools/'sha256sum.txt').read_text(),oc)
-            receipt['official_release_channel']='stable-4.20'
-            write_json(tool_receipt,receipt)
-        emit('PASS_OC_INSTALLED_CHECKSUM_VERIFIED')
-        r.phase='TARGET_IDENTITY'
-        observed=r.json_command([a.rosa_cli,'describe','cluster','--cluster',cluster,'--output','json'],'rosa-cluster')
-        identity=validate_cluster_identity(observed,handoff,inputs)
-        emit('PASS_CLUSTER_IDENTITY',**identity)
-        r.phase='INITIAL_ADMIN'
-        admin=ensure_admin(r,a.rosa_cli,cluster,api)
-        emit('PASS_INITIAL_ADMIN_CREDENTIALS_PROTECTED',password_printed=False)
-        kubeconfig=folder/'kubeconfig'
-        require(not kubeconfig.is_symlink(),'KUBECONFIG_SYMLINK')
-        r.env['KUBECONFIG']=str(kubeconfig)
-        r.phase='MANAGEMENT_LOGIN'
-        logged_in=False
-        login_deadline=time.monotonic()+600
-        for attempt in range(31):
-            if time.monotonic()>login_deadline:break
-            if r.login(oc,api,admin,kubeconfig):
-                logged_in=True;break
-            if attempt==30:break
-            if attempt%3==0:emit('WAITING_INITIAL_ADMIN_ACTIVATION',elapsed_attempts=attempt+1)
-            time.sleep(20)
-        require(logged_in,'INITIAL_ADMIN_NOT_ACTIVE_OR_LOGIN_FAILED')
-        kubeconfig.chmod(0o600)
-        server=r.command([oc,'whoami','--show-server'],'management-server').stdout.decode().strip()
-        user=r.command([oc,'whoami'],'management-user').stdout.decode().strip()
-        require(server.rstrip('/')==api.rstrip('/') and user=='cluster-admin','MANAGEMENT_TARGET_OR_USER_MISMATCH')
-        emit('PASS_ROSA_MANAGEMENT_LOGIN',tls_verification=True)
-        activate=folder/'activate.sh'
-        activate.write_text('export PATH='+shlex.quote(str(tools))+':"$PATH"\nexport KUBECONFIG='+shlex.quote(str(kubeconfig))+'\n')
-        activate.chmod(0o600)
-        r.phase='NODE_OPERATOR_READS'
-        nodes=r.json_command([oc,'get','nodes','-o','json','--request-timeout=30s'],'nodes')
-        counts,worker_ids=validate_nodes(nodes)
-        for attempt in range(11):
-            operators=r.json_command([oc,'get','clusteroperators','-o','json','--request-timeout=30s'],'operators')
-            operators=operator_summary(operators)
-            if not operators['not_settled']:break
-            emit('WAITING_CLUSTER_OPERATORS_AFTER_ADMIN_SETUP',not_settled=operators['not_settled'])
-            if attempt<10:time.sleep(30)
-        emit('PASS_NINE_NODES_READY',counts=counts,operators=operators)
-        require(not operators['not_settled'],'CLUSTER_OPERATORS_NOT_SETTLED')
+            r.phase='CLI_INSTALL'
+            tools=Path.home()/'.local/share/seokpan/oc-cli-4.20'
+            tools.mkdir(mode=0o700,parents=True,exist_ok=True)
+            oc=tools/'oc';tool_receipt=tools/'receipt.json'
+            if oc.exists():
+                require(not oc.is_symlink() and read_json(tool_receipt)['oc_sha256']==hashlib.sha256(oc.read_bytes()).hexdigest(),'CACHED_OC_CHANGED_OR_UNTRACKED')
+            else:
+                emit('INSTALLING_OFFICIAL_OC_4_20')
+                base='https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable-4.20/'
+                for name in ('sha256sum.txt','openshift-client-linux.tar.gz'):
+                    with urllib.request.urlopen(base+name,timeout=60) as response,(tools/name).open('wb') as f:
+                        shutil.copyfileobj(response,f)
+                receipt=extract_oc(tools/'openshift-client-linux.tar.gz',(tools/'sha256sum.txt').read_text(),oc)
+                receipt['official_release_channel']='stable-4.20'
+                write_json(tool_receipt,receipt)
+            emit('PASS_OC_INSTALLED_CHECKSUM_VERIFIED')
+            r.phase='TARGET_IDENTITY'
+            observed=r.json_command([a.rosa_cli,'describe','cluster','--cluster',cluster,'--output','json'],'rosa-cluster')
+            identity=validate_cluster_identity(observed,handoff,inputs)
+            emit('PASS_CLUSTER_IDENTITY',**identity)
+            r.phase='INITIAL_ADMIN'
+            admin=ensure_admin(r,a.rosa_cli,cluster,api)
+            emit('PASS_INITIAL_ADMIN_CREDENTIALS_PROTECTED',password_printed=False)
+            kubeconfig=folder/'kubeconfig'
+            require(not kubeconfig.is_symlink(),'KUBECONFIG_SYMLINK')
+            r.env['KUBECONFIG']=str(kubeconfig)
+            r.phase='MANAGEMENT_LOGIN'
+            logged_in=False
+            login_deadline=time.monotonic()+600
+            for attempt in range(31):
+                if time.monotonic()>login_deadline:break
+                if r.login(oc,api,admin,kubeconfig):
+                    logged_in=True;break
+                if attempt==30:break
+                if attempt%3==0:emit('WAITING_INITIAL_ADMIN_ACTIVATION',elapsed_attempts=attempt+1)
+                time.sleep(20)
+            require(logged_in,'INITIAL_ADMIN_NOT_ACTIVE_OR_LOGIN_FAILED')
+            kubeconfig.chmod(0o600)
+            server=r.command([oc,'whoami','--show-server'],'management-server').stdout.decode().strip()
+            user=r.command([oc,'whoami'],'management-user').stdout.decode().strip()
+            require(server.rstrip('/')==api.rstrip('/') and user=='cluster-admin','MANAGEMENT_TARGET_OR_USER_MISMATCH')
+            emit('PASS_ROSA_MANAGEMENT_LOGIN',tls_verification=True)
+            activate=folder/'activate.sh'
+            activate.write_text('export PATH='+shlex.quote(str(tools))+':"$PATH"\nexport KUBECONFIG='+shlex.quote(str(kubeconfig))+'\n')
+            activate.chmod(0o600)
+            r.phase='NODE_OPERATOR_READS'
+            nodes=r.json_command([oc,'get','nodes','-o','json','--request-timeout=30s'],'nodes')
+            counts,worker_ids=validate_nodes(nodes)
+            for attempt in range(11):
+                operators=r.json_command([oc,'get','clusteroperators','-o','json','--request-timeout=30s'],'operators')
+                operators=operator_summary(operators)
+                if not operators['not_settled']:break
+                emit('WAITING_CLUSTER_OPERATORS_AFTER_ADMIN_SETUP',not_settled=operators['not_settled'])
+                if attempt<10:time.sleep(30)
+            emit('PASS_NINE_NODES_READY',counts=counts,operators=operators)
+            require(not operators['not_settled'],'CLUSTER_OPERATORS_NOT_SETTLED')
         r.phase='CLOUD_WORKER_SG_READS'
         helper=a.input_root/'source/scripts/tf-session.sh'
         raw=helper.read_bytes()
         require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()=='608a765e2ba40b472b2cb431223b48c396c00866','PURPOSE_AUTH_HELPER_CHANGED')
+        for key in ('AWS_PROFILE','AWS_DEFAULT_PROFILE'):
+            r.env.pop(key,None)
+        base_args=['env','-u','AWS_ACCESS_KEY_ID','-u','AWS_SECRET_ACCESS_KEY','-u','AWS_SESSION_TOKEN','aws','--region','ap-northeast-2','sts','get-caller-identity','--output','json']
+        base=r.json_command(base_args,'base-human-identity')
+        expected_user='arn:aws:iam::'+inputs['foundation']['account_id']+':user/'+a.expected_aws_user
+        require(base.get('Arn')==expected_user,'BASE_AWS_USER_NOT_EXPECTED_NO_MFA_REQUESTED')
+        emit('MFA_FOR_CONFIRMED_HUMAN_AWS_USER',aws_iam_username=a.expected_aws_user)
         code=getpass.getpass('AWS MFA for Cloud Worker SG reads (6 digits): ').strip()
         require(re.fullmatch(r'[0-9]{6}',code) is not None,'MFA_FORMAT')
         shell='set +x; source "$1" rosa >"$2" 2>&1 || exit $?; python3 -c '+shlex.quote("import os,json; print(json.dumps({k:os.environ[k] for k in ('AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN')}))")
@@ -437,14 +518,12 @@ def main():
         caller=r.json_command(aws+['sts','get-caller-identity'],'caller')
         account=inputs['foundation']['account_id']
         require(caller['Arn'].startswith('arn:aws:sts::'+account+':assumed-role/seokpan-tf-rosa/'),'WRONG_CLOUD_READ_ROLE')
-        instances=r.json_command(aws+['ec2','describe-instances','--instance-ids',*worker_ids],'worker-instances')
-        group_ids=sorted({g['GroupId'] for x in instances['Reservations'] for i in x['Instances'] for g in i.get('SecurityGroups',[])})
-        require(bool(group_ids),'WORKER_GROUP_IDS_EMPTY')
-        groups=r.json_command(aws+['ec2','describe-security-groups','--group-ids',*group_ids],'worker-security-groups')
-        group=select_worker_group(instances,groups,worker_ids,inputs['foundation']['vpc_id'],account,handoff['infra_id'])
+        machines=r.json_command([oc,'get','machines.machine.openshift.io','-n','openshift-machine-api','-o','json','--request-timeout=30s'],'worker-machine-definitions')
+        groups=r.json_command(aws+['ec2','describe-security-groups','--filters','Name=vpc-id,Values='+inputs['foundation']['vpc_id'],'Name=tag:kubernetes.io/cluster/'+handoff['infra_id']+',Values=owned,shared'],'worker-security-groups')
+        group=select_machine_worker_group(nodes,machines,groups,inputs['foundation']['vpc_id'],account,handoff['infra_id'])
         binding={'cluster_id':cluster,'worker_security_group_id':group,'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'evidence_reference':str(folder/'worker-security-groups.json')}
         write_json(folder/'worker-binding-input.json',binding)
-        result={'status':'PASS_MANAGEMENT_NODES_AND_CLOUD_WORKER_SG','node_counts':counts,'operators':operators,'worker_sg_unique_cluster_vpc_attachment_match':True,'data_ingress_rules_plan_apply':'NOT_RUN','app_deployment_tls_auth':'NOT_RUN','initial_admin':'CREATED_OR_REUSED_PRIVATE_CREDENTIALS','credential_or_endpoint_values_printed':False}
+        result={'status':'PASS_MANAGEMENT_NODES_AND_CLOUD_WORKER_SG','node_counts':counts,'operators':operators,'worker_sg_unique_cluster_vpc_machine_reference_match':True,'ec2_instance_attachment_read':'NOT_QUERIED_USE_MACHINE_SPEC_REFERENCE_EVIDENCE','data_ingress_rules_plan_apply':'NOT_RUN','app_deployment_tls_auth':'NOT_RUN','initial_admin':'CREATED_OR_REUSED_PRIVATE_CREDENTIALS','credential_or_endpoint_values_printed':False}
         write_json(folder/'receipt.json',result);emit(**result)
         if a.connect_data:
             data_result=connect_data(r,a.input_root,a.prior_result,inputs,binding)
