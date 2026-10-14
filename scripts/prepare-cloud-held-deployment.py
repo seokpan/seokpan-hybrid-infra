@@ -50,6 +50,28 @@ def blob_sha(raw):
     return hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
 
 
+def kubernetes_json_objects(raw):
+    """kubectl/oc create prints one JSON document for each visited resource."""
+    text = raw.decode('utf-8-sig') if isinstance(raw, bytes) else raw
+    decoder = json.JSONDecoder()
+    offset = 0
+    result = []
+    while offset < len(text):
+        if text[offset].isspace():
+            offset += 1
+            continue
+        obj, offset = decoder.raw_decode(text, offset)
+        require(isinstance(obj, dict), 'KUBERNETES_JSON_OBJECT_REQUIRED')
+        if obj.get('kind') == 'List':
+            items = obj.get('items')
+            require(isinstance(items, list) and all(isinstance(x, dict) for x in items), 'KUBERNETES_LIST_ITEMS_REQUIRED')
+            result.extend(items)
+        else:
+            result.append(obj)
+    require(bool(result), 'EMPTY_KUBERNETES_JSON_OUTPUT')
+    return result
+
+
 def runtime_values(text, contract):
     values = {}
     for line in text.splitlines():
@@ -95,6 +117,35 @@ def prepare_source(source, runtime, origin):
     routes = (overlay / 'routes.yaml').read_text()
     require(routes.count('rosa-route-host-input-required.invalid') == 3, 'ROUTE_SOURCE_CHANGED')
     (overlay / 'routes.yaml').write_text(routes.replace('rosa-route-host-input-required.invalid', origin[8:]))
+    return overlay
+
+
+def reuse_prepared_source(source, runtime, origin):
+    """Verify saved derived files without downloading the accepted source again."""
+    overlay = source / 'apps/overlays/cloud/runtime'
+    derived = 'apps/overlays/cloud/runtime/'
+    for name, expected in FILES.items():
+        path = source / name
+        require(path.is_file() and not path.is_symlink(), 'PREVIOUS_SOURCE_FILE_REQUIRED')
+        raw = path.read_bytes()
+        if name == derived + 'runtime.env':
+            require(path.read_text() == runtime, 'PREVIOUS_RUNTIME_CHANGED')
+            continue
+        if name == derived + 'kustomization.yaml':
+            value = path.read_text()
+            require(value.count('namespace: seokpan-cloud') == 1 and
+                    value.count('  - path: platform-hold.yaml\n') == 1, 'PREVIOUS_KUSTOMIZATION_CHANGED')
+            raw = value.replace('namespace: seokpan-cloud', 'namespace: cloud-input-required').replace(
+                '  - path: platform-hold.yaml\n', '').encode()
+        elif name == derived + 'routes.yaml':
+            value = path.read_text()
+            require(value.count(origin[8:]) == 3, 'PREVIOUS_ROUTES_CHANGED')
+            raw = value.replace(origin[8:], 'rosa-route-host-input-required.invalid').encode()
+        require(blob_sha(raw) == expected, 'PREVIOUS_SOURCE_CONTENT_CHANGED')
+    patch = overlay / 'platform-hold.yaml'
+    require(patch.is_file() and not patch.is_symlink(), 'PREVIOUS_HOLD_PATCH_REQUIRED')
+    expected_patch = '\n---\n'.join(json.dumps(hold_patch(n)) for n in ('backend', 'frontend')) + '\n'
+    require(patch.read_text() == expected_patch, 'PREVIOUS_HOLD_PATCH_CHANGED')
     return overlay
 
 
@@ -146,6 +197,7 @@ def validate(items, origin):
 def run(command, folder, name):
     result = subprocess.run(command, capture_output=True, timeout=90, stdin=subprocess.DEVNULL)
     (folder / (name + '.stderr')).write_bytes(result.stderr)
+    (folder / (name + '.stdout')).write_bytes(result.stdout)
     require(result.returncode == 0, name.upper() + '_FAILED_PROTECTED_LOG')
     return result.stdout
 
@@ -154,18 +206,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input_root', type=Path)
     parser.add_argument('completed_connection', type=Path)
+    parser.add_argument('--resume-from', type=Path, help='Reuse a failed private render folder; no source download or SQL retry')
     args = parser.parse_args()
     folder = None
+    phase = 'LOCAL_RECEIPT_READ'
+    input_name = None
     try:
         os.umask(0o077)
         require(os.name == 'posix' and __import__('pwd').getpwuid(os.getuid()).pw_name == 'jth', 'USE_JTH_CONTROLLER')
         root = args.input_root.resolve()
         connection = args.completed_connection.resolve()
         require(connection.parent == root and connection.name.startswith('cloud-connection-'), 'CONNECTION_PATH_SCOPE')
+        input_name = 'connection_receipt'
         receipt = read_json(connection / 'receipt.json')
+        input_name = 'cloud_platform_inputs'
         contract = read_json(connection / 'cloud-platform-inputs.json')
         cluster = contract.get('cluster_id', '')
         require(re.fullmatch(r'[a-z0-9]{10,64}', cluster) and contract.get('namespace') == 'seokpan-cloud', 'RECEIPT_IDENTITY')
+        input_name = 'data_platform_handoff'
         handoff = read_json(root / 'management' / cluster / 'data-platform-handoff.json')
         require(handoff.get('cluster_id') == cluster and handoff.get('binding_enabled') is True, 'COMPLETED_DATA_HANDOFF_REQUIRED')
         require(receipt.get('status') == 'CLOUD_CONNECTION_PREFLIGHT_COMPLETED' and receipt.get('app_started') is False,
@@ -173,41 +231,69 @@ def main():
         require(receipt.get('runtime_inputs_supply', {}).get('status') == 'PASS_CLOUD_RUNTIME_SECRETS_AND_CA_SUPPLIED',
                 'COMPLETED_PROTECTED_INPUT_SUPPLY_REQUIRED')
         runtime = (connection / 'runtime.env.INCOMPLETE').read_text()
+        phase = 'RUNTIME_ORIGIN_PARSE'
+        input_name = 'allowed_origins'
         origin, values = runtime_values(runtime, contract)
         folder = Path(tempfile.mkdtemp(prefix='cloud-held-render-', dir=root))
         source = folder / 'source'
-        for name, expected in FILES.items():
-            url = 'https://raw.githubusercontent.com/seokpan/seokpan-hybrid-gitops/' + SOURCE + '/' + name
-            with urllib.request.urlopen(url, timeout=25) as response:
-                raw = response.read(262145)
-            require(len(raw) <= 262144 and blob_sha(raw) == expected, 'PINNED_SOURCE_CONTENT_CHANGED')
-            path = source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(raw)
+        phase = 'SOURCE_REUSE_OR_DOWNLOAD'
+        reused_render = None
+        if args.resume_from:
+            previous = args.resume_from.resolve()
+            require(previous.parent == root and previous.name.startswith('cloud-held-render-'), 'PREVIOUS_RENDER_PATH_SCOPE')
+            require(not args.resume_from.is_symlink(), 'REGULAR_PREVIOUS_RENDER_DIRECTORY_REQUIRED')
+            source = previous / 'source'
+            overlay = reuse_prepared_source(source, runtime, origin)
+            prior_render = previous / 'held-render.yaml'
+            if prior_render.is_file() and not prior_render.is_symlink():
+                reused_render = prior_render.read_bytes()
+        else:
+            for name, expected in FILES.items():
+                url = 'https://raw.githubusercontent.com/seokpan/seokpan-hybrid-gitops/' + SOURCE + '/' + name
+                with urllib.request.urlopen(url, timeout=25) as response:
+                    raw = response.read(262145)
+                require(len(raw) <= 262144 and blob_sha(raw) == expected, 'PINNED_SOURCE_CONTENT_CHANGED')
+                path = source / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(raw)
+        phase = 'CANDIDATE_JSON_PARSE'
+        input_name = 'release_candidate'
         candidate = read_json(source / ('releases/' + RELEASE + '.json'))
         require(candidate.get('source', {}).get('app_sha') == APP and candidate.get('release_id') == RELEASE,
                 'RELEASE_SOURCE_MISMATCH')
         require(all(candidate['images'][k]['ecr_digest'] == v for k, v in DIGESTS.items()), 'RELEASE_ECR_PAIR_MISMATCH')
-        overlay = prepare_source(source, runtime, origin)
+        if not args.resume_from:
+            overlay = prepare_source(source, runtime, origin)
         oc = Path.home() / '.local/share/seokpan/oc-cli-4.20/oc'
         require(oc.is_file(), 'EXISTING_OC_REQUIRED')
         kube = root / 'management' / cluster / 'kubeconfig'
+        phase = 'MANAGEMENT_CONTEXT_JSON_PARSE'
+        input_name = 'oc_config_view'
         context = json.loads(run([str(oc), '--kubeconfig', str(kube), 'config', 'view', '--minify', '-o', 'json'], folder, 'context'))
         require(context['clusters'][0]['cluster']['server'].rstrip('/') == handoff['api_url'].rstrip('/'),
                 'WRONG_MANAGEMENT_CONTEXT')
+        phase = 'LOCAL_KUSTOMIZE_RENDER'
         rendered = run([str(oc), 'kustomize', str(overlay)], folder, 'kustomize')
+        if reused_render is not None:
+            require(rendered == reused_render, 'PREVIOUS_RENDER_CONTENT_CHANGED')
         rendered_path = folder / 'held-render.yaml'
         rendered_path.write_bytes(rendered)
+        phase = 'CLIENT_DRY_RUN'
         converted = run([str(oc), '--kubeconfig', str(kube), '--request-timeout=20s', 'create',
                          '--dry-run=client', '--validate=false', '-f', str(rendered_path), '-o', 'json'], folder, 'client-dry-run')
-        objects = json.loads(converted)
-        items = objects.get('items') if objects.get('kind') == 'List' else [objects]
+        phase = 'CLIENT_DRY_RUN_JSON_STREAM_PARSE'
+        input_name = 'oc_client_dry_run_stdout'
+        items = kubernetes_json_objects(converted)
+        phase = 'EXACT_OBJECT_CONTRACT'
         counts = validate(items, origin)
-        (folder / 'held-render.json').write_bytes(converted)
+        (folder / 'held-render.json').write_text(json.dumps({'apiVersion': 'v1', 'kind': 'List', 'items': items}))
         pending = ['C_DB_ADMIN_AUTH_AND_ACTUAL_LIMIT', 'B_POOL_ACCEPTANCE', 'C_FINAL_IMPORT_AND_RUNTIME_ACCOUNTS',
                    'B_ORIGINAL_WRITER_STOP_AND_CUTOVER', 'B_RESOURCE_AND_ACTIVATION_REVIEW']
         summary = {'status': 'PASS_PRIVATE_HELD_RENDER_CLIENT_VALIDATION', 'source_sha': SOURCE,
-                   'source_blob_checks': len(FILES), 'object_counts': counts,
+                   'source_blob_checks': 9 if args.resume_from else len(FILES), 'object_counts': counts,
+                   'source_reused': bool(args.resume_from), 'previous_render_identical': reused_render is not None,
+                   'original_blob_rechecks': 9 if args.resume_from else len(FILES),
+                   'runtime': 'EXACT_ACCEPTED_PRIVATE_RUNTIME',
                    'sql_auth_retry': False, 'secret_decryption': False, 'terraform': 'NOT_RUN',
                    'cluster_mutations': 0, 'application_started': False, 'ready_for_apply': False,
                    'server_admission': 'NOT_TESTED', 'discovery_reads': 'POSSIBLE_CLIENT_DRY_RUN_ONLY',
@@ -220,8 +306,14 @@ def main():
         return 0
     except Exception as exc:
         reason = str(exc) if isinstance(exc, ValueError) and re.fullmatch(r'[A-Z0-9_]+', str(exc)) else type(exc).__name__
-        print(json.dumps({'status': 'STOP_PRIVATE_HELD_RENDER', 'reason': reason, 'cluster_mutations': 0,
-                          'sql_auth_retry': False, 'application_started': False}, sort_keys=True))
+        error = {'status': 'STOP_PRIVATE_HELD_RENDER', 'reason': reason, 'phase': phase,
+                 'input_kind': input_name, 'cluster_mutations': 0, 'sql_auth_retry': False, 'application_started': False}
+        if isinstance(exc, json.JSONDecodeError):
+            error.update(json_line=exc.lineno, json_column=exc.colno, json_offset=exc.pos,
+                         json_extra_data=exc.msg == 'Extra data', raw_content='PROTECTED_NOT_EMITTED')
+        if folder is not None:
+            (folder / 'failure.json').write_text(json.dumps(error, sort_keys=True))
+        print(json.dumps(error, sort_keys=True))
         if folder is not None:
             print('Private deployment preparation directory: ' + str(folder))
         return 1
