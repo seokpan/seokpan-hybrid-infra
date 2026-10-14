@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Human-run ROSA management bootstrap and read-only Cloud binding inventory.
-Creates the initial cluster-admin only if absent; never deploys workloads or
-changes Terraform/SG rules. Credentials and kubeconfig stay in private files.
+"""Human-run ROSA management bootstrap and reviewed Cloud Data binding.
+Creates the initial cluster-admin only if absent. With --connect-data, applies
+only the reviewed two Data ingress rules; never deploys workloads.
+Credentials and kubeconfig stay in private files.
 """
 import argparse
 import datetime
@@ -143,7 +144,7 @@ def reference_matches_group(ref, group, account):
         if actual not in values:return False
     return True
 
-def select_machine_worker_group(nodes, machines, groups, vpc, account, infra):
+def select_machine_worker_group(nodes, machines, groups, vpc, account, infra, diagnostic=None):
     _,ids=validate_nodes(nodes)
     compute={n['metadata']['name']:n for n in nodes['items'] if 'node-role.kubernetes.io/worker' in n['metadata'].get('labels',{}) and not any(k in n['metadata'].get('labels',{}) for k in ('node-role.kubernetes.io/master','node-role.kubernetes.io/control-plane','node-role.kubernetes.io/infra'))}
     linked={}
@@ -161,15 +162,40 @@ def select_machine_worker_group(nodes, machines, groups, vpc, account, infra):
         require(isinstance(refs,list) and bool(refs),'MACHINE_SECURITY_GROUP_REFERENCES_MISSING')
         linked[node]=refs
     require(set(linked)==set(compute) and len(linked)==3,'THREE_COMPUTE_MACHINES_NOT_LINKED')
-    candidates=[]
+    candidates=[];rows=[]
     tag='kubernetes.io/cluster/'+infra
-    for g in groups.get('SecurityGroups',[]):
+    for number,g in enumerate(groups.get('SecurityGroups',[]),1):
         tags={t['Key']:t['Value'] for t in g.get('Tags',[])}
-        if g.get('VpcId')!=vpc or g.get('OwnerId')!=account or tags.get(tag) not in ('owned','shared'):continue
-        if infra+'-worker-sg' not in (g.get('GroupName'),tags.get('Name')):continue
-        if all(any(reference_matches_group(ref,g,account) for ref in refs) for refs in linked.values()):candidates.append(g['GroupId'])
+        row={'group_number':number,'vpc_match':g.get('VpcId')==vpc,
+             'account_match':g.get('OwnerId')==account,'cluster_tag_match':tags.get(tag) in ('owned','shared'),
+             'legacy_name_assumption_match':infra+'-worker-sg' in (g.get('GroupName'),tags.get('Name')),
+             'matching_compute_machine_count':sum(any(reference_matches_group(ref,g,account) for ref in refs) for refs in linked.values())}
+        rows.append(row)
+        # Machine references, not a guessed installer naming convention, identify
+        # the intended group. Keep account/VPC/cluster ownership and uniqueness.
+        if all(row[k] for k in ('vpc_match','account_match','cluster_tag_match')) and row['matching_compute_machine_count']==3:
+            candidates.append(g['GroupId'])
+    if diagnostic is not None:
+        diagnostic.update({'linked_compute_machines':len(linked),'queried_group_count':len(rows),
+                           'candidate_count':len(candidates),'groups':rows,'values':'NOT_EMITTED',
+                           'machine_reference_shapes':[[{'variants':[k for k in ('id','arn','filters') if ref.get(k)],
+                               'filter_kinds':[f.get('name') if f.get('name') in ('tag:Name','group-name','group-id','vpc-id') else ('tag:OTHER' if str(f.get('name','')).startswith('tag:') else 'UNSUPPORTED') for f in ref.get('filters',[])]}
+                               for ref in refs] for refs in linked.values()]})
     require(len(candidates)==1,'WORKER_SG_NOT_UNIQUELY_PROVEN_FROM_MACHINE_REFERENCES')
     return candidates[0]
+
+def prove_worker_group(nodes, machines, groups, vpc, account, infra, folder, cached=False):
+    diagnostic={'stage':'CACHED_LOCAL_PREFLIGHT' if cached else 'CURRENT_READ_ACCEPTANCE'}
+    try:
+        group=select_machine_worker_group(nodes,machines,groups,vpc,account,infra,diagnostic)
+    except Stop as exc:
+        diagnostic['reason']=str(exc)
+        write_json(folder/'worker-sg-match-diagnostic.json',diagnostic)
+        emit('WORKER_SG_MATCH_DIAGNOSTIC',**diagnostic)
+        raise
+    write_json(folder/'worker-sg-match-diagnostic.json',diagnostic)
+    emit('PASS_WORKER_SG_REFERENCE_MATCH',**diagnostic)
+    return group
 
 def extract_oc(archive, checksums, destination):
     rows=[]
@@ -422,6 +448,14 @@ def main():
     folder.mkdir(mode=0o700,parents=True,exist_ok=True);folder.chmod(0o700)
     r=Runner(folder)
     try:
+        # Diagnose previously returned JSON before another API call or MFA prompt.
+        # This never authorizes Data writes: current Nodes/Machines/AWS groups are
+        # still read and matched below immediately before creating a binding.
+        if a.resume_worker_sg and all((folder/name).is_file() for name in ('nodes.json','worker-machine-definitions.json','worker-security-groups.json')):
+            r.phase='CACHED_WORKER_SG_MATCH_PREFLIGHT'
+            prove_worker_group(read_json(folder/'nodes.json'),read_json(folder/'worker-machine-definitions.json'),
+                               read_json(folder/'worker-security-groups.json'),inputs['foundation']['vpc_id'],
+                               inputs['foundation']['account_id'],handoff['infra_id'],folder,cached=True)
         if a.resume_worker_sg:
             r.phase='REUSE_COMPLETED_MANAGEMENT'
             tools=Path.home()/'.local/share/seokpan/oc-cli-4.20'
@@ -520,7 +554,7 @@ def main():
         require(caller['Arn'].startswith('arn:aws:sts::'+account+':assumed-role/seokpan-tf-rosa/'),'WRONG_CLOUD_READ_ROLE')
         machines=r.json_command([oc,'get','machines.machine.openshift.io','-n','openshift-machine-api','-o','json','--request-timeout=30s'],'worker-machine-definitions')
         groups=r.json_command(aws+['ec2','describe-security-groups','--filters','Name=vpc-id,Values='+inputs['foundation']['vpc_id'],'Name=tag:kubernetes.io/cluster/'+handoff['infra_id']+',Values=owned,shared'],'worker-security-groups')
-        group=select_machine_worker_group(nodes,machines,groups,inputs['foundation']['vpc_id'],account,handoff['infra_id'])
+        group=prove_worker_group(nodes,machines,groups,inputs['foundation']['vpc_id'],account,handoff['infra_id'],folder)
         observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
         evidence={'cluster_id':cluster,'infra_id':handoff['infra_id'],'worker_security_group_id':group,'observed_at':observed_at,'proof':'CURRENT_COMPUTE_NODES_LINKED_MACHINE_INSTANCE_IDS_AND_MACHINE_SG_REFERENCES_MATCH_ACTUAL_AWS_GROUP_VPC_OWNER_CLUSTER_TAG','ec2_instance_attachments':'NOT_QUERIED','files_sha256':{name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in ('nodes.json','worker-machine-definitions.json','worker-security-groups.json')}}
         write_json(folder/'worker-binding-evidence.json',evidence)
