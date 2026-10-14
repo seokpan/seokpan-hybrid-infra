@@ -18,6 +18,7 @@ import shlex
 import shutil
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -185,6 +186,99 @@ try:
 except Exception as e:out['sql_read_only']={'status':classify(e)}
 out['application_started']=False;out['database_writes']=0;out['redis_data_writes']=0
 print(json.dumps(out,sort_keys=True))
+'''
+
+
+SQL_ONLY_PROBE = r'''
+import asyncio,hashlib,json,re,ssl,sys,urllib.parse
+p=json.load(sys.stdin)
+def diagnostic(error):
+    seen=set();chain=[];codes=[];current=error
+    for _ in range(5):
+        if current is None or id(current) in seen:break
+        seen.add(id(current))
+        code=current.args[0] if getattr(current,'args',()) else None
+        if isinstance(code,int) and not isinstance(code,bool):codes.append(code)
+        elif isinstance(code,str) and code.isdigit():codes.append(int(code))
+        text=str(current)
+        for value in sorted([v for v in p.get('sql_passwords',{}).values() if isinstance(v,str) and v],key=len,reverse=True):
+            for form in (value,urllib.parse.quote(value,safe=''),json.dumps(value)[1:-1],repr(value)[1:-1]):
+                text=text.replace(form,'<PASSWORD_REDACTED>')
+        for key in ('rds_address','redis_primary_endpoint'):
+            if p.get(key):text=text.replace(p[key],'<ENDPOINT_REDACTED>')
+        text=re.sub(r'(?i)\b[a-z0-9.-]+\.(?:amazonaws\.com|openshiftapps\.com)\b','<HOST_REDACTED>',text)
+        text=re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b','<IP_REDACTED>',text)
+        text=re.sub(r'\b\d{12}\b','<ACCOUNT_REDACTED>',text)
+        text=re.sub(r"(?i)(?:mysql(?:\+asyncmy)?://)[^\s]+",'<DATABASE_URL_REDACTED>',text)
+        chain.append({'class':type(current).__name__,'message_redacted':text[:700]})
+        current=current.__cause__ or current.__context__
+    combined=' '.join(x['message_redacted'] for x in chain).lower()
+    if 1045 in codes or 'access denied for user' in combined:status='ACCOUNT_NOT_READY_OR_AUTH_REJECTED'
+    elif 1044 in codes:status='ACCOUNT_PERMISSION_REJECTED'
+    elif 1049 in codes:status='DATABASE_NOT_IMPORTED'
+    elif 'certificate verify failed' in combined or 'certificate_verify_failed' in combined or 'hostname mismatch' in combined:status='TLS_VERIFICATION_FAILED'
+    elif 'timed out' in combined or 'timeouterror' in combined:status='DRIVER_CONNECTION_TIMEOUT'
+    elif 2003 in codes:status='DRIVER_CONNECTION_FAILED_2003'
+    else:status='SQL_DRIVER_OR_QUERY_ERROR'
+    return {'status':status,'mysql_error_codes':sorted(set(codes)),'exception_chain':chain}
+def ctx():
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(cadata=p['rds_ca'])
+    context.minimum_version=ssl.TLSVersion.TLSv1_2
+    return context
+async def account(user,admin=False):
+    password=p.get('sql_passwords',{}).get(user)
+    if not password:return {'status':'PENDING_PROTECTED_PASSWORD'}
+    import asyncmy
+    stage='CONNECT'
+    con=None
+    try:
+        # No database argument: max_connections can be read before import.
+        con=await asyncmy.connect(host=p['rds_address'],port=3306,user=user,password=password,
+                                 ssl=ctx(),connect_timeout=12,autocommit=True)
+        stage='READ_CONNECTION_AND_SCHEMA'
+        async with con.cursor() as cur:
+            await cur.execute('SELECT @@GLOBAL.max_connections, @@GLOBAL.time_zone, USER(), CURRENT_USER(), @@GLOBAL.max_user_connections')
+            maximum,zone,connected,effective,default_user_limit=await cur.fetchone()
+            effective=effective.decode() if isinstance(effective,bytes) else effective
+            connected=connected.decode() if isinstance(connected,bytes) else connected
+            await cur.execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
+            cipher=await cur.fetchone()
+            await cur.execute('SHOW GRANTS FOR CURRENT_USER()')
+            grants=[str(row[0]) for row in await cur.fetchall()]
+            require_ssl=any('REQUIRE SSL' in g.upper() or 'REQUIRE X509' in g.upper() for g in grants)
+            account_limits=[int(v) for v in re.findall(r'(?i)MAX_USER_CONNECTIONS\s+(\d+)', '\n'.join(grants))]
+            user_limit=(min(account_limits) if account_limits else 0) or int(default_user_limit)
+            await cur.execute("SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='stone_game'")
+            exists=int((await cur.fetchone())[0])==1
+            result={'status':'PASS','max_connections':int(maximum),'time_zone_is_seoul':zone=='Asia/Seoul',
+                    'expected_account':effective.split('@')[0]==user,'tls_cipher_present':bool(cipher and cipher[1]),
+                    'requires_ssl_in_grants':require_ssl,'max_user_connections':user_limit,'grants_canonical_sha256':hashlib.sha256('\n'.join(sorted(grants)).encode()).hexdigest(),
+                    'connection_source_sha256':hashlib.sha256(connected.encode()).hexdigest(),'stone_game_visible':exists}
+            if not result['expected_account'] or not result['tls_cipher_present']:result['status']='TLS_OR_ACCOUNT_CONTRACT_REJECTED'
+            if admin and exists:
+                await cur.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='stone_game' AND table_name='alembic_version'")
+                revision_visible=int((await cur.fetchone())[0])==1
+                result['alembic_version_visible']=revision_visible
+                if revision_visible:
+                    await cur.execute('SELECT version_num FROM stone_game.alembic_version')
+                    result['expected_revision_match']=[r[0] for r in await cur.fetchall()]==['20260902_0002']
+            return result
+    except Exception as error:
+        result=diagnostic(error);result['stage']=stage;return result
+    finally:
+        if con is not None:con.close()
+async def main():
+    out={'sql_read_only':await asyncio.wait_for(account('db_admin',True),timeout=40),'sql_runtime_accounts':{}}
+    shared_failure=out['sql_read_only']['status'] in ('TLS_VERIFICATION_FAILED','DRIVER_CONNECTION_TIMEOUT','DRIVER_CONNECTION_FAILED_2003','SQL_DRIVER_OR_QUERY_ERROR')
+    for user in ('identity_svc','game_svc'):
+        if shared_failure:out['sql_runtime_accounts'][user]={'status':'NOT_RUN_SHARED_DRIVER_FAILURE'}
+        else:out['sql_runtime_accounts'][user]=await asyncio.wait_for(account(user),timeout=35)
+    out.update(application_started=False,database_writes=0,reused_previous_tls_valkey_and_secret_supply=True)
+    return out
+try:result=asyncio.run(asyncio.wait_for(main(),timeout=115))
+except Exception as error:result={'sql_read_only':diagnostic(error),'application_started':False,'database_writes':0}
+print(json.dumps(result,sort_keys=True))
 '''
 
 
@@ -444,6 +538,56 @@ def pool_candidate(maximum):
             'observed_max_connections': maximum, 'adopted': False}
 
 
+def completed_cloud_result(path, root, cluster, namespace):
+    path = path.resolve()
+    require(path.parent == root.resolve() and path.name.startswith('cloud-connection-'), 'COMPLETED_CLOUD_RESULT_SCOPE')
+    receipt = read_json(path/'receipt.json')
+    contract = read_json(path/'cloud-platform-inputs.json')
+    require(receipt.get('status') == 'CLOUD_CONNECTION_PREFLIGHT_COMPLETED' and
+            contract.get('cluster_id') == cluster and contract.get('namespace') == namespace,
+            'COMPLETED_CLOUD_RESULT_IDENTITY')
+    actual = receipt.get('actual', {})
+    require(all(actual.get(k, {}).get('status') == 'PASS' for k in ('rds_tls', 'valkey_tls', 'valkey_auth_ping')),
+            'PREVIOUS_ACTUAL_TLS_AND_VALKEY_PASS_REQUIRED')
+    require(receipt.get('runtime_inputs_supply', {}).get('status') == 'PASS_CLOUD_RUNTIME_SECRETS_AND_CA_SUPPLIED',
+            'PREVIOUS_CLOUD_SECRET_CA_SUPPLY_REQUIRED')
+    return receipt, contract
+
+
+def ecr_lease_current(r, namespace, minutes=60):
+    secret = r.get(['get', 'secret', PULL_SECRET, '-n', namespace], 'existing-pull-lease')
+    annotations = secret.get('metadata', {}).get('annotations', {})
+    value = annotations.get('seokpan.io/pull-expires-at', '')
+    try:expiry = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (ValueError, TypeError):return False
+    return expiry > datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+
+
+def launch_background(root):
+    folder = Path(tempfile.mkdtemp(prefix='cloud-night-run-', dir=root))
+    log = folder/'progress.log'
+    with log.open('xb') as output:
+        proc = subprocess.Popen([sys.executable, '-u', str(Path(__file__).resolve()),
+                                 *[x for x in sys.argv[1:] if x != '--background']],
+                                stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                start_new_session=True, close_fds=True)
+    write_json(folder/'job.json', {'pid': proc.pid, 'status': 'STARTED',
+                                  'scope': 'UNRESOLVED_SQL_AND_MEASURED_POOL_ONLY_COMPLETED_STEPS_REUSED',
+                                  'log': str(log), 'interactive_input': False})
+    emit('CLOUD_CONTINUATION_BACKGROUND_STARTED', pid=proc.pid, log_file=str(log), survives_terminal_close=True)
+    print('Read progress: tail -n 80 '+shlex.quote(str(log)), flush=True)
+    # Show the first useful output while the human is still awake. The child
+    # continues independently after this short observation period.
+    until = time.monotonic()+60
+    while proc.poll() is None and time.monotonic() < until:
+        time.sleep(2)
+    text = log.read_text(errors='replace')
+    print(text, end='' if text.endswith('\n') else '\n', flush=True)
+    emit('BACKGROUND_RUN_FINISHED_SEE_SQL_STATUS' if proc.poll() is not None else 'BACKGROUND_JOB_CONTINUES',
+         exit_code=proc.returncode, log_file=str(log))
+    return 0
+
+
 def load_optional_secret(path, expected_prefix, fields):
     status = {'available': path.is_file(), 'decrypt': 'NOT_RUN'}
     if not path.is_file():
@@ -476,10 +620,16 @@ def main():
     parser.add_argument('--expected-aws-user', help='Confirmed human IAM user used only to mint the restricted ECR session')
     parser.add_argument('--refresh-ecr-pull-only', action='store_true', help='Renew the namespaced pull secret without starting a probe or reading Data secrets')
     parser.add_argument('--supply-cloud-inputs', action='store_true', help='After verified TLS/AUTH, supply only the two runtime Secrets and two CA ConfigMaps')
+    parser.add_argument('--resume-connection-from', type=Path, help='Use a completed TLS/Valkey/input receipt and continue only unresolved SQL work')
+    parser.add_argument('--sql-only', action='store_true', help='Reuse accepted transport and input supply; query DB accounts and capture sanitized driver error chains')
+    parser.add_argument('--renew-pull-when-needed', action='store_true', help='Renew the existing scoped pull credential only if less than one hour remains')
+    parser.add_argument('--adopt-conservative-pool-if-measured', action='store_true', help='Adopt the bounded candidate only after measured limit and both runtime accounts pass TLS/GRANT checks')
+    parser.add_argument('--background', action='store_true', help='Detach from the terminal, keep a protected log and display initial progress for at most 60 seconds')
     args = parser.parse_args()
     require(os.name == 'posix' and os.getuid() != 0, 'USE_PERSONAL_CONTROLLER_LINUX_ACCOUNT')
     require(re.fullmatch(r'seokpan-cloud(?:-[a-z0-9]+)?', args.namespace) is not None, 'DEDICATED_CLOUD_NAMESPACE_REQUIRED')
     require(not args.refresh_ecr_pull_only or args.configure_ecr_pull, 'REFRESH_REQUIRES_SCOPED_ECR_CONFIGURATION')
+    require(not args.sql_only or args.resume_connection_from is not None, 'SQL_RESUME_REQUIRES_COMPLETED_CLOUD_RESULT')
     os.umask(0o077)
     root = args.input_root
     # Derive the already accepted cluster identity without repeating creation/readiness.
@@ -504,13 +654,29 @@ def main():
             read_json(oc_dir / 'receipt.json')['oc_sha256'], 'EXISTING_VERIFIED_OC_REQUIRED')
     kubeconfig = management / 'kubeconfig'
     require(kubeconfig.is_file() and not kubeconfig.is_symlink(), 'EXISTING_KUBECONFIG_REQUIRED')
+    if args.background:
+        require(args.sql_only, 'BACKGROUND_SCOPE_REQUIRES_SQL_CONTINUATION')
+        return launch_background(root)
+    # One continuation per protected input root, including background starts.
+    import fcntl
+    lock_fd = os.open(root/'cloud-continuation.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock_fd)
+        raise Stop('EXISTING_CLOUD_CONTINUATION_RUNNING_NO_DUPLICATE_START')
     folder = Path(tempfile.mkdtemp(prefix='cloud-connection-', dir=root))
     r = Runner(oc, kubeconfig, folder)
+    require('SSLKEYLOGFILE' not in r.env, 'TLS_KEY_LOGGING_NOT_ALLOWED')
     pod = None
     phase = 'CURRENT_TARGET_AND_PROTECTED_INPUTS'
     try:
         server = r.run(['whoami', '--show-server'], 'server').stdout.decode().strip()
         require(server.rstrip('/') == handoff['api_url'].rstrip('/'), 'WRONG_CLUSTER_CONTEXT')
+        previous_receipt = previous_contract = None
+        if args.sql_only:
+            previous_receipt, previous_contract = completed_cloud_result(args.resume_connection_from, root,
+                                                                         management.name, args.namespace)
+            emit('REUSED_ECR_TLS_VALKEY_AND_CLOUD_INPUT_SUPPLY', rerun_sg_terraform=False, resupply_secrets=False)
         if args.resume_from is not None:
             previous_pull_diagnostic(r, args.resume_from, args.namespace, root)
         data = approved_data(args.data_file.read_bytes(), args.data_sha256)
@@ -522,6 +688,7 @@ def main():
         phase = 'NAMESPACE_AND_APPROVED_IMAGE_PROBE'
         ns = r.get(['get', 'namespace', args.namespace, '--ignore-not-found'], 'namespace')
         if ns is None:
+            require(not args.sql_only, 'PREVIOUS_CLOUD_NAMESPACE_MISSING')
             obj = {'apiVersion': 'v1', 'kind': 'Namespace', 'metadata': {'name': args.namespace,
                    'labels': {'app.kubernetes.io/part-of': 'seokpan', 'seokpan.io/environment': 'cloud'}}}
             ns = json.loads(r.run(['create', '-f', '-', '-o', 'json'], 'namespace-create', json.dumps(obj).encode()).stdout)
@@ -541,13 +708,19 @@ def main():
             renew.write_text('#!/usr/bin/env bash\nset -euo pipefail\nexec '+shlex.join(argv)+'\n')
             renew.chmod(0o700)
             print('ECR refresh command: bash '+shlex.quote(str(renew)), flush=True)
+        elif args.sql_only:
+            phase = 'REUSE_EXISTING_ECR_LEASE'
+            if not ecr_lease_current(r, args.namespace):
+                require(args.renew_pull_when_needed, 'ECR_LEASE_RENEWAL_REQUIRED')
+                configure_ecr_pull(r, args.namespace, account, args.expected_aws_user or '', args.backend_image)
+            else:emit('REUSED_EXISTING_SCOPED_ECR_PULL_LEASE')
         if args.refresh_ecr_pull_only:
             return 0
         phase = 'NAMESPACE_AND_APPROVED_IMAGE_PROBE'
         run_id = hashlib.sha256(folder.name.encode()).hexdigest()[:12]
         name = 'cloud-connection-probe-' + run_id
         obj = probe_pod(name, args.namespace, args.backend_image, run_id)
-        if args.configure_ecr_pull:
+        if args.configure_ecr_pull or args.sql_only:
             obj['spec']['serviceAccountName'] = PULL_SERVICE_ACCOUNT
             obj['spec']['imagePullSecrets'] = [{'name': PULL_SECRET}]
         pod = json.loads(r.run(['create', '-f', '-', '-o', 'json'], 'probe-create', json.dumps(obj).encode()).stdout)
@@ -576,22 +749,28 @@ def main():
         write_json(folder / 'probe-pod.json', observed)
         emit('PASS_APPROVED_ECR_BACKEND_POD_RUNNING', compute_node=True, pod_count=1, app_server_started=False)
         phase = 'CLOUD_TLS_AUTH_AND_READ_ONLY_SQL'
-        rds_ca, redis_ca = public_cas(args.resume_from)
+        rds_ca, redis_ca = public_cas(args.resume_connection_from or args.resume_from)
         (folder/'rds-ca.pem').write_bytes(rds_ca)
         (folder/'valkey-ca-candidate.pem').write_text(redis_ca)
         sql, sql_status = load_optional_secret(Path.home() / 'secrets/seokpan/data-sql-accounts.sops.yaml', '021bd0da994a', ('db_admin', 'identity_svc', 'game_svc'))
-        auth, auth_status = load_optional_secret(Path.home() / 'secrets/seokpan/foundation-data.sops.yaml', '9a86f90e6ba6', ('redis_auth_token',))
+        if args.sql_only:
+            auth, auth_status = {}, {'decrypt': 'NOT_REPEATED_PREVIOUS_VALKEY_PASS_REUSED'}
+        else:
+            auth, auth_status = load_optional_secret(Path.home() / 'secrets/seokpan/foundation-data.sops.yaml', '9a86f90e6ba6', ('redis_auth_token',))
         emit('CLOUD_PROTECTED_INPUTS_LOADED_FOR_CONNECTION', sql=sql_status, valkey=auth_status, secret_values_printed=False)
         payload = dict(data, rds_ca=rds_ca.decode('ascii'), redis_ca=redis_ca,
                        db_admin_password=sql.get('db_admin'), redis_auth_token=auth.get('redis_auth_token'))
-        result = r.run(['exec', '-i', '-n', args.namespace, name, '--', 'python', '-c', PROBE],
-                       'connection-probe', json.dumps(payload).encode(), timeout=110)
+        if args.sql_only:payload['sql_passwords'] = sql
+        result = r.run(['exec', '-i', '-n', args.namespace, name, '--', 'python', '-c', SQL_ONLY_PROBE if args.sql_only else PROBE],
+                       'connection-probe', json.dumps(payload).encode(), timeout=125)
         payload.clear()
         actual = json.loads(result.stdout)
+        if previous_receipt is not None:
+            actual = dict(previous_receipt['actual'], **actual)
         write_json(folder / 'connection-result.json', actual)
         emit('CLOUD_ACTUAL_CONNECTION_RESULTS', **actual)
-        supply = {'status': 'NOT_REQUESTED'}
-        if args.supply_cloud_inputs:
+        supply = dict(previous_receipt['runtime_inputs_supply'], reused=True) if previous_receipt else {'status': 'NOT_REQUESTED'}
+        if args.supply_cloud_inputs and not args.sql_only:
             if (actual.get('rds_tls', {}).get('status') == 'PASS' and actual.get('valkey_tls', {}).get('status') == 'PASS'
                     and actual.get('valkey_auth_ping', {}).get('status') == 'PASS'
                     and all(sql.get(k) for k in ('identity_svc', 'game_svc'))):
@@ -604,7 +783,20 @@ def main():
         ca_accepted = actual.get('valkey_tls', {}).get('status') == 'PASS'
         sql_result = actual.get('sql_read_only', {})
         budget = sql_result.get('max_connections') if sql_result.get('status') == 'PASS' else None
+        if budget is None:
+            successful = [row for row in actual.get('sql_runtime_accounts', {}).values() if row.get('status') == 'PASS']
+            if successful:budget = min(row['max_connections'] for row in successful)
         pool = pool_candidate(budget)
+        if pool and args.adopt_conservative_pool_if_measured:
+            runtime_accounts = actual.get('sql_runtime_accounts', {})
+            pool['adopted'] = all(runtime_accounts.get(k, {}).get('status') == 'PASS' and
+                                  runtime_accounts[k].get('expected_account') is True and
+                                  runtime_accounts[k].get('requires_ssl_in_grants') is True and
+                                  (runtime_accounts[k].get('max_user_connections') == 0 or
+                                   runtime_accounts[k].get('max_user_connections', -1) >= pool['pool_size_per_engine'] * pool['simultaneous_pod_budget'])
+                                  for k in ('identity_svc', 'game_svc'))
+            if pool['adopted']:
+                pool['acceptance'] = 'B_EXPLICIT_FLAG_ACTUAL_LIMIT_TWO_ENGINES_ONE_PROCESS_FIVE_PODS_RESERVE_TEN'
         if pool:emit('DB_POOL_CANDIDATE_FROM_MEASUREMENT', **pool)
         # This is a proposal. Never silently adopt a pool budget or start writers.
         pending = []
@@ -612,16 +804,20 @@ def main():
         if actual.get('valkey_auth_ping', {}).get('status') != 'PASS':pending.append('C_VALKEY_AUTH_OR_SUPPLY')
         if actual.get('rds_tls', {}).get('status') != 'PASS':pending.append('RDS_TLS_CONNECTION')
         if not ca_accepted:pending.append('VALKEY_TRUST_ROOT_CHAIN')
-        pending += ['ACCEPT_RUNTIME_POOL_BUDGET', 'C_FINAL_IMPORT_ACCOUNTS_AND_SCHEMA', 'B_CUTOVER_AND_APP_ACTIVATION']
+        if not pool or not pool['adopted']:pending.append('ACCEPT_RUNTIME_POOL_BUDGET_AFTER_ACCOUNT_LIMIT_READ')
+        pending += ['C_FINAL_IMPORT_ACCOUNTS_AND_SCHEMA', 'B_CUTOVER_AND_APP_ACTIVATION']
         runtime = ('SEOKPAN_CONNECTION_PROFILE=cloud\nSEOKPAN_GAME_LIFECYCLE_MODE=captured\n'
                    'SEOKPAN_ALLOWED_ORIGINS=' + json.dumps([origin], separators=(',', ':')) + '\n'
                    'SEOKPAN_DATABASE_EXPECTED_HOST=' + data['rds_address'] + '\nSEOKPAN_DATABASE_EXPECTED_PORT=3306\n'
                    'SEOKPAN_DATABASE_EXPECTED_NAME=stone_game\nSEOKPAN_REDIS_URL=rediss://' + data['redis_primary_endpoint'] + ':6379/0\n'
                    'SEOKPAN_REDIS_EXPECTED_HOST=' + data['redis_primary_endpoint'] + '\nSEOKPAN_REDIS_EXPECTED_PORT=6379\nSEOKPAN_REDIS_EXPECTED_DATABASE=0\n')
+        if pool and pool['adopted']:
+            runtime += ('SEOKPAN_DATABASE_POOL_SIZE='+str(pool['pool_size_per_engine'])+'\n'
+                        'SEOKPAN_DATABASE_MAX_OVERFLOW=0\nSEOKPAN_DATABASE_POOL_TIMEOUT_SECONDS=1\n')
         (folder / 'runtime.env.INCOMPLETE').write_text('# PRIVATE CANDIDATE - NOT ACTIVATED\n' + runtime)
         write_json(folder / 'cloud-platform-inputs.json', {'cluster_id': management.name, 'namespace': args.namespace,
                    'route_origin_candidate': origin, 'game_lifecycle_candidate': 'captured', 'backend_initial_replica_candidate': 1,
-                   'database_pool_adopted': False, 'database_max_connections_observed': budget,
+                   'database_pool_adopted': bool(pool and pool['adopted']), 'database_max_connections_observed': budget,
                    'database_pool_candidate': pool, 'runtime_service_account': PULL_SERVICE_ACCOUNT if args.configure_ecr_pull else None,
                    'runtime_inputs_supply': supply,
                    'valkey_ca_candidate_verified_on_actual_endpoint': ca_accepted, 'ready_for_app_activation': False,
@@ -632,6 +828,14 @@ def main():
                    'app_started': False, 'migration': 'NOT_RUN', 'pending': pending}
         write_json(folder / 'receipt.json', receipt)
         emit('CLOUD_PRIVATE_RUNTIME_CANDIDATE_PREPARED', pending=pending, app_started=False)
+        sql_ready = (actual.get('sql_read_only', {}).get('status') == 'PASS' and
+                     all(actual.get('sql_runtime_accounts', {}).get(k, {}).get('status') == 'PASS'
+                         for k in ('identity_svc', 'game_svc')))
+        summary = {'status': 'SQL_POOL_PREPARED_CUTOVER_PENDING' if sql_ready else 'SQL_BLOCKED_DIAGNOSTIC_SAVED', 'sql': actual.get('sql_read_only'),
+                   'runtime_accounts': actual.get('sql_runtime_accounts', {}), 'pool_candidate': pool,
+                   'reused_completed_steps': args.sql_only, 'app_started': False, 'pending': pending}
+        write_json(folder/'summary.json', summary)
+        emit(**summary)
     except Exception as exc:
         if pod is not None and phase == 'NAMESPACE_AND_APPROVED_IMAGE_PROBE':
             try:collect_probe_failure(r, pod, args.namespace)
@@ -651,6 +855,7 @@ def main():
             except Exception:
                 emit('PROBE_CLEANUP_REQUIRES_ATTENTION', temporary_pod_name=pod['metadata']['name'])
         print('Private Cloud result directory: ' + str(folder), flush=True)
+        os.close(lock_fd)
     return 0
 
 
