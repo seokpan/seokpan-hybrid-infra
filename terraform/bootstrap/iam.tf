@@ -702,6 +702,7 @@ data "aws_iam_policy_document" "tf_foundation_network" {
         "ec2:DescribeRouteTables",
         "ec2:DescribeNatGateways",
         "ec2:DescribeAddresses",
+        "ec2:DescribeAddressesAttribute",
         "ec2:DescribeVpcEndpoints",
         "ec2:DescribeVpcEndpointServices",
         "ec2:DescribePrefixLists",

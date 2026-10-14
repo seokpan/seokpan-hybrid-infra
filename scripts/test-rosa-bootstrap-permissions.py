@@ -143,8 +143,16 @@ def canonical_source(text):
     )
 
 
-if canonical_source(iam.replace(hook, "", 1)) != canonical_source(
-    baseline.stdout.replace(hook, "", 1)
+# NAT EIP 속성 조회 한 항목만 기준 비교에서 구분합니다.
+attribute_read_line = '        "ec2:DescribeAddressesAttribute",\n'
+if iam.count(attribute_read_line) != 1:
+    stop("EIP 속성 조회 권한 한 항목이 필요합니다.")
+if baseline.stdout.count(attribute_read_line) not in (0, 1):
+    stop("기준 코드의 EIP 속성 조회 선언 수가 다릅니다.")
+comparison_iam = iam.replace(attribute_read_line, "", 1)
+comparison_baseline = baseline.stdout.replace(attribute_read_line, "", 1)
+if canonical_source(comparison_iam.replace(hook, "", 1)) != canonical_source(
+    comparison_baseline.replace(hook, "", 1)
 ):
     stop("조건부 연결 외에 기존 IAM 선언의 차이가 있습니다. 별도 검토가 필요합니다.")
 
@@ -153,6 +161,45 @@ print("비교 기준 저장 기록:", base_revision[:12], flush=True)
 
 # 기대값은 검사 대상 코드의 locals를 재사용하지 않고 별도로 정의합니다.
 account = "000000000000"
+
+# 실제 코드의 네트워크 조회 문장에서 새 작업의 지역 범위를 확인합니다.
+network_match = re.search(
+    r'data "aws_iam_policy_document" "tf_foundation_network"\s*\{'
+    r'.*?<<-POLICY\n(.*?)\n\s*POLICY', iam, re.S
+)
+if not network_match:
+    stop("네트워크 조회 정책 문서를 찾지 못했습니다.")
+network_document = json.loads(
+    network_match.group(1).replace("${local.account_id}", account)
+)
+attribute_statements = [
+    statement for statement in network_document["Statement"]
+    if "ec2:DescribeAddressesAttribute" in statement.get("Action", [])
+]
+if len(attribute_statements) != 1:
+    stop("EIP 속성 조회 권한의 선언 범위가 다릅니다.")
+attribute_statement = attribute_statements[0]
+if (
+    attribute_statement.get("Sid") != "ReadFoundationNetwork"
+    or attribute_statement.get("Effect") != "Allow"
+    or attribute_statement.get("Resource") != ["*"]
+    or attribute_statement.get("Condition") != {
+        "StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}
+    }
+):
+    stop("EIP 속성 조회의 지역 제한 또는 조건이 다릅니다.")
+for region, expected_allowed in [
+    ("ap-northeast-2", True),
+    ("ap-northeast-1", False),
+    ("", False),
+]:
+    allowed = (
+        region == attribute_statement["Condition"]["StringEquals"]["aws:RequestedRegion"]
+    )
+    if allowed != expected_allowed:
+        stop("EIP 속성 조회 허용·차단 사례가 다릅니다.")
+print("통과: EIP 속성 조회 한 항목·서울 허용·다른 리전과 지역 누락 차단", flush=True)
+
 role_names = {
     "installer": "seokpan-fnd-rosa-Installer-Role",
     "support": "seokpan-fnd-rosa-Support-Role",
