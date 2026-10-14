@@ -51,6 +51,21 @@ def exclusive_marker(path, value):
 def emit(status, **fields):
     print(json.dumps({'status':status, **fields}, sort_keys=True), flush=True)
 
+def validate_cluster_identity(observed, handoff, inputs):
+    require(observed.get('id')==handoff['cluster_id'] and observed.get('state')=='ready' and observed.get('api',{}).get('url','').rstrip('/')==handoff['api_url'].rstrip('/'),'READY_CLUSTER_OR_API_BINDING_CHANGED')
+    account=inputs['foundation']['account_id']
+    require(isinstance(account,str) and re.fullmatch(r'[0-9]{12}',account) is not None,'FOUNDATION_ACCOUNT_FORMAT')
+    # ROSA CLI's AWS Account display parses properties.rosa_creator_arn.
+    # aws.account_id is optional for STS clusters and must not be required.
+    creator=observed.get('properties',{}).get('rosa_creator_arn','')
+    match=re.fullmatch(r'arn:aws:sts::([0-9]{12}):assumed-role/seokpan-tf-rosa/[^/]+',creator)
+    require(match is not None and match.group(1)==account,'CLUSTER_CREATOR_ACCOUNT_OR_PURPOSE_ROLE_MISMATCH')
+    optional=observed.get('aws',{}).get('account_id')
+    if optional not in (None,''):
+        require(optional==account,'EXPLICIT_CLUSTER_AWS_ACCOUNT_MISMATCH')
+    require(observed.get('region',{}).get('id')=='ap-northeast-2','CLUSTER_REGION_CHANGED')
+    return {'account_source':'properties.rosa_creator_arn','purpose_creator_account_match':True,'optional_account_field_present':optional not in (None,'')}
+
 def validate_admin(value, api):
     require(value.get('api_url','').rstrip('/') == api.rstrip('/') and
             value.get('username') == 'cluster-admin' and
@@ -201,12 +216,140 @@ def ensure_admin(r, rosa_cli, cluster, api):
         validate_admin(admin,api)
     return admin
 
+def validate_data_plan(plan, original, inputs, binding):
+    require(plan.get('complete') is True and plan.get('errored') is not True,'INCOMPLETE_DATA_PLAN')
+    require(plan.get('configuration')==original.get('configuration'),'DATA_PLAN_SOURCE_CONFIGURATION_CHANGED')
+    oldvars=original.get('variables',{})
+    newvars=plan.get('variables',{})
+    require(set(oldvars)==set(newvars),'DATA_PLAN_VARIABLE_SET_CHANGED')
+    for key in oldvars:
+        expected={'value':binding} if key=='worker_sg_binding' else oldvars[key]
+        require(newvars[key]==expected,'UNRELATED_INPUT_CHANGED_'+key)
+    baseline={x['address'] for x in original['resource_changes'] if x['mode']=='managed'}
+    require(len(baseline)==16,'ORIGINAL_RESOURCE_SCOPE_NOT_SIXTEEN')
+    prefix='aws_vpc_security_group_ingress_rule.worker_to_data'
+    ports={'mariadb':3306,'redis':6379}
+    wanted={prefix+'["'+k+'"]':k for k in ports}
+    rows=[x for x in plan['resource_changes'] if x['mode']=='managed']
+    resources={x['address']:x for x in rows}
+    require(len(rows)==len(resources) and set(resources)==baseline|set(wanted),'DATA_PLAN_MANAGED_RESOURCE_SET_CHANGED')
+    action_sets=[]
+    for address,r in resources.items():
+        c=r['change'];a=c.get('after') or {}
+        if address in baseline:
+            require(c['actions']==['no-op'] and c.get('before')==a,'EXISTING_RESOURCE_MUTATION_IN_DATA_PLAN')
+            continue
+        key=wanted[address]
+        require(c['actions'] in (['create'],['no-op']),'DATA_RULE_UNEXPECTED_ACTION')
+        action_sets.append(c['actions'])
+        require(a.get('security_group_id')==inputs['foundation']['data_security_groups'][key] and a.get('referenced_security_group_id')==binding['worker_security_group_id'],'DATA_RULE_TARGET_OR_SOURCE_CHANGED')
+        require(a.get('ip_protocol')=='tcp' and a.get('from_port')==ports[key] and a.get('to_port')==ports[key],'DATA_RULE_PORT_OR_PROTOCOL_CHANGED')
+        require(all(a.get(k) is None for k in ('cidr_ipv4','cidr_ipv6','prefix_list_id')),'DATA_RULE_CIDR_OR_PREFIX_NOT_ALLOWED')
+        require(a.get('tags_all')=={'Project':'seokpan','Phase':'2','ManagedBy':'terraform','Component':'rosa'},'DATA_RULE_OWNERSHIP_TAGS_CHANGED')
+    require(all(x==['create'] for x in action_sets) or all(x==['no-op'] for x in action_sets),'PARTIAL_PREEXISTING_DATA_BINDING_REQUIRES_REVIEW')
+    for r in plan.get('resource_changes',[]):
+        if r['mode']=='data':
+            require(r['address'] in ('data.aws_caller_identity.current','data.aws_security_group.worker[0]','data.aws_security_group.data["mariadb"]','data.aws_security_group.data["redis"]'),'UNREVIEWED_DATA_SOURCE')
+    # Refresh metadata is allowed only when it describes the already-reviewed
+    # role-specific attachments or the OIDC null/empty tags representation.
+    pairs={r['change']['after']['role']:r['change']['after']['policy_arn'] for r in resources.values() if r.get('type')=='aws_iam_role_policy_attachment'}
+    for d in plan.get('resource_drift',[]):
+        require(d['address'] in baseline,'DATA_PLAN_UNREVIEWED_DRIFT_RESOURCE')
+        b,a=d['change'].get('before'),d['change'].get('after')
+        require(isinstance(b,dict) and isinstance(a,dict) and a==resources[d['address']]['change']['after'],'DATA_PLAN_DRIFT_NOT_REFRESHED_NOOP')
+        changed=set(b)^set(a)|{k for k in set(b)&set(a) if b[k]!=a[k]}
+        allowed=d.get('type')=='aws_iam_openid_connect_provider' and changed=={'tags'} and b.get('tags') in (None,{}) and a.get('tags') in (None,{})
+        if d.get('type')=='aws_iam_role' and changed=={'managed_policy_arns'}:
+            prior=b.get('managed_policy_arns') or []
+            expected=pairs.get(a.get('name'))
+            allowed=isinstance(prior,list) and expected is not None and set(prior)<=set([expected]) and a.get('managed_policy_arns')==[expected]
+        require(allowed,'DATA_PLAN_UNREVIEWED_PERMISSION_OR_STATE_DRIFT')
+    checks=plan.get('checks',[])
+    require(bool(checks) and all(x.get('status')=='pass' for x in checks),'DATA_PLAN_CHECK_NOT_PASS')
+    outputs=plan.get('output_changes',{})
+    require(set(outputs)=={'platform_handoff'},'DATA_PLAN_OUTPUT_SCOPE_CHANGED')
+    output=outputs['platform_handoff'];before=output.get('before');after=output.get('after')
+    require(isinstance(before,dict) and isinstance(after,dict),'DATA_HANDOFF_OUTPUT_SHAPE')
+    expected=dict(before,binding_enabled=True)
+    require(after==expected and after.get('cluster_id')==binding['cluster_id'] and after.get('state')=='ready','DATA_HANDOFF_UNRELATED_OUTPUT_CHANGE')
+    return {'create':sum(x==['create'] for x in action_sets),'no_op_existing':16,'update':0,'delete':0,'ports':[3306,6379]}
+
+def connect_data(r, root, prior, inputs, binding):
+    folder=r.folder/'data-binding'
+    folder.mkdir(mode=0o700,exist_ok=True)
+    attempted=folder/'apply-attempt.json'
+    require(not attempted.exists(),'DATA_APPLY_ALREADY_ATTEMPTED_USE_EXISTING_RESULT')
+    source=root/'source'
+    hashes={
+        'terraform/rosa/.terraform.lock.hcl':'668098ad0f1e293982e9bcf8e931128346a00049',
+        'terraform/rosa/backend.tf':'a77421ca8d10663483aba7bc25a01fb949a34ae9',
+        'terraform/rosa/bindings.tf':'b0288ba515207445956e7283afa0a1acf34348e3',
+        'terraform/rosa/cluster.tf':'74d13092a6cea05cd963779215a24417be3b03cc',
+        'terraform/rosa/inputs.tf':'fb45e85d4343d2e3de2378d4099683c251ef30e8',
+        'terraform/rosa/oidc.tf':'4e53bfd0fe9176aab8118a87226c59f7dd661fa2',
+        'terraform/rosa/outputs.tf':'3a45ccdfc177aae6df384ff35eaff1920dcfca17',
+        'terraform/rosa/providers.tf':'fe107451e734f48b16baed2d57b004cd487c8c8c',
+        'terraform/rosa/variables.tf':'27b70f1d16700c8f74ea76442e5efce3aee26f5b',
+        'terraform/rosa/versions.tf':'9eebe38d8dcc9243a310c3c6fd0a6b011c726da5'}
+    for name,expected in hashes.items():
+        path=source/name
+        require(path.is_file() and not path.is_symlink(),'DATA_SOURCE_FILE_MISSING_OR_SYMLINK')
+        raw=path.read_bytes()
+        require(hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()==expected,'DATA_SOURCE_CHANGED')
+    tfroot=source/'terraform/rosa'
+    require({p.name for p in tfroot.iterdir() if p.name.endswith(('.tf','.tf.json'))}=={Path(k).name for k in hashes if k.endswith(('.tf','.tf.json'))},'UNREVIEWED_TERRAFORM_SOURCE_FILE')
+    require(not any(tfroot.glob('*.auto.tfvars*')) and not any((tfroot/n).exists() for n in ('terraform.tfvars','terraform.tfvars.json')),'UNREVIEWED_AUTOMATIC_VARIABLE_FILE')
+    r.phase='DATA_PROVIDER_AUTH'
+    token=getpass.getpass('Red Hat offline token for Data connection Plan (hidden): ').strip()
+    require(bool(token) and not any(c.isspace() for c in token),'DATA_RHCS_TOKEN_FORMAT')
+    # Same documented cloud-services client as RHCS 1.7.7; validate before Plan.
+    import urllib.parse,urllib.error
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*a,**kw):raise Stop('TOKEN_REDIRECT_REFUSED')
+    body=urllib.parse.urlencode({'grant_type':'refresh_token','client_id':'cloud-services','refresh_token':token}).encode()
+    req=urllib.request.Request('https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token',data=body,headers={'Content-Type':'application/x-www-form-urlencoded'})
+    with urllib.request.build_opener(NoRedirect()).open(req,timeout=30) as response:
+        tokens=json.load(response)
+    require(isinstance(tokens.get('access_token'),str) and bool(tokens['access_token']),'DATA_TOKEN_EXCHANGE_FAILED')
+    for key in list(r.env):
+        if key.startswith(('TF_CLI_ARGS','TF_VAR_','TF_LOG','RHCS_')):r.env.pop(key,None)
+    for key in ('AWS_PROFILE','AWS_DEFAULT_PROFILE','AWS_ROLE_ARN','AWS_WEB_IDENTITY_TOKEN_FILE','TF_CLI_CONFIG_FILE'):r.env.pop(key,None)
+    r.env.update(RHCS_TOKEN=tokens.get('refresh_token') or token,TF_DATA_DIR=str(prior/'tf-data'),TF_WORKSPACE='default',TF_IN_AUTOMATION='1',CHECKPOINT_DISABLE='1',AWS_REGION='ap-northeast-2',AWS_DEFAULT_REGION='ap-northeast-2')
+    token='';tokens={}
+    newinputs=dict(inputs,worker_sg_binding=binding)
+    write_json(folder/'inputs.tfvars.json',newinputs)
+    tf=['terraform','-chdir='+str(tfroot)]
+    original=r.json_command(tf+['show','-json',str(prior/'rosa.tfplan')],'data-original-plan')
+    r.phase='DATA_CONNECTION_FULL_PLAN'
+    planfile=folder/'data-binding.tfplan'
+    cmd=tf+['plan','-input=false','-no-color','-lock-timeout=60s','-detailed-exitcode','-var-file='+str(folder/'inputs.tfvars.json'),'-out='+str(planfile)]
+    result=r.command(cmd,'data-binding-plan',timeout=600,allow_failure=True)
+    (folder/'plan.log').write_bytes(result.stdout+result.stderr)
+    require(result.returncode in (0,2),'DATA_CONNECTION_PLAN_FAILED_NO_APPLY')
+    plan=r.json_command(tf+['show','-json',str(planfile)],'data-binding-plan-json')
+    review=validate_data_plan(plan,original,inputs,binding)
+    write_json(folder/'review.json',review)
+    emit('PASS_DATA_CONNECTION_PLAN_EXACT_SCOPE',**review)
+    if review['create']==2:
+        digest=hashlib.sha256(planfile.read_bytes()).hexdigest()
+        exclusive_marker(attempted,{'plan_sha256':digest,'action':'APPLY_EXACT_TWO_WORKER_TO_DATA_RULES'})
+        r.phase='DATA_CONNECTION_APPLY'
+        require(hashlib.sha256(planfile.read_bytes()).hexdigest()==digest,'DATA_PLAN_BINARY_CHANGED')
+        applied=r.command(tf+['apply','-input=false','-no-color','-lock-timeout=60s',str(planfile)],'data-binding-apply',timeout=600)
+        (folder/'apply.log').write_bytes(applied.stdout+applied.stderr)
+    latest=r.json_command(tf+['output','-json','platform_handoff'],'data-platform-handoff')
+    require(latest.get('cluster_id')==binding['cluster_id'] and latest.get('binding_enabled') is True,'DATA_BINDING_HANDOFF_NOT_CONFIRMED')
+    result={'status':'PASS_DATA_CONNECTION_RULES_APPLIED' if review['create']==2 else 'PASS_DATA_CONNECTION_RULES_ALREADY_PRESENT','create':review['create'],'update':0,'delete':0,'ports':[3306,6379],'app_tls_auth_and_business':'NOT_VERIFIED'}
+    write_json(folder/'receipt.json',result);emit(**result)
+    return result
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('input_root',type=Path)
     parser.add_argument('prior_result',type=Path)
     parser.add_argument('rosa_cli',type=Path)
     parser.add_argument('--input-sha256',required=True)
+    parser.add_argument('--connect-data',action='store_true',help='Apply only an automatically reviewed full Plan adding the two Worker-to-Data rules')
     a=parser.parse_args()
     os.umask(0o077)
     require(os.name=='posix' and os.geteuid()!=0,'USE_PERSONAL_CONTROLLER_LINUX_ACCOUNT')
@@ -243,8 +386,8 @@ def main():
         emit('PASS_OC_INSTALLED_CHECKSUM_VERIFIED')
         r.phase='TARGET_IDENTITY'
         observed=r.json_command([a.rosa_cli,'describe','cluster','--cluster',cluster,'--output','json'],'rosa-cluster')
-        require(observed.get('id')==cluster and observed.get('state')=='ready' and observed.get('api',{}).get('url','').rstrip('/')==api.rstrip('/'),'READY_CLUSTER_OR_API_BINDING_CHANGED')
-        require(observed.get('aws',{}).get('account_id')==inputs['foundation']['account_id'],'CLUSTER_AWS_ACCOUNT_CHANGED')
+        identity=validate_cluster_identity(observed,handoff,inputs)
+        emit('PASS_CLUSTER_IDENTITY',**identity)
         r.phase='INITIAL_ADMIN'
         admin=ensure_admin(r,a.rosa_cli,cluster,api)
         emit('PASS_INITIAL_ADMIN_CREDENTIALS_PROTECTED',password_printed=False)
@@ -273,8 +416,12 @@ def main():
         r.phase='NODE_OPERATOR_READS'
         nodes=r.json_command([oc,'get','nodes','-o','json','--request-timeout=30s'],'nodes')
         counts,worker_ids=validate_nodes(nodes)
-        operators=r.json_command([oc,'get','clusteroperators','-o','json','--request-timeout=30s'],'operators')
-        operators=operator_summary(operators)
+        for attempt in range(11):
+            operators=r.json_command([oc,'get','clusteroperators','-o','json','--request-timeout=30s'],'operators')
+            operators=operator_summary(operators)
+            if not operators['not_settled']:break
+            emit('WAITING_CLUSTER_OPERATORS_AFTER_ADMIN_SETUP',not_settled=operators['not_settled'])
+            if attempt<10:time.sleep(30)
         emit('PASS_NINE_NODES_READY',counts=counts,operators=operators)
         require(not operators['not_settled'],'CLUSTER_OPERATORS_NOT_SETTLED')
         r.phase='CLOUD_WORKER_SG_READS'
@@ -299,6 +446,11 @@ def main():
         write_json(folder/'worker-binding-input.json',binding)
         result={'status':'PASS_MANAGEMENT_NODES_AND_CLOUD_WORKER_SG','node_counts':counts,'operators':operators,'worker_sg_unique_cluster_vpc_attachment_match':True,'data_ingress_rules_plan_apply':'NOT_RUN','app_deployment_tls_auth':'NOT_RUN','initial_admin':'CREATED_OR_REUSED_PRIVATE_CREDENTIALS','credential_or_endpoint_values_printed':False}
         write_json(folder/'receipt.json',result);emit(**result)
+        if a.connect_data:
+            data_result=connect_data(r,a.input_root,a.prior_result,inputs,binding)
+            result['data_ingress_rules_plan_apply']=data_result['status']
+            result['status']='PASS_MANAGEMENT_NODES_WORKER_SG_AND_DATA_RULES'
+            write_json(folder/'receipt.json',result)
         print('Private result directory: '+str(folder))
         print('Management activation command: source '+shlex.quote(str(activate)))
     except Exception as exc:
@@ -310,6 +462,7 @@ def main():
     finally:
         for k in ('AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_SESSION_TOKEN'):
             r.env.pop(k,None)
+        r.env.pop('RHCS_TOKEN',None)
 
 if __name__=='__main__':
     try:main()
