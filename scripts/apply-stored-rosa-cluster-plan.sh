@@ -151,13 +151,56 @@ for address,r in n.items():
         check(False,'UNREVIEWED_EXISTING_RESOURCE_TYPE',resource)
     for key,value in (a.get('tags_all') or {}).items():
         check((b.get('tags_all') or {}).get(key)==value,'REQUIRED_RESOURCE_TAG_CHANGED',resource,'tags_all.'+label(key))
-# Drift is reported separately; no infrastructure drift is waived here.
-for r in new.get('resource_drift',[]):
-    errors.append({'reason':'MANAGED_RESOURCE_DRIFT','resource':r['address'].split('[')[0], 'fields':[d['field'] for d in known_deltas(r['change'].get('before'),r['change'].get('after'))]})
+# Separately-created attachments appear on the Role at refresh. Accept only
+# the exact role-specific attachment already present in this reviewed Plan.
+attachments = {}
+for address, r in n.items():
+    if r['type'] != 'aws_iam_role_policy_attachment':
+        continue
+    values = r['change']['after']
+    role, policy = values.get('role'), values.get('policy_arn')
+    if isinstance(role, str) and isinstance(policy, str):
+        attachments.setdefault(role, []).append(policy)
+accepted_refresh = []
+seen_drift = set()
+for r in new.get('resource_drift', []):
+    address, d = r['address'], r['change']
+    resource = address.split('[')[0]
+    before, after = d.get('before'), d.get('after')
+    planned = n.get(address, {})
+    changed = set(before or {}) ^ set(after or {})
+    if isinstance(before, dict) and isinstance(after, dict):
+        changed |= {k for k in set(before) & set(after) if before[k] != after[k]}
+    eligible = (address not in seen_drift and planned.get('mode') == 'managed'
+                and planned.get('type') == r.get('type')
+                and planned.get('change', {}).get('actions') == ['no-op']
+                and d.get('actions') == ['update']
+                and isinstance(before, dict) and isinstance(after, dict)
+                and after == planned.get('change', {}).get('after'))
+    seen_drift.add(address)
+    accepted = None
+    if eligible and r['type'] == 'aws_iam_openid_connect_provider':
+        if changed == {'tags'} and before.get('tags') in (None, {}) and after.get('tags') in (None, {}):
+            accepted = 'OIDC_NULL_EMPTY_TAGS_ONLY'
+    elif eligible and r['type'] == 'aws_iam_role' and changed == {'managed_policy_arns'}:
+        role = after.get('name')
+        expected = attachments.get(role, [])
+        prior, current = before.get('managed_policy_arns'), after.get('managed_policy_arns')
+        prior = [] if prior is None else prior
+        if (len(expected) == 1 and isinstance(prior, list) and isinstance(current, list)
+                and all(isinstance(v, str) for v in prior + current)
+                and len(prior) == len(set(prior)) and len(current) == len(set(current))
+                and set(prior) <= set(expected) and set(current) == set(expected)):
+            accepted = 'EXACT_REVIEWED_ROLE_POLICY_ATTACHMENT_REFRESH'
+    if accepted:
+        accepted_refresh.append({'resource': resource, 'class': accepted})
+    else:
+        errors.append({'reason': 'MANAGED_RESOURCE_DRIFT', 'resource': resource,
+                       'fields': [d['field'] for d in known_deltas(before, after)]})
 checks=new.get('checks',[])
 check(len(checks)==17 and all(c.get('status')=='pass' for c in checks),'PLAN_CHECK_NOT_PASS')
 check(set(new.get('output_changes',{}))<=set(old.get('output_changes',{})),'OUTPUT_SCOPE_DELTA')
-result={'status':'STOP_STORED_CLUSTER_PLAN' if errors else 'PASS_STORED_CLUSTER_ONLY_PLAN','errors':errors,'existing_state_representation_differences':observed[:100], 'managed_actions':{'/'.join(action):sum(r['change']['actions']==action for r in n.values()) for action in (['create'],['no-op'],['update'],['delete'])}, 'api_calls':0,'apply':'NOT_RUN','values':'NOT_EMITTED'}
+result={'status':'STOP_STORED_CLUSTER_PLAN' if errors else 'PASS_STORED_CLUSTER_ONLY_PLAN','errors':errors,'existing_state_representation_differences':observed[:100], 'accepted_refresh_differences':accepted_refresh, 'managed_actions':{'/'.join(action):sum(r['change']['actions']==action for r in n.values()) for action in (['create'],['no-op'],['update'],['delete'])}, 'api_calls':0,'apply':'NOT_RUN','values':'NOT_EMITTED'}
 print(json.dumps(result,sort_keys=True))
 if errors:
     raise SystemExit(1)
