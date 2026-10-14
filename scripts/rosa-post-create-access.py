@@ -521,7 +521,10 @@ def main():
         machines=r.json_command([oc,'get','machines.machine.openshift.io','-n','openshift-machine-api','-o','json','--request-timeout=30s'],'worker-machine-definitions')
         groups=r.json_command(aws+['ec2','describe-security-groups','--filters','Name=vpc-id,Values='+inputs['foundation']['vpc_id'],'Name=tag:kubernetes.io/cluster/'+handoff['infra_id']+',Values=owned,shared'],'worker-security-groups')
         group=select_machine_worker_group(nodes,machines,groups,inputs['foundation']['vpc_id'],account,handoff['infra_id'])
-        binding={'cluster_id':cluster,'worker_security_group_id':group,'observed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'evidence_reference':str(folder/'worker-security-groups.json')}
+        observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        evidence={'cluster_id':cluster,'infra_id':handoff['infra_id'],'worker_security_group_id':group,'observed_at':observed_at,'proof':'CURRENT_COMPUTE_NODES_LINKED_MACHINE_INSTANCE_IDS_AND_MACHINE_SG_REFERENCES_MATCH_ACTUAL_AWS_GROUP_VPC_OWNER_CLUSTER_TAG','ec2_instance_attachments':'NOT_QUERIED','files_sha256':{name:hashlib.sha256((folder/name).read_bytes()).hexdigest() for name in ('nodes.json','worker-machine-definitions.json','worker-security-groups.json')}}
+        write_json(folder/'worker-binding-evidence.json',evidence)
+        binding={'cluster_id':cluster,'worker_security_group_id':group,'observed_at':observed_at,'evidence_reference':str(folder/'worker-binding-evidence.json')}
         write_json(folder/'worker-binding-input.json',binding)
         result={'status':'PASS_MANAGEMENT_NODES_AND_CLOUD_WORKER_SG','node_counts':counts,'operators':operators,'worker_sg_unique_cluster_vpc_machine_reference_match':True,'ec2_instance_attachment_read':'NOT_QUERIED_USE_MACHINE_SPEC_REFERENCE_EVIDENCE','data_ingress_rules_plan_apply':'NOT_RUN','app_deployment_tls_auth':'NOT_RUN','initial_admin':'CREATED_OR_REUSED_PRIVATE_CREDENTIALS','credential_or_endpoint_values_printed':False}
         write_json(folder/'receipt.json',result);emit(**result)
