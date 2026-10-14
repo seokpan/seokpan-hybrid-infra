@@ -74,9 +74,10 @@ iam_path = bootstrap / "iam.tf"
 execution_path = bootstrap / "rosa_iam_execution.tf"
 read_path = bootstrap / "rosa_plan_read_permissions.tf"
 cluster_path = bootstrap / "rosa_cluster_iam_execution.tf"
+data_path = bootstrap / "rosa_data_connection_permissions.tf"
 lock = bootstrap / ".terraform.lock.hcl"
 
-for path in (iam_path, execution_path, read_path, cluster_path, lock):
+for path in (iam_path, execution_path, read_path, cluster_path, data_path, lock):
     if path.is_symlink() or not path.is_file():
         stop("기존 bootstrap 코드 또는 잠금 파일을 확인해야 합니다.")
 
@@ -84,6 +85,7 @@ iam = iam_path.read_text(encoding="utf-8")
 execution = execution_path.read_text(encoding="utf-8")
 read_source = read_path.read_text(encoding="utf-8")
 cluster_source = cluster_path.read_text(encoding="utf-8")
+data_source = data_path.read_text(encoding="utf-8")
 
 inline_declarations = set()
 for path in bootstrap.glob("*.tf"):
@@ -99,6 +101,7 @@ if inline_declarations != {
     "tf_foundation_data",
     "tf_rosa_first_plan_read",
     "tf_rosa_cluster_iam",
+    "tf_rosa_data_connection",
 }:
     stop("개별 역할 정책 선언이 달라졌습니다. 합계 검사 범위를 보완해야 합니다.")
 
@@ -596,6 +599,7 @@ locals {
     ],
     aws_iam_role_policy.tf_rosa_first_plan_read,
     aws_iam_role_policy.tf_rosa_cluster_iam,
+    aws_iam_role_policy.tf_rosa_data_connection,
   )
 
   test_inline_totals = {
@@ -657,6 +661,9 @@ output "test_sizes" {
 }
 output "test_cluster_document" {
   value = try(data.aws_iam_policy_document.tf_rosa_cluster_iam[0].json, null)
+}
+output "test_data_document" {
+  value = try(data.aws_iam_policy_document.tf_rosa_data_connection[0].json, null)
 }
 '''
 
@@ -754,6 +761,9 @@ with tempfile.TemporaryDirectory(
     (work / "rosa_cluster_iam_execution.tf").write_text(
         annotate_documents(cluster_source), encoding="utf-8"
     )
+    (work / "rosa_data_connection_permissions.tf").write_text(
+        annotate_documents(data_source), encoding="utf-8"
+    )
     (work / "fixtures.tf").write_text(fixtures, encoding="utf-8")
     (work / "versions.tf").write_text(
         'terraform {\n  required_version = "1.16.4"\n'
@@ -842,6 +852,8 @@ with tempfile.TemporaryDirectory(
         '    enable_rosa_account_iam_permissions = true\n'
         '    enable_rosa_plan_read_permissions = true\n'
         '    enable_rosa_cluster_iam_permissions = true\n'
+        '    enable_rosa_data_connection_permissions = true\n'
+        '    rosa_data_security_group_ids = { rds = "sg-0123456789abcdef0", redis = "sg-0123456789abcdef1" }\n'
         '    rosa_cluster_operator_policy_arns = ' + json.dumps(cluster_test_policies) + '\n'
         '    rosa_plan_foundation_vpc_id = "vpc-0123456789abcdef0"\n'
         '  }\n'
@@ -953,6 +965,9 @@ with tempfile.TemporaryDirectory(
         )
     test += assertion(
         "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 1"
+        " && length(aws_iam_role_policy.tf_rosa_data_connection) == 1"
+        ' && aws_iam_role_policy.tf_rosa_data_connection[0].name == "seokpan-tf-rosa-data-connect"'
+        ' && aws_iam_role_policy.tf_rosa_data_connection[0].role == "seokpan-tf-rosa"'
         ' && aws_iam_role_policy.tf_rosa_cluster_iam[0].name == "seokpan-tf-rosa-cluster-iam"'
         ' && aws_iam_role_policy.tf_rosa_cluster_iam[0].role == "seokpan-tf-rosa"',
         "새 설치권한 정책의 개수 또는 대상이 다릅니다.",
@@ -966,6 +981,7 @@ with tempfile.TemporaryDirectory(
         '    enable_rosa_account_iam_permissions = false\n'
         '    enable_rosa_plan_read_permissions = false\n'
         '    enable_rosa_cluster_iam_permissions = false\n'
+        '    enable_rosa_data_connection_permissions = false\n'
         '  }\n'
     )
     test += assertion(
@@ -1002,7 +1018,8 @@ with tempfile.TemporaryDirectory(
 
     test = test[:-2]
     test += assertion(
-        "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 0",
+        "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 0"
+        " && length(aws_iam_role_policy.tf_rosa_data_connection) == 0",
         "비활성 상태에서 설치권한 정책이 남았습니다.",
     )
     test += "}\n"
@@ -1164,3 +1181,262 @@ if result_path:
 if not creation_tag_allowed:
     print("확인 필요: 생성 요청 태그만 있는 경우 태그 부착이 허용되지 않습니다.")
     print("PR 게시 보류: 실제 생성 시 태그 권한 조건을 확정해야 합니다.")
+
+
+# Data 연결 정책도 기존 실제 문서 생성 결과로 검사합니다.
+def find_data_documents(value):
+    if isinstance(value, dict):
+        entry = value.get("test_data_document")
+        if isinstance(entry, dict) and isinstance(entry.get("value"), str):
+            yield json.loads(entry["value"])
+        for child in value.values():
+            yield from find_data_documents(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from find_data_documents(child)
+
+
+data_documents = []
+for event in events:
+    data_documents.extend(find_data_documents(event))
+
+if not data_documents:
+    stop("새 Data 정책 문서를 읽지 못했습니다.")
+
+data_document = data_documents[0]
+data_statements = data_document.get("Statement", [])
+
+expected_data_actions = {
+    "ec2:DescribeSecurityGroups",
+    "ec2:DescribeSecurityGroupRules",
+    "ec2:AuthorizeSecurityGroupIngress",
+    "ec2:RevokeSecurityGroupIngress",
+    "ec2:CreateTags",
+}
+
+
+def as_list(value):
+    return value if isinstance(value, list) else [value]
+
+
+actual_data_actions = {
+    action
+    for statement in data_statements
+    for action in as_list(statement.get("Action", []))
+}
+
+if actual_data_actions != expected_data_actions:
+    stop("Data 정책의 작업 목록이 요청 범위와 다릅니다.")
+
+for statement in data_statements:
+    if set(statement) - {"Sid", "Effect", "Action", "Resource", "Condition"}:
+        stop("검사하지 못하는 정책 문법이 있습니다.")
+
+
+def data_allowed(action, resource, context):
+    context = {key.lower(): value for key, value in context.items()}
+    effects = []
+
+    for statement in data_statements:
+        if not any(
+            fnmatch.fnmatchcase(action.lower(), item.lower())
+            for item in as_list(statement.get("Action", []))
+        ):
+            continue
+
+        if not any(
+            fnmatch.fnmatchcase(resource, item)
+            for item in as_list(statement.get("Resource", []))
+        ):
+            continue
+
+        matches = True
+        for operator, entries in statement.get("Condition", {}).items():
+            if operator != "StringEquals":
+                stop("Data 정책의 조건 검사 보완이 필요합니다.")
+            for key, expected in entries.items():
+                if context.get(key.lower()) not in as_list(expected):
+                    matches = False
+
+        if matches:
+            effects.append(statement.get("Effect"))
+
+    return "Allow" in effects and "Deny" not in effects
+
+
+region_context = {"aws:RequestedRegion": "ap-northeast-2"}
+tag_context = {
+    **region_context,
+    "aws:RequestTag/Project": "seokpan",
+    "aws:RequestTag/Phase": "2",
+    "aws:RequestTag/Component": "rosa",
+}
+create_context = {
+    **tag_context,
+    "ec2:CreateAction": "AuthorizeSecurityGroupIngress",
+}
+sg_arns = [
+    "arn:aws:ec2:ap-northeast-2:" + account + ":security-group/" + value
+    for value in ("sg-0123456789abcdef0", "sg-0123456789abcdef1")
+]
+rule_arn = (
+    "arn:aws:ec2:ap-northeast-2:" + account
+    + ":security-group-rule/sgr-0123456789abcdef0"
+)
+other_sg = (
+    "arn:aws:ec2:ap-northeast-2:" + account
+    + ":security-group/sg-0123456789abcdef2"
+)
+other_account = "111111111111" if account != "111111111111" else "222222222222"
+data_cases = []
+
+
+def data_case(label, expected, action, resource, context):
+    data_cases.append(
+        (label, expected, data_allowed(action, resource, context))
+    )
+
+
+def tagged_creation_allowed(sg, context):
+    # 태그 포함 생성은 대상 보안 그룹·새 규칙·생성 시 태그 권한을 함께 평가합니다.
+    return (
+        data_allowed("ec2:AuthorizeSecurityGroupIngress", sg, context)
+        and data_allowed("ec2:AuthorizeSecurityGroupIngress", rule_arn, context)
+        and data_allowed("ec2:CreateTags", rule_arn, context)
+    )
+
+
+for action in ("ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules"):
+    data_case("서울 조회 허용", True, action, "*", region_context)
+    data_case(
+        "다른 리전 조회 차단", False, action, "*",
+        {"aws:RequestedRegion": "us-east-1"},
+    )
+    data_case("리전 조건 누락 차단", False, action, "*", {})
+
+for sg in sg_arns:
+    for action in (
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress",
+    ):
+        data_case("지정 보안 그룹 관리 허용", True, action, sg, region_context)
+        data_case("다른 보안 그룹 관리 차단", False, action, other_sg, region_context)
+        data_case(
+            "다른 계정 보안 그룹 차단", False, action,
+            sg.replace(account, other_account), region_context,
+        )
+        data_case(
+            "다른 리전 보안 그룹 차단", False, action,
+            sg.replace("ap-northeast-2", "us-east-1"),
+            {"aws:RequestedRegion": "us-east-1"},
+        )
+        data_case("관리 요청의 리전 누락 차단", False, action, sg, {})
+
+    data_cases.append(
+        ("태그 포함 접속 규칙 생성 허용", True,
+         tagged_creation_allowed(sg, create_context))
+    )
+
+    for key in (
+        "aws:RequestTag/Project",
+        "aws:RequestTag/Phase",
+        "aws:RequestTag/Component",
+    ):
+        missing = dict(create_context)
+        missing.pop(key)
+        wrong = dict(create_context)
+        wrong[key] = "other"
+        data_cases.append(
+            ("태그 포함 생성의 필수 태그 누락 차단", False,
+             tagged_creation_allowed(sg, missing))
+        )
+        data_cases.append(
+            ("태그 포함 생성의 태그 불일치 차단", False,
+             tagged_creation_allowed(sg, wrong))
+        )
+
+data_cases.append(
+    ("태그가 맞아도 다른 보안 그룹 생성 차단", False,
+     tagged_creation_allowed(other_sg, create_context))
+)
+
+data_case(
+    "규칙 생성 시 태그 허용", True,
+    "ec2:CreateTags", rule_arn, create_context,
+)
+data_case(
+    "기존 규칙의 직접 태그 변경 차단", False,
+    "ec2:CreateTags", rule_arn, tag_context,
+)
+data_case(
+    "보안 그룹 자체 태그 변경 차단", False,
+    "ec2:CreateTags", sg_arns[0], create_context,
+)
+
+for operation in ("CreateSecurityGroup", "RunInstances", "AuthorizeSecurityGroupEgress"):
+    data_case(
+        "다른 생성 작업의 태그 권한 차단", False,
+        "ec2:CreateTags", rule_arn,
+        {**create_context, "ec2:CreateAction": operation},
+    )
+
+for action in (
+    "ec2:CreateSecurityGroup",
+    "ec2:DeleteSecurityGroup",
+    "ec2:AuthorizeSecurityGroupEgress",
+    "ec2:RevokeSecurityGroupEgress",
+    "ec2:ModifySecurityGroupRules",
+    "ec2:DeleteTags",
+):
+    data_case(
+        "요청하지 않은 관리 작업 차단", False,
+        action, sg_arns[0], create_context,
+    )
+
+for action in ("ec2:AuthorizeSecurityGroupIngress", "ec2:CreateTags"):
+    data_case(
+        "다른 계정 규칙 대상 차단", False,
+        action, rule_arn.replace(account, other_account), create_context,
+    )
+    data_case(
+        "다른 리전 규칙 대상 차단", False,
+        action, rule_arn.replace("ap-northeast-2", "us-east-1"),
+        {**create_context, "aws:RequestedRegion": "us-east-1"},
+    )
+
+data_failures = [
+    label
+    for label, expected, actual in data_cases
+    if expected != actual
+]
+
+print("Data 정책의 오프라인 사례:", len(data_cases), "개")
+print("Data 정책 예상과 일치:", len(data_cases) - len(data_failures), "개")
+print("Data 정책 예상과 다름:", len(data_failures), "개")
+
+if data_failures:
+    stop("Data 정책의 허용·차단 결과가 요청 범위와 다릅니다.")
+
+print("통과: 지정 보안 그룹 두 개·다른 대상 차단")
+print("통과: 태그 포함 생성의 보안 그룹·규칙·태그 권한 대응")
+print("통과: 기존 규칙 직접 태그 변경·다른 작업 차단")
+print("확인: 태그 없는 생성과 태그 포함 생성은 AWS 평가 범위가 다릅니다.")
+print("확인: 실제 Worker 보안 그룹과 실제 AWS 생성 시험은 사용하지 않았습니다.")
+
+if result_path:
+    report = json.loads(Path(result_path).read_text(encoding="utf-8"))
+    report["Data 정책 오프라인 사례 수"] = len(data_cases)
+    report["Data 정책 예상과 다른 사례 수"] = len(data_failures)
+    report["Data 정책 문자 수"] = len(
+        json.dumps(data_document, separators=(",", ":"))
+    )
+    report["Data 정책 포함 전체 합계 검사"] = "통과"
+    report["PR 게시 준비 완료"] = bool(creation_tag_allowed) and not data_failures
+
+    Path(result_path).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(result_path, 0o600)
+
+print("완료: Data 연결 정책 포함 전체 모의검사")
