@@ -68,7 +68,8 @@ resource "aws_subnet" "data" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name      = "seokpan-fnd-data-${each.key}"
-    Component = "network"
+    Name                              = "seokpan-fnd-data-${each.key}"
+    Component                         = "network"
+    "kubernetes.io/cluster/unmanaged" = "true"
   }
 }
