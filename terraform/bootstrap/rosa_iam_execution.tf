@@ -52,6 +52,10 @@ locals {
   )
 
   rosa_execution_management_policy_arn = "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-rosa-iam"
+
+  # 작성내용: Worker Role ECR Pull 전용 정책 ARN 추가 (최유준, 2026/10/15)
+  # foundation의 rosa_worker_ecr_pull.tf 정책 이름과 같아야 합니다.
+  rosa_execution_worker_ecr_pull_policy_arn = "arn:aws:iam::${local.account_id}:policy/seokpan-fnd-rosa-Worker-ECR-Pull"
 }
 
 data "aws_iam_policy_document" "tf_foundation_rosa_iam" {
@@ -110,6 +114,26 @@ data "aws_iam_policy_document" "tf_foundation_rosa_iam" {
     resources = local.rosa_execution_policy_arns
   }
 
+  # 작성내용: Worker ECR Pull 전용 정책 한 개만 관리 (최유준, 2026/10/15)
+  # 공식 정책 10개 목록과 분리해 기존 범위 검사를 유지합니다.
+  statement {
+    sid = "ManageWorkerEcrPullPolicy"
+    actions = [
+      "iam:CreatePolicy",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions",
+      "iam:CreatePolicyVersion",
+      "iam:SetDefaultPolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:DeletePolicy",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:ListPolicyTags",
+    ]
+    resources = [local.rosa_execution_worker_ecr_pull_policy_arn]
+  }
+
   dynamic "statement" {
     for_each = local.rosa_execution_role_names
 
@@ -126,9 +150,16 @@ data "aws_iam_policy_document" "tf_foundation_rosa_iam" {
       condition {
         test     = "ArnEquals"
         variable = "iam:PolicyARN"
-        values = [
-          local.rosa_execution_account_policy_arns[statement.key]
-        ]
+        # Worker만 공식 짝 정책과 ECR Pull 전용 정책 두 개 허용.
+        # 시험 스크립트의 sorted 순서와 같게 ECR Pull 정책을 앞에 둡니다.
+        values = (
+          statement.key == "worker"
+          ? [
+            local.rosa_execution_worker_ecr_pull_policy_arn,
+            local.rosa_execution_account_policy_arns[statement.key],
+          ]
+          : [local.rosa_execution_account_policy_arns[statement.key]]
+        )
       }
     }
   }

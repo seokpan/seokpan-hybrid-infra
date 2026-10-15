@@ -19,6 +19,8 @@ locals {
 }
 
 resource "aws_vpc" "main" {
+  provider = aws.rosa_shared_tags
+
   cidr_block           = "192.168.64.0/20"
   enable_dns_support   = true
   enable_dns_hostnames = true
@@ -30,6 +32,8 @@ resource "aws_vpc" "main" {
 }
 
 resource "aws_subnet" "public" {
+  provider = aws.rosa_shared_tags
+
   for_each = var.network_az_ids
 
   vpc_id                  = aws_vpc.main.id
@@ -45,6 +49,8 @@ resource "aws_subnet" "public" {
 }
 
 resource "aws_subnet" "rosa" {
+  provider = aws.rosa_shared_tags
+
   for_each = var.network_az_ids
 
   vpc_id                  = aws_vpc.main.id
@@ -68,7 +74,8 @@ resource "aws_subnet" "data" {
   map_public_ip_on_launch = false
 
   tags = {
-    Name      = "seokpan-fnd-data-${each.key}"
-    Component = "network"
+    Name                              = "seokpan-fnd-data-${each.key}"
+    Component                         = "network"
+    "kubernetes.io/cluster/unmanaged" = "true"
   }
 }

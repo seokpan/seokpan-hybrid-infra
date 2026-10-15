@@ -1,6 +1,6 @@
 # GitHub 개인 로그인 후 ROSA·Cloud Argo 권한 연결
 
-GitHub IdP로 OpenShift에 로그인해도 플랫폼 관리 권한과 Argo 프로젝트 권한은 자동으로 부여되지 않는다. `configure-rosa-human-access.py`는 이미 관측된 B 계정 `tjung03`에 한해 두 권한을 연결한다. [승인 설계 3-C.5/3-C.6](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)과 [관리 인증 추적](https://github.com/seokpan/seokpan-hybrid-docs/issues/21)의 후속이다.
+GitHub IdP로 OpenShift에 로그인해도 플랫폼 관리 권한과 Argo 프로젝트 권한은 자동으로 부여되지 않는다. `configure-rosa-human-access.py`는 이미 검토한 플랫폼 담당 계정 한 개에 한해 두 권한을 연결한다. [승인 설계 3-C.5/3-C.6](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)과 [관리 인증 추적](https://github.com/seokpan/seokpan-hybrid-docs/issues/21)의 후속이다.
 
 ## 범위
 
@@ -33,6 +33,13 @@ python3 scripts/configure-rosa-human-access.py /private/existing-rosa-root \
 python3 scripts/test-rosa-human-access.py
 ```
 
-오프라인 26개 통과: 실제 Identity 연결/UID·다른 사용자 거부, 보호 인계 대상 재사용, 기존 Argo 정책 보존/중복 방지/충돌 거부, 넓은 기본 정책·다른 SSO·기존 GitOps 소유권 거부, 그룹 소유권/구성원 경계, 정확한 Cloud 권한, CR 비교 후 변경 조건, users:null 오류 재현/수정, 누락/빈 배열 및 잘못된 자료형, 기존 무변경 중단의 로컬 진단. 첫 Controller 결과는 위 TypeError·권한 변경0건이며 수정본의 실제 반영과 브라우저 역할 수락은 아직 미실행이다. 오프라인 테스트는 실제 Casbin 판정 또는 IdP 실효 권한 검증을 대신하지 않는다.
+오프라인 회귀26개가 통과했다. Identity/UID·대상 범위, 보호 인계, 기존 정책 보존·충돌/동시 변경, 그룹 소유권, 빈 Group 표현과 중단 재개 경계를 검사한다. 오프라인 시험과 아래 실제 수락은 서로 다른 검증 근거다.
+
+실제 검증은 다음 두 시점으로 구분한다.
+
+1. **설정 반영 시점:** 최초 TypeError 중단은 권한 변경0건이었다. 수정본 재개 실행은 설정 반영과 그룹·Operator ConfigMap 확인까지 완료했다. 이때의 성공 상태는 `PASS_PERSONAL_OPENSHIFT_AND_SCOPED_ARGO_CONFIGURATION`이며, 당시 receipt의 `new_role_and_argo_browser_acceptance=NOT_YET_VERIFIED`는 아직 브라우저 수락 전이라는 기록이다.
+2. **이후 별도 수락 시점:** 정상 GitHub 개인 로그인과 현재 로그인 세션의 예정된 허용/거부 정책 검사7개가 모두 통과했다. 이 결과는 설정 반영 후의 추가 검증이며 기존 receipt의 과거 시점 값을 소급해 바꾸지 않는다. 개인 식별자·상세 세션 원본·자격 값은 이 문서에 기록하지 않는다.
+
+정책 검사 중 실제 Application 생성·Sync·앱 배포는 실행하지 않았다. 정상 관리 경로의 이 수락을 초기 관리자 회수·비상 관리 경로·Secret 운영·다른 사용자 권한 검증의 완료로 확대하지 않는다. 완료한 설치·권한 설정을 다시 실행해 얻은 결과도 아니다.
 
 근거: [ROSA dedicated-admin 공식 경로](https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/install_rosa_classic_clusters/rosa-sts-accessing-cluster), [GitOps Dex/OpenShift Group](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.21/html/access_control_and_user_management/configuring-sso-for-argo-cd-using-dex), [Argo RBAC](https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/).

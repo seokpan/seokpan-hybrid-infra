@@ -229,6 +229,10 @@ policy_arns = list(account_policy_arns.values()) + [
 management_arn = (
     f"arn:aws:iam::{account}:policy/seokpan-tf-foundation-rosa-iam"
 )
+# 작성: 최유준 2026/10/15 — Worker ECR Pull 전용 정책 (bootstrap rosa_iam_execution.tf와 같은 이름)
+worker_ecr_pull_arn = (
+    f"arn:aws:iam::{account}:policy/seokpan-fnd-rosa-Worker-ECR-Pull"
+)
 foundation_role = (
     f"arn:aws:iam::{account}:role/seokpan-tf-foundation"
 )
@@ -285,14 +289,23 @@ expected_foundation = {
     "ManageRosaOfficialPolicies": expected_statement(
         policy_actions, policy_arns
     ),
+    "ManageWorkerEcrPullPolicy": expected_statement(
+        policy_actions, [worker_ecr_pull_arn]
+    ),
 }
 
 for key, name in role_names.items():
     sid = "Attach" + name.replace("-", "") + "Policy"
+    # Worker만 공식 짝 정책과 ECR Pull 전용 정책 두 개를 허용 (나머지 Role은 짝 정책 하나)
+    allowed_policy = (
+        sorted([account_policy_arns[key], worker_ecr_pull_arn])
+        if key == "worker"
+        else account_policy_arns[key]
+    )
     expected_foundation[sid] = expected_statement(
         ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
         [role_arns[key]],
-        {"ArnEquals": {"iam:PolicyARN": account_policy_arns[key]}},
+        {"ArnEquals": {"iam:PolicyARN": allowed_policy}},
     )
 
 expected_bootstrap = {
@@ -969,6 +982,28 @@ with tempfile.TemporaryDirectory(
             role_arns["installer"], account_policy_arns["support"], False,
         ),
         (
+            "foundation", "iam:AttachRolePolicy",
+            role_arns["installer"], worker_ecr_pull_arn, False,
+        ),
+        (
+            "foundation", "iam:DetachRolePolicy",
+            role_arns["controlplane"], worker_ecr_pull_arn, False,
+        ),
+        (
+            "foundation", "iam:AttachRolePolicy",
+            role_arns["worker"],
+            "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly", False,
+        ),
+        (
+            "foundation", "iam:PutRolePolicy",
+            role_arns["worker"], None, False,
+        ),
+        (
+            "foundation", "iam:CreatePolicy",
+            f"arn:aws:iam::{account}:policy/seokpan-fnd-rosa-Worker-ECR-Pull-Extra",
+            None, False,
+        ),
+        (
             "foundation", "iam:CreateRole",
             role_arns["installer"], None, True,
         ),
@@ -1010,6 +1045,19 @@ with tempfile.TemporaryDirectory(
             ),
             f"승인한 역할과 짝 정책의 연결이 허용되지 않습니다: {key}",
         )
+    for action in ("iam:AttachRolePolicy", "iam:DetachRolePolicy"):
+        test += assertion(
+            request_match(
+                "foundation", action, role_arns["worker"], worker_ecr_pull_arn
+            ),
+            f"Worker 역할과 ECR Pull 전용 정책의 요청이 허용되지 않습니다: {action}",
+        )
+    test += assertion(
+        request_match(
+            "foundation", "iam:CreatePolicy", worker_ecr_pull_arn, None
+        ),
+        "ECR Pull 전용 정책 생성이 허용되지 않습니다.",
+    )
     test += assertion(
         "length(aws_iam_role_policy.tf_rosa_cluster_iam) == 1"
         " && length(aws_iam_role_policy.tf_rosa_data_connection) == 1"
@@ -1164,10 +1212,10 @@ with tempfile.TemporaryDirectory(
     print("통과: 활성 시 새 관리 정책 1개·연결 1개 및 Foundation 대상")
     print("통과: 비활성 시 새 관리 정책·연결 없음")
     print("통과: 기존 저장소·네트워크·데이터·자동화 권한과 연결 유지")
-    print("통과: 역할 4개·정책 10개의 정확한 대상 및 짝 정책 조건")
+    print("통과: 역할 4개·공식 정책 10개와 Worker ECR Pull 전용 정책 1개의 정확한 대상 및 짝 정책 조건")
     print("통과: 권한 경계 미지정 역할 생성 조건")
     print("통과: 관리형 정책 6144자 및 역할별 개별 정책 합계 10240자 제한")
-    print("통과: 지원 범위 밖 요청의 구조적 차단 10개")
+    print("통과: 지원 범위 밖 요청의 구조적 차단 15개")
     print("통과: 선택적 조회 정책의 활성·비활성 및 합계 반영")
     print("통과: 활성·비활성 모의시험 2개")
     print("확인: 계정·ARN·버킷은 시험용 값입니다.")

@@ -196,10 +196,41 @@ env | grep -c '^TF_VAR_redis_auth_token=' || true   # 0이어야 함
 
 - Public Subnet 3개: `kubernetes.io/role/elb = "1"`
 - ROSA Private Subnet 3개: `kubernetes.io/role/internal-elb = "1"`
-- Data Private Subnet 3개: ROSA 설치 대상에서 제외하며 위 태그를 추가하지 않습니다.
+- Data Private Subnet 3개: ROSA 설치 대상에서 제외하며 ELB 역할 태그는 추가하지 않습니다. 대신 `kubernetes.io/cluster/unmanaged = "true"`로 설치 대상이 아님을 명시합니다.
 
 각 Subnet 리소스의 `for_each`에 따라 해당 태그를 AZ별 3개에 적용하도록 선언합니다.
-현재는 Source 반영 단계이며, 실제 AWS 태그 적용·Preflight 통과는 별도 확인합니다.
+Data 제외 태그의 실제 보완 후 ROSA 설치는 완료됐습니다. 이 결과와 이후 Foundation 실행의 태그 보존 검증은 구분합니다.
+
+ROSA 설치 후 이전 PR 코드로 수행한 Foundation 전체 계획에서 Public/ROSA 서브넷6개와
+공통 ControlPlane/Worker 역할2개의 클러스터 태그 삭제가 확인돼 Apply하지 않았습니다.
+
+`aws.rosa_shared_tags`는 기존 기본 Provider와 같은 Region·공통 태그를 사용하며,
+`kubernetes.io/cluster/` 접두사만 Terraform의 태그 대조에서 제외합니다.
+다음 자원만 이 Provider를 명시적으로 사용합니다.
+
+- `aws_vpc.main`
+- `aws_subnet.public`, `aws_subnet.rosa`
+- `aws_iam_role.rosa_account` (공통 역할4개, 기존 주소·Trust·정책 연결 유지)
+
+Data 서브넷은 이 Provider를 사용하지 않습니다. 기본 Provider에서
+`kubernetes.io/cluster/unmanaged=true`를 계속 명시적으로 관리합니다.
+ELB/internal-ELB 역할 태그는 `kubernetes.io/role/`이므로 두 Provider 모두 계속 관리합니다.
+Data 서비스 등 다른 자원의 태그 관리 범위는 바꾸지 않습니다.
+`kubernetes.io/` 전체나 모든 `tags`를 무시하지 않으며 실제 클러스터 식별자를 Source에 넣지 않습니다.
+
+변경된 것은 태그 관리 경계와 Provider 연결입니다. 자원 주소·CIDR·IAM Trust·정책·NAT 입력은 유지합니다.
+State를 직접 수정하거나 자원을 import/replace하지 않습니다. 적용 후 State가 별도 Provider를
+참조할 수 있으므로 해당 자원을 정리할 때까지 `aws.rosa_shared_tags` 설정을 유지해야 합니다.
+
+PR #70 보완 Source `52fc24f98dbddb810121274ee3930138d1801f23`에서 A가 같은 NAT 활성 입력과
+ROSA 설치 후 현재 State로 수행한 Foundation 전체 계획은 종료값0·자원/출력 변경0·클러스터 태그
+삭제/값 변경0으로 확인됐습니다. jth의 보호 JSON 확인에서도 자원78개 모두 no-op·검사14개 통과입니다.
+[실제 결과](https://github.com/seokpan/seokpan-hybrid-infra/pull/70#issuecomment-6185528368)를 참조합니다.
+이 결과를 위해 별도 무변경 Apply나 ROSA 재설치를 수행하지 않았습니다.
+
+이 기록은 해당 Source·입력·State 시점의 결과입니다. 후속 Foundation 변경은 최신 Source와 실제
+State로 전체 계획을 검토하며 예상 밖 생성·수정·교체·삭제·태그 제거가 나타나면 Apply하지 않습니다.
+Provider alias를 참조하는 자원 정리가 끝날 때까지 위 설정을 유지합니다.
 
 공식 기준:
 https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
