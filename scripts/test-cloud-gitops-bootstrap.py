@@ -216,7 +216,8 @@ class Checks(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(receipt['status'], 'PASS_CLOUD_GITOPS_OPERATOR_AND_DEFAULT_ARGO')
         self.assertFalse(receipt['application_created'])
-        self.assertFalse(receipt['oauth_rbac_terraform_sql_changes'])
+        self.assertFalse(receipt['human_idp_or_human_rolebinding_changes'])
+        self.assertFalse(receipt['terraform_or_sql_changes'])
         self.assertEqual(len([x for x in calls if x[0] == 'ansible-playbook']), 1)
         self.assertEqual(len([x for x in calls if x[0] == 'patch']), 1)
 
