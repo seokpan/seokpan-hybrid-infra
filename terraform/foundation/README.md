@@ -201,12 +201,30 @@ env | grep -c '^TF_VAR_redis_auth_token=' || true   # 0이어야 함
 각 Subnet 리소스의 `for_each`에 따라 해당 태그를 AZ별 3개에 적용하도록 선언합니다.
 Data 제외 태그의 실제 보완 후 ROSA 설치는 완료됐습니다. 이 결과와 이후 Foundation 실행의 태그 보존 검증은 구분합니다.
 
-ROSA가 생성하는 `kubernetes.io/cluster/<클러스터 식별자>` 태그는 ROSA의 동적 태그입니다.
-ROSA 설치 후 Foundation을 실행하기 전에는 현재 State와 기존 활성 입력으로 전체 실행 계획을 확인하고,
-VPC·Public/ROSA/Data 서브넷의 해당 태그가 삭제·변경되지 않는지 검토합니다.
-삭제·변경이 계획되면 Apply하지 않고 해당 키의 관리 주체를 분리합니다.
-`kubernetes.io/` 전체를 무시하거나 ELB 역할·Data 제외 태그의 관리를 생략하지 않습니다.
-현재 PR의 설치 후 Foundation 전체 실행 계획 검증은 대기 상태입니다.
+ROSA 설치 후 이전 PR 코드로 수행한 Foundation 전체 계획에서 Public/ROSA 서브넷6개와
+공통 ControlPlane/Worker 역할2개의 클러스터 태그 삭제가 확인돼 Apply하지 않았습니다.
+
+`aws.rosa_shared_tags`는 기존 기본 Provider와 같은 Region·공통 태그를 사용하며,
+`kubernetes.io/cluster/` 접두사만 Terraform의 태그 대조에서 제외합니다.
+다음 자원만 이 Provider를 명시적으로 사용합니다.
+
+- `aws_vpc.main`
+- `aws_subnet.public`, `aws_subnet.rosa`
+- `aws_iam_role.rosa_account` (공통 역할4개, 기존 주소·Trust·정책 연결 유지)
+
+Data 서브넷은 이 Provider를 사용하지 않습니다. 기본 Provider에서
+`kubernetes.io/cluster/unmanaged=true`를 계속 명시적으로 관리합니다.
+ELB/internal-ELB 역할 태그는 `kubernetes.io/role/`이므로 두 Provider 모두 계속 관리합니다.
+Data 서비스 등 다른 자원의 태그 관리 범위는 바꾸지 않습니다.
+`kubernetes.io/` 전체나 모든 `tags`를 무시하지 않으며 실제 클러스터 식별자를 Source에 넣지 않습니다.
+
+변경된 것은 태그 관리 경계와 Provider 연결입니다. 자원 주소·CIDR·IAM Trust·정책·NAT 입력은 유지합니다.
+State를 직접 수정하거나 자원을 import/replace하지 않습니다. 적용 후 State가 별도 Provider를
+참조할 수 있으므로 해당 자원을 정리할 때까지 `aws.rosa_shared_tags` 설정을 유지해야 합니다.
+
+적용 전 A가 같은 NAT 활성 입력·현재 State로 새 전체 계획을 확인합니다. 예상은 자원/출력 변경0이며,
+실제 계획에서 생성·교체·삭제·태그 제거 등 다른 변경이 나타나면 Apply하지 않습니다.
+Provider 설정의 정적 검증과 실제 전체 계획 통과를 구분합니다. 보완 코드의 실제 계획 결과는 아직 대기 중입니다.
 
 공식 기준:
 https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
