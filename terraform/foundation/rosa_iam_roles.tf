@@ -74,6 +74,8 @@ locals {
 }
 
 resource "aws_iam_role" "rosa_account" {
+  provider = aws.rosa_shared_tags
+
   for_each = local.rosa_account_trust_policies
 
   name = "${var.rosa_account_role_prefix}-${local.rosa_account_role_properties[each.key].name}-Role"
