@@ -99,6 +99,31 @@ def exact_plan(plan, ref):
         'INSTALLPLAN_OFFICIAL_BUNDLE_NOT_PROVEN')
 
 
+def approval_patch(plan, ref):
+    exact_plan(plan, ref)
+    version = plan.get('metadata', {}).get('resourceVersion')
+    need(isinstance(version, str) and bool(version), 'INSTALLPLAN_RESOURCE_VERSION_REQUIRED')
+    need(plan['spec'].get('approved') is False, 'INSTALLPLAN_APPROVAL_STATE_CHANGED')
+    return [{'op': 'test', 'path': '/metadata/uid', 'value': ref['uid']},
+            {'op': 'test', 'path': '/metadata/resourceVersion', 'value': version},
+            {'op': 'test', 'path': '/spec/approval', 'value': 'Manual'},
+            {'op': 'test', 'path': '/spec/clusterServiceVersionNames', 'value': [CSV]},
+            {'op': 'test', 'path': '/spec/approved', 'value': False},
+            {'op': 'replace', 'path': '/spec/approved', 'value': True}]
+
+
+def approve_exact_installplan(runner, ref):
+    # Re-read the selected object, then bind the atomic patch to all reviewed fields.
+    # resourceVersion also guards bundleLookups/status changes between GET and PATCH.
+    current = runner.get('installplans.operators.coreos.com', ref['name'], NS)
+    exact_plan(current, ref)
+    if current['spec'].get('approved') is True:
+        return
+    patch = approval_patch(current, ref)
+    runner.call(['patch', 'installplans.operators.coreos.com', ref['name'], '-n', NS,
+                 '--type=json', '-p', json.dumps(patch)], 'approve-exact-installplan')
+
+
 PLAYBOOK = json.dumps([{'name': 'Install the selected Cloud GitOps bootstrap declarations',
     'hosts': 'localhost', 'connection': 'local', 'gather_facts': False,
     'tasks': [{'name': 'Create the missing exact declaration without changing existing objects',
@@ -236,11 +261,7 @@ def main():
         exact_plan(plan, ref)
         (folder / 'installplan-reviewed.json').write_text(json.dumps(plan))
         if not plan['spec'].get('approved'):
-            patch = [{'op': 'test', 'path': '/metadata/uid', 'value': ref['uid']},
-                     {'op': 'test', 'path': '/spec/approved', 'value': False},
-                     {'op': 'replace', 'path': '/spec/approved', 'value': True}]
-            r.call(['patch', 'installplans.operators.coreos.com', ref['name'], '-n', NS,
-                    '--type=json', '-p', json.dumps(patch)], 'approve-exact-installplan')
+            approve_exact_installplan(r, ref)
         def csv_ready():
             c = r.get('clusterserviceversions.operators.coreos.com', CSV, NS, optional=True)
             if c:
@@ -277,3 +298,4 @@ if __name__ == '__main__':
         print(json.dumps({'status': 'STOP_BEFORE_GITOPS_INSTALL',
                           'reason': str(exc) if isinstance(exc, Stop) else type(exc).__name__}))
         raise SystemExit(1)
+
