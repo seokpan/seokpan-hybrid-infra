@@ -301,3 +301,21 @@ IAM 정책 문서는 기존 Provider의 로컬 문서 생성기로 계산했다.
 실제 AWS API·Backend 접속과 전체 Foundation Plan·Apply는 수행하지 않았다.
 실제 계정의 실효 권한·조직 정책·기존 자원 및 State 관리 주체 확인과
 실행 승인은 후속 단계다. 이 결과는 코드 재리뷰 근거로 사용한다.
+
+## Worker ECR Pull 전용 정책 추가 — 2026-10-15
+
+- 작성: 최유준 (Worker 노드 Role 경유 Pull, 프로젝트 FE/BE 저장소 한정 전용 정책으로 이유빈과 합의)
+- 관련 Issue: #74
+
+### 변경 내용
+
+- 선언 위치: `terraform/foundation/rosa_worker_ecr_pull.tf` (정책 `seokpan-fnd-rosa-Worker-ECR-Pull`과 Worker Role 연결)
+- 허용 범위: `ecr:GetAuthorizationToken`(`*`), 저장소 2개에 `BatchGetImage`·`GetDownloadUrlForLayer`·`BatchCheckLayerAvailability`. Push·Delete 없음.
+- 연결 대상은 `seokpan-fnd-rosa-Worker-Role` 하나. 기존 공식 정책·Trust는 변경하지 않음.
+- bootstrap: foundation 실행 역할에 전용 정책 관리 문장(`ManageWorkerEcrPullPolicy`)을 추가하고, Worker 역할의 연결 조건에 이 정책 ARN을 더함. 다른 역할의 조건은 그대로.
+- 기존 위 "정책 10개" 기록은 당시 범위이며, 이 항목은 그 밖에 정책 1개가 추가된 것임.
+
+### 검증 범위
+
+- `scripts/test-rosa-bootstrap-permissions.py` 통과 (허용·차단 사례 추가 반영), foundation `terraform validate` 성공.
+- 실제 AWS 접속·bootstrap/foundation Plan·Apply·ROSA 노드 Pull 시험은 미실행.
