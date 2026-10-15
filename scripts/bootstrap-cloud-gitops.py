@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Controller jth: install only the selected Cloud GitOps Operator via Ansible.
 
-No Root/Application, Sync, OAuth/RBAC change, SQL, app activation or Terraform.
+No Root/Application, Sync, human OAuth/RBAC change, SQL, app activation or Terraform.
+OLM creates the Operator's own installation resources, including its RBAC.
 OLM uses Manual approval; only the exact 1.21.4 InstallPlan is approved.
 Existing managed objects must match; no force apply, deletion or version fallback.
 """
@@ -172,7 +173,8 @@ def main():
     folder = Path(tempfile.mkdtemp(prefix='cloud-gitops-bootstrap-', dir=root))
     r = Runner(oc, mgmt / 'kubeconfig', folder)
     result = {'status': 'RUNNING', 'application_created': False, 'app_started': False,
-              'oauth_rbac_terraform_sql_changes': False, 'completed_tests_repeated': False,
+              'human_idp_or_human_rolebinding_changes': False,
+              'terraform_or_sql_changes': False, 'completed_tests_repeated': False,
               'version': VERSION}
     def save():
         (folder / 'receipt.json').write_text(json.dumps(result, sort_keys=True) + '\n')
