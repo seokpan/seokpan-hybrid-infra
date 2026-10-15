@@ -111,5 +111,53 @@ class AccessTests(unittest.TestCase):
             (root/'management').mkdir()
             with self.assertRaises(a.Stop): a.accepted_target(root)
 
+    def test_null_users_original_error_reproduced_and_fixed(self):
+        group={'users':None}
+        with self.assertRaises(TypeError):
+            a.USER not in group.get('users',[])
+        self.assertEqual(a.group_users(group),[])
+        self.assertNotIn(a.USER,a.group_users(group))
+
+    def test_missing_absent_empty_users_all_mean_no_members(self):
+        for group in (None,{}, {'users':[]},{'users':None}):
+            self.assertEqual(a.group_users(group),[])
+
+    def test_nonlist_group_users_rejected_not_normalized(self):
+        for users in ('tjung03',{},[None]):
+            with self.assertRaises(a.Stop): a.group_users({'users':users})
+
+    def test_null_identity_list_fails_closed(self):
+        self.user['identities']=None
+        with self.assertRaisesRegex(a.Stop,'ONE_OBSERVED'):
+            a.require_identity(self.user,self.identity)
+
+    def test_null_metadata_labels_do_not_crash(self):
+        self.argo['metadata'].update(labels=None,annotations=None)
+        a.candidate_rbac(self.argo)
+
+    def test_null_scopes_fail_closed(self):
+        self.argo['spec']['rbac']['scopes']=None
+        with self.assertRaisesRegex(a.Stop,'GROUP_SCOPES'):
+            a.candidate_rbac(self.argo)
+
+    def test_previous_stop_locally_confirms_null_users(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve()
+            previous=root/'human-access-example'
+            previous.mkdir()
+            (previous/'receipt.json').write_text(json.dumps({
+                'status':'STOP_PERSONAL_ACCESS','reason':'TypeError','mutations_attempted':0}))
+            (previous/'platform-group-before.json').write_text(json.dumps({'users':None}))
+            self.assertTrue(a.previous_stop_diagnosis(root,previous)['null_platform_group_users_confirmed'])
+
+    def test_previous_mutation_attempt_requires_separate_review(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve()
+            previous=root/'human-access-example'
+            previous.mkdir()
+            (previous/'receipt.json').write_text(json.dumps({
+                'status':'STOP_PERSONAL_ACCESS','mutations_attempted':1}))
+            with self.assertRaises(a.Stop): a.previous_stop_diagnosis(root,previous)
+
 
 if __name__=='__main__': unittest.main()
