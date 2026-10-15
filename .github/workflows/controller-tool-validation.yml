@@ -1,0 +1,105 @@
+name: Controller tool source validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+    paths:
+      - 'scripts/rosa-independent-checks.py'
+      - 'scripts/test-rosa-independent-checks.py'
+      - 'scripts/bootstrap-cloud-gitops.py'
+      - 'scripts/test-cloud-gitops-bootstrap.py'
+      - 'scripts/prepare-data-operator-access.py'
+      - 'scripts/test-data-operator-access.py'
+      - 'scripts/configure-rosa-human-access.py'
+      - 'scripts/test-rosa-human-access.py'
+      - '.github/workflows/controller-tool-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/rosa-independent-checks.py'
+      - 'scripts/test-rosa-independent-checks.py'
+      - 'scripts/bootstrap-cloud-gitops.py'
+      - 'scripts/test-cloud-gitops-bootstrap.py'
+      - 'scripts/prepare-data-operator-access.py'
+      - 'scripts/test-data-operator-access.py'
+      - 'scripts/configure-rosa-human-access.py'
+      - 'scripts/test-rosa-human-access.py'
+      - '.github/workflows/controller-tool-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: controller-source-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-tests:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      CHECKPOINT_DISABLE: '1'
+    steps:
+      - name: Checkout the submitted source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Run only offline unit tests and record source hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          pairs = [
+              ("rosa-independent-checks.py", "test-rosa-independent-checks.py"),
+              ("bootstrap-cloud-gitops.py", "test-cloud-gitops-bootstrap.py"),
+              ("prepare-data-operator-access.py", "test-data-operator-access.py"),
+              ("configure-rosa-human-access.py", "test-rosa-human-access.py"),
+          ]
+          source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          present, absent = [], []
+          for source, test in pairs:
+              paths = [Path("scripts") / source, Path("scripts") / test]
+              exists = [p.is_file() and not p.is_symlink() for p in paths]
+              if not any(exists):
+                  absent.append(source)
+                  continue
+              if not all(exists):
+                  raise SystemExit("Source/test pair is incomplete: " + source)
+              hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+              subprocess.run([sys.executable, str(paths[1])], check=True)
+              present.append({"source": source, "test": test, "sha256": hashes})
+          if not present:
+              raise SystemExit("No selected source/test pair exists in this revision")
+          manifest = {
+              "status": "PASS_CONTROLLER_OFFLINE_SOURCE_TESTS",
+              "git_commit": source_sha,
+              "tested": present,
+              "not_present_in_this_revision": absent,
+              "runtime_acceptance": "NOT_RUN",
+              "cloud_credentials_supplied": False,
+          }
+          rendered = json.dumps(manifest, indent=2)
+          print(rendered)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("### Controller offline source tests\n\n```json\n" + rendered + "\n```\n")
+          PY
+
+      - name: Confirm source remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
