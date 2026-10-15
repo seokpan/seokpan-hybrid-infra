@@ -12,6 +12,7 @@ on:
       - 'scripts/test-worker-secret-free-pull.py'
       - 'scripts/verify-source-backend-stop.py'
       - 'scripts/test-source-backend-stop.py'
+      - 'scripts/prepare-native-runtime-pull.py'
       - '.github/workflows/cutover-readiness-validation.yml'
   push:
     branches: [main]
@@ -24,6 +25,7 @@ on:
       - 'scripts/test-worker-secret-free-pull.py'
       - 'scripts/verify-source-backend-stop.py'
       - 'scripts/test-source-backend-stop.py'
+      - 'scripts/prepare-native-runtime-pull.py'
       - '.github/workflows/cutover-readiness-validation.yml'
 
 permissions:
@@ -48,6 +50,8 @@ jobs:
         run: python3 scripts/test-worker-secret-free-pull.py
       - name: Test merged-source and backend stop evidence without credentials
         run: python3 scripts/test-source-backend-stop.py
+      - name: Parse native runtime reference preparation tool
+        run: python3 -c "import ast,pathlib; ast.parse(pathlib.Path('scripts/prepare-native-runtime-pull.py').read_text())"
       - name: Confirm source remained unchanged
         run: |
           git diff --exit-code

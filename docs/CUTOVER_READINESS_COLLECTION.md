@@ -45,3 +45,9 @@ python3 collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER
 이 도구는 조회와 보호 receipt 저장만 수행한다. PR 병합·scale·Sync·재시작·SQL·Dump를 실행하지 않는다. Kubernetes 중지 증거가 외부 CI/수동 쓰기 주체의 통제나 DB 복제/최종 쓰기 반영 확인을 대신하지 않는다. 해당 수락과 이관 담당의 DB 확인이 갖춰져야 최종 덤프로 넘어간다. 복귀는 Cloud 새 쓰기 여부와 데이터 판단 후에 수행한다.
 
 새 오프라인 검증은 `python3 scripts/test-source-backend-stop.py`다. 실제 클러스터·GitHub·DB를 호출하지 않는다.
+
+## 성공한 Pull 증거의 앱 설정 반영
+
+`scripts/prepare-native-runtime-pull.py`는 승인 FE/BE×Compute3 실행 및 정리 PASS receipt를 재사용한다. 기존 자원/Pool 후보의 Replica0 Deployment 두 개와 프로젝트 런타임 ServiceAccount에서 알려진 임시 ECR Secret 참조만 제거한다. 다른 Pull 참조·컨테이너 설정·Pool·자원·승인 이미지는 유지하며 별도의 보호 후보 파일을 만든다. `--apply`는 ServiceAccount의 해당 목록만 resourceVersion과 기존 목록 비교 조건을 포함한 JSON Patch로 반영한다. GitOps 소유 ServiceAccount이면 선언 Owner 검토를 위해 중단한다.
+
+임시 Secret 자체는 다른 작업자가 사용할 수 있어 삭제하지 않는다. Pod·앱·SQL·IAM·기존 Pull/서버 admission 시험을 실행하지 않는다. 결과는 알려진 임시 참조의 분리와 새 후보 준비이며, 실제 앱의 최초 기동/Pull 또는 Worker 자격증명의 독립적인 추적을 완료했다는 뜻은 아니다. 이후 배포에서는 새 후보와 receipt를 사용하고 기존 임시 인증 갱신 도구를 다시 실행해 참조를 되붙이지 않는다.
