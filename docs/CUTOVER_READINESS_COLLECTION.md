@@ -25,3 +25,13 @@ python3 collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER
 - 임시 Pull: 현재 프로젝트 Secret의 소유·만료 기록을 확인한다. `--renew-expired-pull`이 있을 때만 만료/만료 임박 인증을 기존 고정 해시 ECR 도구로 갱신한다. 프로젝트 FE/BE 두 저장소 읽기 범위를 유지하고 자격증명은 메모리와 해당 Secret에만 공급한다. IAM 정책·Worker 역할은 변경하지 않는다. Node Role 기반 Pull 성공으로 판정하거나 기존 이미지 Pull 시험을 반복하지 않는다.
 
 이 후속도 SQL·이관·원본 쓰기 중지·실제 앱 배포/Sync는 실행하지 않는다. `python3 scripts/test-cutover-independent.py`는 잘못된 SSH 대상, Host Key/API 고정, Secret 참조 보존, replicas0·dry-run, 기존 인증 재사용과 갱신 조건/해시 검사를 오프라인에서 확인한다.
+
+## Worker Pull의 별도 실행 확인
+
+`scripts/check-worker-secret-free-pull.py`는 Worker 정책 적용 확인 뒤 실행하는 별도 시험이다. 완료한 자원 검사·기존 임시 Pull 인증 갱신 결과를 재사용하며 기존 정책·인증을 수정하지 않는다. 기존 Compute 노드 세 개에서 승인된 FE/BE Digest를 각각 `Always`로 Pull하고 `/bin/sh -c 'exit 0'`만 실행한다. 앱 서버·SQL은 시작하지 않는다.
+
+전용 임시 ServiceAccount는 Token 자동 마운트와 Pull Secret 연결을 사용하지 않는다. 클러스터 공통 Secret 및 Pod에 실제로 연결된 Secret에 해당 ECR 인증이 있으면 판정을 중단하며, Secret 내용은 메모리에서만 읽는다. Node 이미지 목록의 기존 Digest 존재 힌트도 결과에 남긴다. 기존 캐시와 Credential Provider 동작 때문에 Pod 실행 성공을 Worker 역할 자격증명 사용의 독립적인 추적으로 확대하지 않는다. 새 노드 교체·12시간 후 만료 시험은 포함하지 않는다.
+
+임시 Pod 여섯 개와 ServiceAccount는 생성 응답의 UID를 기록하고 UID 사전조건으로만 삭제한다. 같은 이름의 다른 UID는 보존한다. 삭제 후 실제 잔존 여부를 읽어 확인하며, 생성 결과 불명확·삭제 실패는 정리 필요로 보고한다. 기존 Pod·Secret·서비스 계정·IAM·DB에는 변경하지 않는다.
+
+원본 SSH가 불가능하지만 기존 원본 관리 터미널에 접속돼 있다면, 같은 고정 개정의 `REMOTE_READER`를 해당 서버에서 로컬로 실행할 수 있다. 기존 kubeconfig/Context와 지정 API만 사용하고 키를 다른 서버로 복사하지 않는다. Source·Parent·쓰기 주체 조회만 수행하며 중지 제어·사용창·복귀 경로 수락은 별도다.
