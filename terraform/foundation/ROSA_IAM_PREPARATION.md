@@ -317,5 +317,8 @@ IAM 정책 문서는 기존 Provider의 로컬 문서 생성기로 계산했다.
 
 ### 검증 범위
 
-- `scripts/test-rosa-bootstrap-permissions.py` 통과 (허용·차단 사례 추가 반영), foundation `terraform validate` 성공.
-- 실제 AWS 접속·bootstrap/foundation Plan·Apply·ROSA 노드 Pull 시험은 미실행.
+- `scripts/test-rosa-bootstrap-permissions.py` 통과 (허용·차단 사례 추가 반영), foundation `terraform fmt -check`·`validate` 성공.
+- bootstrap: 저장 Plan 검토·Apply·정책 문서 대조·전체 재검사(변경 0) 완료 (PR #76).
+- foundation 전체 저장 Plan 완료 (Source `d9355da728f81d8e57ff8c51454fdd51bf603690`, #70 병합 내용 포함): 추가 2·수정/삭제/교체 0·출력 변경 0·클러스터 태그 삭제/변경 0. 저장 Plan SHA-256 `3c81b117c850b1fc7fd615689a5512988a35e8a3ce8a6ea5097a523031095c57`, 전체 JSON SHA-256 `e3d3c7d832c0b02c0519727237d23a4d8d0c5e329f66b4099b5fa1cb52f1d54c`.
+- foundation Apply: 미실행.
+- 실제 ROSA Worker ECR Pull 시험: 미실행.
