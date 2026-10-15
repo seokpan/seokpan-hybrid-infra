@@ -26,7 +26,7 @@ def package():
 
 
 def plan():
-    return {'metadata': {'name': 'install-test', 'uid': '123'},
+    return {'metadata': {'name': 'install-test', 'uid': '123', 'resourceVersion': '17'},
             'spec': {'approval': 'Manual', 'approved': False, 'clusterServiceVersionNames': [m.CSV]},
             'status': {'phase': 'RequiresApproval', 'bundleLookups': [{'identifier': m.CSV,
                         'catalogSourceRef': {'name': 'redhat-operators', 'namespace': 'openshift-marketplace'}}]}}
@@ -234,5 +234,74 @@ class Checks(unittest.TestCase):
         self.assertFalse(any(x[0] == 'patch' for x in calls))
 
 
+class AtomicApproval(unittest.TestCase):
+    ref = {'name': 'install-test', 'uid': '123'}
+
+    def run_approval(self, fresh=None, race=None):
+        current = copy.deepcopy(fresh or plan())
+        accepted = []
+        class Runner:
+            def get(self, *args):
+                return copy.deepcopy(current)
+            def call(self, args, label):
+                if race:
+                    race(current)
+                patch = json.loads(args[args.index('-p') + 1])
+                for operation in patch:
+                    if operation['op'] == 'test':
+                        value = current
+                        for field in operation['path'].split('/')[1:]:
+                            value = value[field]
+                        if value != operation['value']:
+                            raise m.Stop('ATOMIC_INSTALLPLAN_TEST_FAILED')
+                current['spec']['approved'] = True
+                accepted.append(True)
+        m.approve_exact_installplan(Runner(), self.ref)
+        return accepted
+
+    def test_patch_has_uid_version_and_exact_spec_guards(self):
+        patch = m.approval_patch(plan(), self.ref)
+        tests = {p['path']: p['value'] for p in patch if p['op'] == 'test'}
+        self.assertEqual(tests, {'/metadata/uid': '123', '/metadata/resourceVersion': '17',
+            '/spec/approval': 'Manual', '/spec/clusterServiceVersionNames': [m.CSV],
+            '/spec/approved': False})
+        self.assertEqual(self.run_approval(), [True])
+
+    def test_reread_different_csv_never_approved(self):
+        fresh = plan(); fresh['spec']['clusterServiceVersionNames'] = ['unreviewed']
+        with self.assertRaisesRegex(m.Stop, 'UNEXPECTED_INSTALLPLAN'):
+            self.run_approval(fresh)
+
+    def test_reread_different_bundle_never_approved(self):
+        fresh = plan(); fresh['status']['bundleLookups'][0]['catalogSourceRef']['name'] = 'other'
+        with self.assertRaisesRegex(m.Stop, 'OFFICIAL_BUNDLE'):
+            self.run_approval(fresh)
+
+    def test_same_uid_csv_changed_after_read_rejected_atomically(self):
+        with self.assertRaisesRegex(m.Stop, 'ATOMIC_INSTALLPLAN_TEST_FAILED'):
+            self.run_approval(race=lambda p: p['spec']['clusterServiceVersionNames'].append('extra'))
+
+    def test_approval_mode_changed_after_read_rejected_atomically(self):
+        with self.assertRaisesRegex(m.Stop, 'ATOMIC_INSTALLPLAN_TEST_FAILED'):
+            self.run_approval(race=lambda p: p['spec'].update(approval='Automatic'))
+
+    def test_status_change_after_read_rejected_by_resource_version(self):
+        def change(p):
+            p['metadata']['resourceVersion'] = '18'
+            p['status']['bundleLookups'][0]['catalogSourceRef']['name'] = 'other'
+        with self.assertRaisesRegex(m.Stop, 'ATOMIC_INSTALLPLAN_TEST_FAILED'):
+            self.run_approval(race=change)
+
+    def test_missing_resource_version_refused(self):
+        fresh = plan(); fresh['metadata'].pop('resourceVersion')
+        with self.assertRaisesRegex(m.Stop, 'RESOURCE_VERSION_REQUIRED'):
+            m.approval_patch(fresh, self.ref)
+
+    def test_already_approved_exact_plan_not_patched_again(self):
+        fresh = plan(); fresh['spec']['approved'] = True
+        self.assertEqual(self.run_approval(fresh), [])
+
+
 if __name__ == '__main__':
     unittest.main()
+
