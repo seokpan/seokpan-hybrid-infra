@@ -1,0 +1,63 @@
+name: Foundation tag ownership validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+    paths:
+      - 'terraform/foundation/**'
+      - 'tools/test_foundation_tag_ownership.py'
+      - '.github/workflows/foundation-tag-ownership-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/foundation/**'
+      - 'tools/test_foundation_tag_ownership.py'
+      - '.github/workflows/foundation-tag-ownership-validation.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-tags-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tag-ownership:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TF_IN_AUTOMATION: 'true'
+      CHECKPOINT_DISABLE: '1'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Check tag ownership source contract
+        run: python3 tools/test_foundation_tag_ownership.py
+      - name: Install checksum-verified Terraform
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip -o terraform.zip
+          curl --fail --silent --show-error --location \
+            https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_SHA256SUMS -o SHA256SUMS
+          awk '$2 == "terraform_1.16.4_linux_amd64.zip" {print $1 "  terraform.zip"}' SHA256SUMS > selected.sha256
+          test "$(wc -l < selected.sha256)" -eq 1
+          sha256sum -c selected.sha256
+          mkdir -p "$RUNNER_TEMP/tag-tf-bin"
+          unzip -q terraform.zip terraform -d "$RUNNER_TEMP/tag-tf-bin"
+          echo "$RUNNER_TEMP/tag-tf-bin" >> "$GITHUB_PATH"
+      - name: Check formatting and validate without backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TF_DATA_DIR="$RUNNER_TEMP/tag-tf-data"
+          terraform -chdir=terraform/foundation fmt -check providers.tf network.tf rosa_iam_roles.tf
+          terraform -chdir=terraform/foundation init -backend=false -input=false -lockfile=readonly -no-color
+          terraform -chdir=terraform/foundation validate -no-color
+          git diff --exit-code
