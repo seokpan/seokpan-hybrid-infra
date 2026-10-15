@@ -37,6 +37,40 @@ def require(ok, reason):
         raise Stop(reason)
 
 
+def group_users(group):
+    if group is None:
+        return []
+    require(isinstance(group, dict), 'GROUP_OBJECT_FORMAT')
+    users = group.get('users')
+    if users is None:
+        return []
+    require(isinstance(users, list) and all(isinstance(s, str) for s in users), 'GROUP_USERS_FORMAT')
+    return users
+
+
+def identity_refs(user):
+    refs = user.get('identities') or []
+    require(isinstance(refs, list) and all(isinstance(s, str) for s in refs), 'IDENTITY_LIST_FORMAT')
+    return [s for s in refs if s.startswith('seokpan-github:')]
+
+
+def previous_stop_diagnosis(root, previous):
+    require(not previous.is_symlink() and previous.resolve().parent == root and
+            previous.name.startswith('human-access-'), 'PREVIOUS_RESULT_SCOPE')
+    receipt = json.loads((previous / 'receipt.json').read_text())
+    require(receipt.get('status') == 'STOP_PERSONAL_ACCESS' and receipt.get('mutations_attempted') == 0,
+            'ONLY_ZERO_MUTATION_STOP_CAN_RESUME_THIS_PATH')
+    cached = previous / 'platform-group-before.json'
+    null_users = False
+    if cached.is_file():
+        group = json.loads(cached.read_text())
+        null_users = isinstance(group, dict) and 'users' in group and group['users'] is None
+    return {'status': 'PREVIOUS_STOP_LOCAL_DIAGNOSIS',
+            'previous_error': receipt.get('reason'),
+            'null_platform_group_users_confirmed': null_users,
+            'previous_mutations': 0, 'raw_values': 'NOT_PRINTED'}
+
+
 def accepted_target(root):
     matches = []
     for management in (root / 'management').iterdir():
@@ -58,7 +92,7 @@ def accepted_target(root):
 def require_identity(user, identity):
     meta = user.get('metadata', {})
     require(meta.get('name') == USER, 'EXPECTED_PERSONAL_USER_REQUIRED')
-    refs = [s for s in user.get('identities', []) if s.startswith('seokpan-github:')]
+    refs = identity_refs(user)
     require(len(refs) == 1, 'ONE_OBSERVED_GITHUB_IDENTITY_REQUIRED')
     require(identity.get('metadata', {}).get('name') == refs[0], 'IDENTITY_REFERENCE_CHANGED')
     require(identity.get('providerName') == 'seokpan-github', 'GITHUB_PROVIDER_CHANGED')
@@ -70,9 +104,9 @@ def require_identity(user, identity):
 def require_group(group):
     if group is None:
         return
-    require(group.get('metadata', {}).get('labels', {}).get(LABEL) == 'cloud-gitops',
+    require((group.get('metadata', {}).get('labels') or {}).get(LABEL) == 'cloud-gitops',
             'EXISTING_GROUP_OWNERSHIP_REVIEW_REQUIRED')
-    require(group.get('users', []) == [USER], 'GROUP_HAS_OTHER_MEMBERS_OR_CHANGED_SCOPE')
+    require(group_users(group) == [USER], 'GROUP_HAS_OTHER_MEMBERS_OR_CHANGED_SCOPE')
 
 
 def candidate_rbac(argo):
@@ -82,13 +116,13 @@ def candidate_rbac(argo):
             'EXISTING_OPENSHIFT_DEX_REQUIRED')
     require(not spec.get('oidcConfig'), 'OTHER_OIDC_CONFIGURATION_REVIEW_REQUIRED')
     meta = argo.get('metadata', {})
-    require(not meta.get('annotations', {}).get('argocd.argoproj.io/tracking-id') and
-            not meta.get('labels', {}).get('app.kubernetes.io/instance'),
+    require(not (meta.get('annotations') or {}).get('argocd.argoproj.io/tracking-id') and
+            not (meta.get('labels') or {}).get('app.kubernetes.io/instance'),
             'ARGO_CONFIGURATION_ALREADY_GITOPS_MANAGED')
     old = spec.get('rbac')
     require(isinstance(old, dict), 'EXISTING_RBAC_OBJECT_REQUIRED')
     require(old.get('defaultPolicy', '') == '', 'BROAD_DEFAULT_POLICY_REVIEW_REQUIRED')
-    require(old.get('scopes', '').replace(' ', '') in ('[groups]', '["groups"]', "['groups']"),
+    require(isinstance(old.get('scopes'), str) and old['scopes'].replace(' ', '') in ('[groups]', '["groups"]', "['groups']"),
             'EXISTING_GROUP_SCOPES_REQUIRED')
     policy = old.get('policy', '')
     require(isinstance(policy, str), 'POLICY_FORMAT')
@@ -115,12 +149,14 @@ class Runner:
     def __init__(self, folder, oc):
         self.folder, self.oc, self.count = folder, oc, 0
         self.mutations = []
+        self.last_stage = None
 
     def save(self, name, obj):
         (self.folder / name).write_text(json.dumps(obj, indent=2) + '\n', encoding='utf-8')
 
     def run(self, argv, stage, mutation=False):
         self.count += 1
+        self.last_stage = stage
         if mutation:
             self.mutations.append({'stage': stage, 'outcome': 'ATTEMPTED'})
             self.save('mutation-attempts.json', self.mutations)
@@ -155,6 +191,7 @@ def main():
     p.add_argument('root', type=Path)
     p.add_argument('--rosa-cli', type=Path, required=True)
     p.add_argument('--apply', action='store_true')
+    p.add_argument('--resume-from', type=Path, help='Diagnose an existing zero-mutation stop locally before resuming')
     args = p.parse_args()
     folder = None
     runner = None
@@ -164,30 +201,35 @@ def main():
         require(os.name == 'posix' and os.environ.get('USER') == 'jth', 'CONTROLLER_JTH_REQUIRED')
         root = args.root.expanduser().resolve()
         require(root.is_dir() and root.stat().st_uid == os.getuid(), 'OWNED_EXISTING_ROOT_REQUIRED')
+        if args.resume_from:
+            print(json.dumps(previous_stop_diagnosis(root, args.resume_from.expanduser())), flush=True)
         cluster, expected_server = accepted_target(root)
         require(args.rosa_cli.is_file() and os.access(args.rosa_cli, os.X_OK), 'EXISTING_ROSA_CLI_REQUIRED')
         oc = shutil.which('oc')
         require(oc, 'SOURCE_EXISTING_MANAGEMENT_ACTIVATION_FIRST')
         folder = Path(tempfile.mkdtemp(prefix='human-access-', dir=root))
         runner = Runner(folder, oc)
-        phase = 'TARGET_AND_ACTUAL_IDENTITY'
+        phase = 'CURRENT_TARGET'
         server = runner.oc_run(['whoami', '--show-server'], 'target-server').strip()
         require(server.rstrip('/') == expected_server.rstrip('/'), 'WRONG_CLUSTER_NO_MUTATIONS')
+        phase = 'OBSERVED_PERSONAL_IDENTITY'
         user = runner.get('user', USER, 'observed-github-user', optional=True)
         require(user is not None, 'GITHUB_LOGIN_REQUIRED_NO_PERMISSIONS_CHANGED')
-        refs = [s for s in user.get('identities', []) if s.startswith('seokpan-github:')]
+        refs = identity_refs(user)
         require(len(refs) == 1, 'ONE_OBSERVED_GITHUB_IDENTITY_REQUIRED')
         identity = runner.get('identity', refs[0], 'observed-identity-link')
         require_identity(user, identity)
+        phase = 'EXISTING_ARGO_SCOPE'
         argo = runner.get('argocd', 'openshift-gitops', 'argo-before', namespace=NS)
         old, new = candidate_rbac(argo)
         runner.save('argo-before.json', argo)
         custom_group = runner.get('group', GROUP, 'scoped-group-before', optional=True)
         require_group(custom_group)
         runner.save('scoped-group-before.json', custom_group)
+        phase = 'EXISTING_PLATFORM_GROUP'
         admins = runner.get('group', 'dedicated-admins', 'platform-group-before', optional=True)
         runner.save('platform-group-before.json', admins)
-        grant_needed = USER not in (admins or {}).get('users', [])
+        grant_needed = USER not in group_users(admins)
         group_doc = {'apiVersion': 'user.openshift.io/v1', 'kind': 'Group',
                      'metadata': {'name': GROUP, 'labels': {LABEL: 'cloud-gitops'}}, 'users': [USER]}
         runner.save('scoped-group.json', group_doc)
@@ -212,7 +254,7 @@ def main():
                         '--cluster', cluster], 'grant-dedicated-admin', mutation=True)
         for attempt in range(25):
             admins = runner.get('group', 'dedicated-admins', 'platform-group-current', optional=True)
-            if USER in (admins or {}).get('users', []):
+            if USER in group_users(admins):
                 break
             if attempt % 6 == 0:
                 print(json.dumps({'status': 'WAITING_PERSONAL_PLATFORM_GROUP'}), flush=True)
@@ -256,10 +298,11 @@ def main():
         runner.save('receipt.json', receipt)
         print(json.dumps(receipt), flush=True)
         return 0
-    except (Stop, OSError, ValueError, TypeError, KeyError) as exc:
+    except (Stop, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         reason = str(exc) if isinstance(exc, Stop) else type(exc).__name__
         receipt = {'status': 'STOP_PERSONAL_ACCESS', 'phase': phase, 'reason': reason,
                    'raw_output': 'PRIVATE_NOT_PRINTED', 'automatic_retry': False,
+                   'last_command_stage': runner.last_stage if runner else None,
                    'mutations_attempted': len(runner.mutations) if runner else 0}
         if runner:
             runner.save('receipt.json', receipt)
