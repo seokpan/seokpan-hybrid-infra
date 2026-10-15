@@ -222,9 +222,15 @@ Data 서비스 등 다른 자원의 태그 관리 범위는 바꾸지 않습니�
 State를 직접 수정하거나 자원을 import/replace하지 않습니다. 적용 후 State가 별도 Provider를
 참조할 수 있으므로 해당 자원을 정리할 때까지 `aws.rosa_shared_tags` 설정을 유지해야 합니다.
 
-적용 전 A가 같은 NAT 활성 입력·현재 State로 새 전체 계획을 확인합니다. 예상은 자원/출력 변경0이며,
-실제 계획에서 생성·교체·삭제·태그 제거 등 다른 변경이 나타나면 Apply하지 않습니다.
-Provider 설정의 정적 검증과 실제 전체 계획 통과를 구분합니다. 보완 코드의 실제 계획 결과는 아직 대기 중입니다.
+PR #70 보완 Source `52fc24f98dbddb810121274ee3930138d1801f23`에서 A가 같은 NAT 활성 입력과
+ROSA 설치 후 현재 State로 수행한 Foundation 전체 계획은 종료값0·자원/출력 변경0·클러스터 태그
+삭제/값 변경0으로 확인됐습니다. jth의 보호 JSON 확인에서도 자원78개 모두 no-op·검사14개 통과입니다.
+[실제 결과](https://github.com/seokpan/seokpan-hybrid-infra/pull/70#issuecomment-6185528368)를 참조합니다.
+이 결과를 위해 별도 무변경 Apply나 ROSA 재설치를 수행하지 않았습니다.
+
+이 기록은 해당 Source·입력·State 시점의 결과입니다. 후속 Foundation 변경은 최신 Source와 실제
+State로 전체 계획을 검토하며 예상 밖 생성·수정·교체·삭제·태그 제거가 나타나면 Apply하지 않습니다.
+Provider alias를 참조하는 자원 정리가 끝날 때까지 위 설정을 유지합니다.
 
 공식 기준:
 https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
