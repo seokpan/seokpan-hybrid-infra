@@ -35,3 +35,13 @@ python3 collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER
 임시 Pod 여섯 개와 ServiceAccount는 생성 응답의 UID를 기록하고 UID 사전조건으로만 삭제한다. 같은 이름의 다른 UID는 보존한다. 삭제 후 실제 잔존 여부를 읽어 확인하며, 생성 결과 불명확·삭제 실패는 정리 필요로 보고한다. 기존 Pod·Secret·서비스 계정·IAM·DB에는 변경하지 않는다.
 
 원본 SSH가 불가능하지만 기존 원본 관리 터미널에 접속돼 있다면, 같은 고정 개정의 `REMOTE_READER`를 해당 서버에서 로컬로 실행할 수 있다. 기존 kubeconfig/Context와 지정 API만 사용하고 키를 다른 서버로 복사하지 않는다. Source·Parent·쓰기 주체 조회만 수행하며 중지 제어·사용창·복귀 경로 수락은 별도다.
+
+## 이관 중지 개정 반영 뒤의 읽기 확인
+
+`scripts/verify-source-backend-stop.py`는 수락한 원본/관리 구조 receipt 두 개와 이관 PR 번호, 승인된 Backend 선언 SHA-256을 입력받는다. GitHub에서 해당 PR의 실제 병합·대상 main·단일 Backend 파일 범위·병합 개정의 파일 해시를 확인한다. PR이 미병합이면 `HOLD_SOURCE_STOP_PR_NOT_MERGED`를 출력하고 원본 클러스터는 조회하지 않는다.
+
+병합 후에는 기존 kubeconfig를 그대로 사용해 API·Deployment/Root/Child UID·Source main/path·오버라이드 부재를 대조한다. Backend desired/actual Replica0, 종료 중 Pod까지0, 준비되지 않은 주소를 포함한 EndpointSlice/구형 Endpoints 주소0, 활성 Job·실행 가능한 CronJob·Backend HPA 없음, 진행 중 Argo 작업 없음과 Child의 병합 개정 Synced를 확인한다. 기본30초 동안 중지 상태가 유지돼야 `PASS_KUBERNETES_BACKEND_STOP_GATE`를 기록한다. 중간에 Pod가 다시 나타나면 유지 시간을 다시 계산한다. 관측 기한은 기본300초이며 기한 내 확인되지 않으면 중단한다.
+
+이 도구는 조회와 보호 receipt 저장만 수행한다. PR 병합·scale·Sync·재시작·SQL·Dump를 실행하지 않는다. Kubernetes 중지 증거가 외부 CI/수동 쓰기 주체의 통제나 DB 복제/최종 쓰기 반영 확인을 대신하지 않는다. 해당 수락과 이관 담당의 DB 확인이 갖춰져야 최종 덤프로 넘어간다. 복귀는 Cloud 새 쓰기 여부와 데이터 판단 후에 수행한다.
+
+새 오프라인 검증은 `python3 scripts/test-source-backend-stop.py`다. 실제 클러스터·GitHub·DB를 호출하지 않는다.

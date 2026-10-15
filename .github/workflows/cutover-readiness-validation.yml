@@ -10,6 +10,8 @@ on:
       - 'scripts/test-cutover-independent.py'
       - 'scripts/check-worker-secret-free-pull.py'
       - 'scripts/test-worker-secret-free-pull.py'
+      - 'scripts/verify-source-backend-stop.py'
+      - 'scripts/test-source-backend-stop.py'
       - '.github/workflows/cutover-readiness-validation.yml'
   push:
     branches: [main]
@@ -20,6 +22,8 @@ on:
       - 'scripts/test-cutover-independent.py'
       - 'scripts/check-worker-secret-free-pull.py'
       - 'scripts/test-worker-secret-free-pull.py'
+      - 'scripts/verify-source-backend-stop.py'
+      - 'scripts/test-source-backend-stop.py'
       - '.github/workflows/cutover-readiness-validation.yml'
 
 permissions:
@@ -42,6 +46,8 @@ jobs:
         run: python3 scripts/test-cutover-independent.py
       - name: Test secret-free probes and UID cleanup without credentials
         run: python3 scripts/test-worker-secret-free-pull.py
+      - name: Test merged-source and backend stop evidence without credentials
+        run: python3 scripts/test-source-backend-stop.py
       - name: Confirm source remained unchanged
         run: |
           git diff --exit-code
