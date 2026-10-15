@@ -196,10 +196,17 @@ env | grep -c '^TF_VAR_redis_auth_token=' || true   # 0이어야 함
 
 - Public Subnet 3개: `kubernetes.io/role/elb = "1"`
 - ROSA Private Subnet 3개: `kubernetes.io/role/internal-elb = "1"`
-- Data Private Subnet 3개: ROSA 설치 대상에서 제외하며 위 태그를 추가하지 않습니다.
+- Data Private Subnet 3개: ROSA 설치 대상에서 제외하며 ELB 역할 태그는 추가하지 않습니다. 대신 `kubernetes.io/cluster/unmanaged = "true"`로 설치 대상이 아님을 명시합니다.
 
 각 Subnet 리소스의 `for_each`에 따라 해당 태그를 AZ별 3개에 적용하도록 선언합니다.
-현재는 Source 반영 단계이며, 실제 AWS 태그 적용·Preflight 통과는 별도 확인합니다.
+Data 제외 태그의 실제 보완 후 ROSA 설치는 완료됐습니다. 이 결과와 이후 Foundation 실행의 태그 보존 검증은 구분합니다.
+
+ROSA가 생성하는 `kubernetes.io/cluster/<클러스터 식별자>` 태그는 ROSA의 동적 태그입니다.
+ROSA 설치 후 Foundation을 실행하기 전에는 현재 State와 기존 활성 입력으로 전체 실행 계획을 확인하고,
+VPC·Public/ROSA/Data 서브넷의 해당 태그가 삭제·변경되지 않는지 검토합니다.
+삭제·변경이 계획되면 Apply하지 않고 해당 키의 관리 주체를 분리합니다.
+`kubernetes.io/` 전체를 무시하거나 ELB 역할·Data 제외 태그의 관리를 생략하지 않습니다.
+현재 PR의 설치 후 Foundation 전체 실행 계획 검증은 대기 상태입니다.
 
 공식 기준:
 https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
