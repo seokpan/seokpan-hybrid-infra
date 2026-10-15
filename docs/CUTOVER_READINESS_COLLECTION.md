@@ -15,3 +15,13 @@ python3 collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER
 이 조회는 원본 쓰기 중지의 실행 승인이 아니다. GitOps Parent/ApplicationSet·외부 CI·관리 프로세스 등 모든 쓰기 주체와 실제 수행자·사용창·복귀 경로의 수락은 별도다. 도구는 `writer_stop_ready=false`를 유지하며, 자동 동기화 변경·scale·Sync·SQL·DB 이관·앱 기동·ECR 갱신을 실행하지 않는다. 보호 자료가 없거나 조회가 실패하면 해당 항목은 미확인으로 남긴다.
 
 오프라인 검증은 `python3 scripts/test-cutover-readiness.py`로 실행한다. 가짜 CLI 응답만 사용하며 실제 인증·클러스터·DB에 접속하지 않는다.
+
+## 독립 후속 세 항목
+
+`scripts/resume-cutover-independent.py`는 기존 수집 결과를 입력으로 원본 경로·배포 자원·임시 Pull 인증을 독립 실행한다. 한 항목이 실패해도 다른 항목의 결과를 보존한다.
+
+- 원본 경로: 현재 사용자의 SSH Host 별칭과 제한된 Ansible inventory 파일에서 후보 이름만 찾는다. 후보에 자동 접속하지 않는다. `--source-ssh 계정@호스트`와 `--source-api`를 명시하면 기존 SSH 인증·검증된 Host Key로 해당 서버에서 읽기 조회를 수행한다. 비밀번호 대화형 입력·새 Host Key 자동 수락·kubeconfig/키 복사는 하지 않는다. 원본 API와 Argo Source가 일치해야 쓰기 주체 목록을 읽는다.
+- 배포 자원: 기존 lab의 초기 검증 자원값과 저장된 Pool/단일 프로세스 후보를 보호 배포 파일에 합친다. BE는 CPU 100m/500m·메모리 128Mi/256Mi, FE는 CPU 25m/250m·메모리 32Mi/64Mi의 요청/제한을 사용한다. 변경된 Deployment 두 개만 서버 dry-run하며 replicas0·기존 이미지/Secret 참조를 유지한다. 실제 Cloud 부하·스케줄링 수락이나 운영 Pool 채택이 아니다.
+- 임시 Pull: 현재 프로젝트 Secret의 소유·만료 기록을 확인한다. `--renew-expired-pull`이 있을 때만 만료/만료 임박 인증을 기존 고정 해시 ECR 도구로 갱신한다. 프로젝트 FE/BE 두 저장소 읽기 범위를 유지하고 자격증명은 메모리와 해당 Secret에만 공급한다. IAM 정책·Worker 역할은 변경하지 않는다. Node Role 기반 Pull 성공으로 판정하거나 기존 이미지 Pull 시험을 반복하지 않는다.
+
+이 후속도 SQL·이관·원본 쓰기 중지·실제 앱 배포/Sync는 실행하지 않는다. `python3 scripts/test-cutover-independent.py`는 잘못된 SSH 대상, Host Key/API 고정, Secret 참조 보존, replicas0·dry-run, 기존 인증 재사용과 갱신 조건/해시 검사를 오프라인에서 확인한다.

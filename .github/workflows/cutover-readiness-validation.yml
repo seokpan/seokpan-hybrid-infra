@@ -6,12 +6,16 @@ on:
     paths:
       - 'scripts/collect-cutover-readiness.py'
       - 'scripts/test-cutover-readiness.py'
+      - 'scripts/resume-cutover-independent.py'
+      - 'scripts/test-cutover-independent.py'
       - '.github/workflows/cutover-readiness-validation.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/collect-cutover-readiness.py'
       - 'scripts/test-cutover-readiness.py'
+      - 'scripts/resume-cutover-independent.py'
+      - 'scripts/test-cutover-independent.py'
       - '.github/workflows/cutover-readiness-validation.yml'
 
 permissions:
@@ -30,6 +34,8 @@ jobs:
           persist-credentials: false
       - name: Test read-only target selection without credentials
         run: python3 scripts/test-cutover-readiness.py
+      - name: Test isolated resource and pull renewal stages without credentials
+        run: python3 scripts/test-cutover-independent.py
       - name: Confirm source remained unchanged
         run: |
           git diff --exit-code
