@@ -11,7 +11,7 @@ ROSA 설치와 B01/B05 독립 검사는 완료된 상태에서 실행한다. Clo
 5. CSV Succeeded와 기본 Argo CD Available을 기다린다. 실패/대기 초과 시 부분 상태를 보존하고 자동 삭제/재설치하지 않는다.
 6. 실제 OAuth Route를 사용해 GitHub OAuth App 등록용 Callback을 보호 파일에 준비한다. Team/OAuth App 존재는 추정하지 않는다.
 
-Root/Application/Sync, OAuth·RBAC, SQL·Pool·Migration·앱 기동, Terraform은 실행하지 않는다. 정상 GitHub 로그인과 비상 경로를 확인하기 전 초기 관리자를 회수하지 않는다. 일반 사용자/Argo SSO·권한 수락과 별개이며 설치 성공으로 B08 전체 완료를 선언하지 않는다.
+OLM은 Operator 자체의 CRD·Workload·설치용 RBAC와 기본 Argo 인스턴스를 생성한다. Root/Application/Sync, 사람의 OAuth·RoleBinding, SQL·Pool·Migration·앱 기동, Terraform은 실행하지 않는다. 정상 GitHub 로그인과 비상 경로를 확인하기 전 초기 관리자를 회수하지 않는다. 일반 사용자/Argo SSO·권한 수락과 별개이며 설치 성공으로 B08 전체 완료를 선언하지 않는다.
 
 이미 존재하는 설치 객체는 이 도구 소유 표시와 정확한 spec이 같을 때만 재사용한다. 무관한 GitOps/Argo 설치는 인수하지 않는다. 변경 명령을 자동 반복하지 않으며, 부분 상태 후 재개는 실제 결과를 먼저 확인한다.
 
