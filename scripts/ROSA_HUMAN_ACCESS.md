@@ -23,6 +23,8 @@ python3 scripts/configure-rosa-human-access.py /private/existing-rosa-root \
 
 `--apply`를 생략하면 실제 사용자·기존 설정·서버 dry-run 확인까지만 한다. 기존 권한/그룹이 정확히 일치하면 재생성하지 않는다. 실패 시 자동 재시도하지 않으며 결과 폴더의 mutation-attempts.json에 실행을 시도한 단계를 남긴다. 일부 단계가 반영됐다면 삭제/롤백을 자동 수행하지 않는다. 수동 재개 시 실제 일치한 상태를 재사용한다.
 
+최초 Controller 실행은 권한 변경0건에서 TypeError로 중단됐다. 빈 OpenShift Group의 users:null을 목록처럼 검사하면 같은 오류가 재현된다. 수정본은 null/누락을 빈 구성원 목록으로 처리하고 다른 자료형은 거부한다. `--resume-from /private/existing-human-access-result`는 권한 변경0건인 기존 중단 기록만 허용하며, 이전 보호 로그에서 null 구성원 여부를 로컬로 확인한 뒤 현재 대상/Identity/권한 설정을 대조해 진행한다. 실제 중단의 직접 원인은 이 로컬 출력으로 확인하며, 오프라인 재현만으로 확정하지 않는다. 단계별 오류 이름과 마지막 명령 단계를 남겨 후속 오류의 범위를 좁힌다.
+
 성공 상태 `PASS_PERSONAL_OPENSHIFT_AND_SCOPED_ARGO_CONFIGURATION`은 그룹 및 Operator 반영 완료다. 실제 사용자 브라우저 세션의 권한, Argo SSO의 Group claim과 허용/거부 결과는 별도로 확인해야 한다. 출력된 Argo URL에서 Log in via OpenShift→GitHub 제공자를 이용한다. 이전 세션에 Group 정보가 없을 수 있으므로 새 세션으로 확인한다. 아직 AppProject/Application을 만들지 않았으면 Argo 목록이 비어 있을 수 있다. 초기 관리자 접속은 정상/비상 관리 경로의 검증이 끝날 때까지 유지한다.
 
 ## 검증
@@ -31,6 +33,6 @@ python3 scripts/configure-rosa-human-access.py /private/existing-rosa-root \
 python3 scripts/test-rosa-human-access.py
 ```
 
-오프라인 18개 통과: 실제 Identity 연결/UID·다른 사용자 거부, 보호 인계 대상 재사용, 기존 Argo 정책 보존/중복 방지/충돌 거부, 넓은 기본 정책·다른 SSO·기존 GitOps 소유권 거부, 그룹 소유권/구성원 경계, 정확한 Cloud 권한, CR 비교 후 변경 조건. Controller 실제 실행과 브라우저 역할 수락은 아직 미실행이다. 오프라인 테스트는 실제 Casbin 판정 또는 IdP 실효 권한 검증을 대신하지 않는다.
+오프라인 26개 통과: 실제 Identity 연결/UID·다른 사용자 거부, 보호 인계 대상 재사용, 기존 Argo 정책 보존/중복 방지/충돌 거부, 넓은 기본 정책·다른 SSO·기존 GitOps 소유권 거부, 그룹 소유권/구성원 경계, 정확한 Cloud 권한, CR 비교 후 변경 조건, users:null 오류 재현/수정, 누락/빈 배열 및 잘못된 자료형, 기존 무변경 중단의 로컬 진단. 첫 Controller 결과는 위 TypeError·권한 변경0건이며 수정본의 실제 반영과 브라우저 역할 수락은 아직 미실행이다. 오프라인 테스트는 실제 Casbin 판정 또는 IdP 실효 권한 검증을 대신하지 않는다.
 
 근거: [ROSA dedicated-admin 공식 경로](https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/install_rosa_classic_clusters/rosa-sts-accessing-cluster), [GitOps Dex/OpenShift Group](https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.21/html/access_control_and_user_management/configuring-sso-for-argo-cd-using-dex), [Argo RBAC](https://argo-cd.readthedocs.io/en/stable/operator-manual/rbac/).
