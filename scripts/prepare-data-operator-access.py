@@ -99,13 +99,93 @@ def accepted_receipt(root, folder, renewal):
     if renewal:
         require(v.get('status') == 'PASS_A_SINGLE_POD_ACCESS_PREPARED' and v.get('persistent_until_cleanup') is True,
                 'ACCEPTED_LONG_RUNNING_ACCESS_REQUIRED_FOR_RENEWAL')
+        require(isinstance(v.get('pod_uid'), str) and bool(v['pod_uid']),
+                'ACCEPTED_POD_UID_REQUIRED_NO_LEGACY_REBIND')
     else:
         require(v.get('status') == 'STOP_DATA_OPERATOR_ACCESS' and v.get('reason') == 'VERIFIED_CLUSTER_CA_REQUIRED',
                 'ONLY_REPORTED_CA_STOP_CAN_BE_RESUMED')
     return v
 
 
-def ensure_reused_objects(r, name, image, folder, result):
+def validate_access_pod(pod, desired, expected_uid, allow_old=False):
+    meta, spec = pod.get('metadata', {}), pod.get('spec', {})
+    require(bool(expected_uid) and meta.get('uid') == expected_uid, 'ACCESS_POD_UID_CHANGED')
+    require(meta.get('name') == desired['metadata']['name'] and meta.get('namespace') == NS,
+            'ACCESS_POD_TARGET_CHANGED')
+    require(not meta.get('deletionTimestamp'), 'ACCESS_POD_TERMINATING')
+    require(meta.get('labels', {}).get('seokpan.io/data-access') == desired['metadata']['labels']['seokpan.io/data-access'],
+            'EXISTING_POD_OWNER_CHANGED')
+    expected = desired['spec']
+    require(spec.get('serviceAccountName') == expected['serviceAccountName'] and
+            spec.get('automountServiceAccountToken') is False, 'EXISTING_POD_SERVICE_ACCOUNT_CHANGED')
+    for flag in ('hostNetwork', 'hostPID', 'hostIPC', 'shareProcessNamespace'):
+        require(spec.get(flag, False) is False, 'ACCESS_POD_HOST_NAMESPACE_CHANGED')
+    require(not spec.get('initContainers') and not spec.get('ephemeralContainers'), 'ACCESS_POD_EXTRA_CONTAINERS')
+    require(spec.get('nodeSelector') == expected['nodeSelector'] and spec.get('affinity') == expected['affinity'],
+            'ACCESS_POD_NODE_PLACEMENT_CHANGED')
+    psc = spec.get('securityContext', {})
+    require(psc.get('runAsNonRoot') is True and psc.get('seccompProfile') == {'type': 'RuntimeDefault'},
+            'ACCESS_POD_SECURITY_CONTEXT_CHANGED')
+    require(psc.get('runAsUser', 1) > 0, 'ACCESS_POD_ROOT_USER')
+    containers = spec.get('containers', [])
+    require(len(containers) == 1 and containers[0].get('name') == 'db-admin' and
+            containers[0].get('image') == expected['containers'][0]['image'], 'EXISTING_POD_IMAGE_CHANGED')
+    c = containers[0]
+    require(not c.get('env') and not c.get('envFrom') and not c.get('args'), 'EXISTING_POD_RUNTIME_CHANGED')
+    require(not c.get('lifecycle') and not c.get('startupProbe') and not c.get('readinessProbe') and
+            not c.get('livenessProbe'), 'ACCESS_POD_EXEC_HOOK_CHANGED')
+    csc = c.get('securityContext', {})
+    require(csc.get('readOnlyRootFilesystem') is True and csc.get('allowPrivilegeEscalation') is False and
+            csc.get('privileged', False) is False and csc.get('capabilities', {}).get('drop') == ['ALL'] and
+            not csc.get('capabilities', {}).get('add') and csc.get('runAsNonRoot', True) is True and
+            csc.get('runAsUser', 1) > 0 and csc.get('procMount', 'Default') == 'Default' and
+            csc.get('seccompProfile', {'type': 'RuntimeDefault'}) == {'type': 'RuntimeDefault'},
+            'ACCESS_POD_CONTAINER_SECURITY_CHANGED')
+    mounts = c.get('volumeMounts', [])
+    require(len(mounts) == 1 and all(mounts[0].get(k) == v for k, v in
+            expected['containers'][0]['volumeMounts'][0].items()) and not mounts[0].get('subPath') and
+            not mounts[0].get('subPathExpr') and not mounts[0].get('mountPropagation'), 'ACCESS_POD_CA_MOUNT_CHANGED')
+    volumes = spec.get('volumes', [])
+    require(len(volumes) == 1 and volumes[0].get('name') == 'rds-ca' and
+            set(volumes[0]) == {'name', 'configMap'}, 'EXISTING_POD_PUBLIC_CA_VOLUME_CHANGED')
+    ca = volumes[0]['configMap']
+    require(ca.get('name') == 'backend-database-ca' and not ca.get('items') and
+            ca.get('defaultMode', 420) == 420 and ca.get('optional', False) is False,
+            'EXISTING_POD_PUBLIC_CA_VOLUME_CHANGED')
+    old = ['python', '-u', '-c', 'import time; time.sleep(3550)']
+    require(c.get('command') == WAIT_COMMAND or (allow_old and c.get('command') == old),
+            'EXISTING_POD_COMMAND_CHANGED')
+    require(pod.get('status', {}).get('phase') not in ('Failed', 'Succeeded'), 'ACCESS_POD_TERMINATED')
+    is_old = c.get('command') == old
+    require(is_old or not spec.get('activeDeadlineSeconds'), 'ACCESS_POD_STILL_HAS_DEADLINE')
+    return is_old
+
+
+def create_access_pod(r, desired, result):
+    response = r.call(['create', '-f', '-', '-o', 'json'], 'create-persistent-access-pod', json.dumps(desired).encode())
+    pod = json.loads(response.stdout)
+    uid = pod.get('metadata', {}).get('uid')
+    validate_access_pod(pod, desired, uid)
+    result['pod_uid'] = uid
+
+
+def delete_exact_idle_pod(r, name, uid):
+    require(bool(uid), 'EXACT_DELETE_UID_REQUIRED')
+    options = {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': uid},
+               'gracePeriodSeconds': 5, 'propagationPolicy': 'Background'}
+    r.call(['delete', '--raw=/api/v1/namespaces/' + NS + '/pods/' + name, '-f', '-'],
+           'replace-old-idle-pod', json.dumps(options).encode())
+    deadline = time.monotonic() + 40
+    while True:
+        current = r.get(['get', 'pod', name, '-n', NS, '--ignore-not-found'], 'wait-old-exact-pod-deleted')
+        if not current:
+            return
+        require(current.get('metadata', {}).get('uid') == uid, 'POD_NAME_REUSED_AFTER_DELETE_STOP')
+        require(time.monotonic() < deadline, 'OLD_POD_DELETE_TIMEOUT_NO_RETRY')
+        time.sleep(1)
+
+
+def ensure_reused_objects(r, name, image, folder, result, expected_uid=None, renewal=False):
     desired = objects(name, image, name.removeprefix('data-admin-'))
     resources = ['serviceaccount', 'role', 'rolebinding']
     for resource, expected in zip(resources, desired[:3]):
@@ -120,35 +200,23 @@ def ensure_reused_objects(r, name, image, folder, result):
                 require(live.get(key) == value, 'EXISTING_ACCESS_PERMISSION_CHANGED')
     result['access_objects_reused'] = 3
     pod = r.get(['get', 'pod', name, '-n', NS, '--ignore-not-found'], 'existing-access-pod')
+    require(not renewal or bool(pod), 'RENEWAL_POD_MISSING_NO_RECREATE')
     if pod:
-        require(pod.get('metadata', {}).get('labels', {}).get('seokpan.io/data-access') == name[11:], 'EXISTING_POD_OWNER_CHANGED')
         spec = pod.get('spec', {})
-        require(spec.get('serviceAccountName') == name and spec.get('automountServiceAccountToken') is False,
-                'EXISTING_POD_SERVICE_ACCOUNT_CHANGED')
-        containers = spec.get('containers', [])
-        require(len(containers) == 1 and containers[0].get('name') == 'db-admin' and containers[0].get('image') == image,
-                'EXISTING_POD_IMAGE_CHANGED')
-        require(not containers[0].get('env') and not containers[0].get('envFrom') and
-                containers[0].get('securityContext', {}).get('readOnlyRootFilesystem') is True,
-                'EXISTING_POD_RUNTIME_CHANGED')
-        require(len(spec.get('volumes', [])) == 1 and spec['volumes'][0].get('configMap', {}).get('name') == 'backend-database-ca',
-                'EXISTING_POD_PUBLIC_CA_VOLUME_CHANGED')
-        current = containers[0].get('command')
-        old = ['python', '-u', '-c', 'import time; time.sleep(3550)']
-        require(current in (old, WAIT_COMMAND), 'EXISTING_POD_COMMAND_CHANGED')
-        if current == old:
+        old = validate_access_pod(pod, desired[3], expected_uid, allow_old=not renewal)
+        if old:
             result['old_pod_uid'] = pod['metadata']['uid']
             (folder / 'receipt.json').write_text(json.dumps(result))
-            # Only the named idle diagnostic Pod is replaced. SA/Role/Binding remain.
-            r.call(['delete', 'pod', name, '-n', NS, '--wait=true', '--timeout=40s'], 'replace-old-idle-pod')
+            delete_exact_idle_pod(r, name, expected_uid)
             pod = None
             result['old_one_hour_pod_replaced'] = True
         else:
             require(not spec.get('activeDeadlineSeconds'), 'ACCESS_POD_STILL_HAS_DEADLINE')
             require(pod.get('status', {}).get('phase') not in ('Failed', 'Succeeded'), 'ACCESS_POD_TERMINATED')
             result['pod_reused'] = True
+            result['pod_uid'] = expected_uid
     if not pod:
-        r.call(['create', '-f', '-', '-o', 'name'], 'create-persistent-access-pod', json.dumps(desired[3]).encode())
+        create_access_pod(r, desired[3], result)
 
 
 def main():
@@ -203,13 +271,18 @@ def main():
         (folder / 'receipt.json').write_text(json.dumps(result))
         if previous:
             result['resumed_from'] = str(args.resume_from or args.renew_from)
-            ensure_reused_objects(r, name, m.image_uri(account, 'backend'), folder, result)
+            ensure_reused_objects(r, name, m.image_uri(account, 'backend'), folder, result,
+                                  expected_uid=previous.get('pod_uid'), renewal=bool(args.renew_from))
         else:
             for obj in objects(name, m.image_uri(account, 'backend'), run):
-                r.call(['create', '-f', '-', '-o', 'name'], 'create-' + obj['kind'], json.dumps(obj).encode())
+                if obj['kind'] == 'Pod':
+                    create_access_pod(r, obj, result)
+                else:
+                    r.call(['create', '-f', '-', '-o', 'name'], 'create-' + obj['kind'], json.dumps(obj).encode())
         deadline = time.monotonic() + 180
         while True:
             pod = r.get(['get', 'pod', name, '-n', NS], 'pod-ready')
+            validate_access_pod(pod, objects(name, m.image_uri(account, 'backend'), run)[3], result.get('pod_uid'))
             if pod.get('status', {}).get('phase') == 'Running' and any(
                 c.get('type') == 'Ready' and c.get('status') == 'True' for c in pod.get('status', {}).get('conditions', [])):
                 break
