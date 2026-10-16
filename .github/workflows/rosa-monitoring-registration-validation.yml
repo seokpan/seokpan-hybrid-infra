@@ -1,0 +1,38 @@
+name: ROSA monitoring registration validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/register-rosa-monitoring.py'
+      - 'scripts/test-rosa-monitoring-registration.py'
+      - 'docs/ROSA_MONITORING_REGISTRATION.md'
+      - '.github/workflows/rosa-monitoring-registration-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/register-rosa-monitoring.py'
+      - 'scripts/test-rosa-monitoring-registration.py'
+      - 'docs/ROSA_MONITORING_REGISTRATION.md'
+      - '.github/workflows/rosa-monitoring-registration-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Test monitoring scope and failure boundaries
+        run: python3 scripts/test-rosa-monitoring-registration.py
+      - name: Confirm source remains unchanged
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"

@@ -1,0 +1,43 @@
+# ROSA 모니터링 프로젝트 등록
+
+`scripts/register-rosa-monitoring.py`는 고정 GitOps 개정의 모니터링 AppProject·Application을 등록하고 Namespace 범위 Controller 권한과 Argo 조회·Sync 정책을 연결한다.
+
+## 입력
+
+```bash
+python3 scripts/register-rosa-monitoring.py INPUT_ROOT \
+  --native-run-log NATIVE_RESULT_LOG \
+  --cloud-api CLOUD_API_URL --apply
+```
+
+`NATIVE_RESULT_LOG`는 `prepare-native-runtime-pull.py`의 표준출력 기록이다. 결과에서 검증된 개인 kubeconfig를 선택하고 API·로그인 계정을 대조한다. 인증이 수락되지 않은 결과에서는 클러스터 조회를 시작하지 않는다. `oc`와 `ansible-playbook`은 설치돼 있어야 한다.
+
+## 선언과 개정
+
+등록 원본은 GitOps 저장소의 `platform/rosa-monitoring/project/`다. 개정 `16fd14cd1c085a8314a5e2e18b89e2cd3b051626`의 파일 확인값을 대조하고, Application 등록본에 40자리 `targetRevision`을 주입한다. 원본 파일의 자리표시는 수정하지 않는다.
+
+AppProject는 `seokpan-cloud`의 ServiceMonitor·PrometheusRule·NetworkPolicy만 허용한다. Application은 `platform/rosa-monitoring/app`을 참조하며 자동 Sync가 없다. `FailOnSharedResource=true`, `Prune=false`, `Delete=false`를 유지한다.
+
+## 등록 범위
+
+- `seokpan-cloud`: 모니터링 Controller Role·RoleBinding. 대상은 `openshift-gitops/openshift-gitops-argocd-application-controller` ServiceAccount다. 세 리소스의 get/list/watch/create/update/patch만 추가한다.
+- `openshift-gitops`: 모니터링 AppProject·Application. 최소 Ansible bootstrap으로 없는 객체만 생성한다.
+- Argo RBAC: 지정된 운영자 Group에 해당 프로젝트 get과 Application get/sync를 연결한다. 다른 프로젝트·기본 정책은 보존한다.
+
+생성 전 서버 dry-run과 소유 검사를 수행한다. Argo 정책은 resourceVersion·기존 정책 비교 조건을 포함한 JSON Patch로 변경한다. 같은 이름의 외부 소유 객체나 선언 차이가 있으면 덮어쓰지 않는다.
+
+등록 후 Controller 실효 권한 18개와 Argo 정책 반영을 확인한다. `PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING`은 등록·권한 설정 결과이며 운영자 브라우저 권한 수락과 수동 Sync 결과는 별도다.
+
+## 실행 경계와 실패
+
+도구는 Application Sync·smoke·앱·Migration·SQL·Terraform·IAM 변경을 실행하지 않는다. 모니터링 선언은 서버 dry-run만 수행하며, 실제 생성은 수동 Sync로 진행한다.
+
+실패 시 단계, 생성·정책 변경 시도 여부와 보호 결과 경로를 기록한다. 자동 롤백·삭제는 하지 않는다. 부분 생성 객체는 소유·선언을 대조한 뒤 재사용할 수 있다. API 원문·접속 자격은 공개 출력에 포함하지 않는다.
+
+## 검사
+
+```bash
+python3 scripts/test-rosa-monitoring-registration.py
+```
+
+고정 개정 주입, 자동 Sync·다른 배포 경로 거부, 프로젝트·Controller 권한 범위, 정책 보존, 외부 소유·드리프트 중단과 보호 접속 선택을 오프라인에서 검증한다.
