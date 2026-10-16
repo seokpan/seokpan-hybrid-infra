@@ -28,7 +28,20 @@ AppProject는 `seokpan-cloud`의 ServiceMonitor·PrometheusRule·NetworkPolicy�
 
 참조할 Role·AppProject가 없는 경우 RoleBinding·Application의 서버 dry-run은 선행 객체 생성 직후에 수행한다. 검증이 성공해야 해당 객체를 생성한다. 이렇게 지연한 검사는 결과에 별도로 기록하며 선행 객체의 부분 생성도 보호 receipt와 Ansible 로그에 남긴다.
 
-등록 후 Controller 실효 권한 18개와 Argo 정책 반영을 확인한다. `PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING`은 등록·권한 설정 결과이며 운영자 브라우저 권한 수락과 수동 Sync 결과는 별도다.
+등록 후 Controller 실효 권한 18개와 Argo 정책 반영을 확인한다. 권한 검사는 Namespace 범위 `LocalSubjectAccessReview`를 사용하고, Controller의 사용자 이름과 ServiceAccount 기본 Group을 함께 지정한다. API는 실행 계정에 조회 권한이 있는 `authorization.k8s.io` 또는 `authorization.openshift.io` 중에서 선택한다. 계정 대행(`--as`), Controller Token 발급이나 조회 목적의 추가 권한 부여는 하지 않는다. 조회 권한이 없거나 평가 오류·거부가 있으면 중단한다.
+
+`PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING`은 등록·권한 설정 결과이며 운영자 브라우저 권한 수락과 수동 Sync 결과는 별도다. 권한 API의 응답은 실제 Sync·target UP·알림 전달 성공을 증명하지 않는다.
+
+## 등록 후 조회 재개
+
+```bash
+python3 scripts/register-rosa-monitoring.py INPUT_ROOT \
+  --native-run-log NATIVE_RESULT_LOG \
+  --resume-from STOPPED_MONITORING_RESULT_DIRECTORY \
+  --cloud-api CLOUD_API_URL
+```
+
+`--resume-from`은 생성·Argo 정책 변경을 시도한 뒤 `MONITORING_REGISTRATION_READBACK`에서 중단된 receipt만 수락한다. 보호 결과의 네 객체 선언을 고정 개정·권한 범위와 대조한 뒤 실제 객체, Argo 정책과 남은 권한 결과를 읽는다. Native 단계, Ansible bootstrap, 서버 dry-run, 객체 생성·Patch는 실행하지 않는다. `--apply`를 함께 지정하면 중단한다. 기존 실패 원문은 보호 경로에 유지하고 분류만 출력한다.
 
 ## 실행 경계와 실패
 
@@ -42,4 +55,4 @@ AppProject는 `seokpan-cloud`의 ServiceMonitor·PrometheusRule·NetworkPolicy�
 python3 scripts/test-rosa-monitoring-registration.py
 ```
 
-고정 개정 주입, 자동 Sync·다른 배포 경로 거부, 프로젝트·Controller 권한 범위, 정책 보존, 외부 소유·드리프트 중단과 보호 접속 선택을 오프라인에서 검증한다.
+고정 개정 주입, 자동 Sync·다른 배포 경로 거부, 프로젝트·Controller 권한 범위, 정책 보존, 외부 소유·드리프트 중단과 보호 접속 선택을 오프라인에서 검증한다. Namespace 권한 조회의 두 API 형식·ServiceAccount Group·거부/평가 오류와 설정 변경 없는 조회 재개도 검사한다.

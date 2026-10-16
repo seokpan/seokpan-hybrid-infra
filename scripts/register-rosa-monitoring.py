@@ -45,7 +45,7 @@ def need(value, reason):
 def role_objects():
     meta = {"name": ROLE_NAME, "namespace": NS}
     role = {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role", "metadata": meta,
-            "rules": [{"apiGroups": [g], "resources": r, "verbs": VERBS}
+            "rules": [{"apiGroups": [g], "resources": r, "verbs": list(VERBS)}
                       for g, r in [("monitoring.coreos.com", ["servicemonitors", "prometheusrules"]),
                                    ("networking.k8s.io", ["networkpolicies"])]]}
     binding = {"apiVersion": role["apiVersion"], "kind": "RoleBinding", "metadata": copy.deepcopy(meta),
@@ -111,9 +111,11 @@ class Runner:
         self.prefix = [oc, "--kubeconfig=" + str(kubeconfig), "--request-timeout=25s"]
         self.folder = folder
         self.calls = 0
+        self.last_operation = None
 
     def run(self, *args, allow_no=False):
         self.calls += 1
+        self.last_operation = {"verb": args[0], "resource": args[1] if args[0] == "get" else "AUTHORIZATION_REVIEW" if "--raw" in args else "CONFIGURATION_CHECK"}
         result = subprocess.run(self.prefix + list(args), capture_output=True, timeout=40)
         if result.returncode and not (allow_no and result.stdout.strip() == b"no" and not result.stderr.strip()):
             (self.folder / f"command-{self.calls}.stderr").write_bytes(result.stderr)
@@ -128,6 +130,86 @@ class Runner:
             args += ["-n", namespace]
         text = self.run(*args)
         return json.loads(text) if text.strip() else None
+
+
+def controller_authorization(runner, folder):
+    """Ask for namespace authorization without impersonation or credential issuance."""
+    api = None
+    for group in ("authorization.k8s.io", "authorization.openshift.io"):
+        answer = runner.run("auth", "can-i", "create", "localsubjectaccessreviews." + group,
+                            "-n", NS, allow_no=True).strip().lower()
+        need(answer in ("yes", "no"), "UNEXPECTED_AUTHORIZATION_REVIEW_CAPABILITY")
+        if answer == "yes":
+            api = group
+            break
+    need(api, "NAMESPACE_AUTHORIZATION_REVIEW_NOT_PERMITTED")
+    checks = []
+    for group, resources in (("monitoring.coreos.com", ("servicemonitors", "prometheusrules")),
+                             ("networking.k8s.io", ("networkpolicies",))):
+        for resource in resources:
+            for action in VERBS:
+                identity = {"user": "system:serviceaccount:" + ARGO_NS + ":" + SA,
+                            "groups": ["system:serviceaccounts", "system:serviceaccounts:" + ARGO_NS, "system:authenticated"]}
+                attributes = {"namespace": NS, "group": group, "resource": resource, "verb": action}
+                review = {"apiVersion": api + "/v1", "kind": "LocalSubjectAccessReview", "metadata": {"namespace": NS}}
+                if api == "authorization.k8s.io":
+                    review["spec"] = dict(identity, resourceAttributes=attributes)
+                else:
+                    review.update(identity, namespace=NS, resourceAPIGroup=group,
+                                  resourceAPIVersion="v1", resource=resource, verb=action)
+                file = folder / f"authorization-{len(checks)}.json"
+                file.write_text(json.dumps(review))
+                output = json.loads(runner.run("create", "--raw", f"/apis/{api}/v1/namespaces/{NS}/localsubjectaccessreviews", "-f", str(file)))
+                (folder / f"authorization-{len(checks)}-result.json").write_text(json.dumps(output))
+                status = output.get("status", {}) if api == "authorization.k8s.io" else output
+                checks.append({"resource": resource, "verb": action,
+                               "pass": status.get("allowed") is True and not status.get("denied") and not status.get("evaluationError")})
+    (folder / "controller-authorization.json").write_text(json.dumps({"api": api, "checks": checks}, indent=2))
+    need(all(item["pass"] for item in checks), "CONTROLLER_MONITORING_PERMISSION_NOT_CONFIRMED")
+    return api, checks
+
+
+def wait_policy(runner):
+    for attempt in range(21):
+        cm = runner.get("configmap", "argocd-rbac-cm", ARGO_NS)
+        policy = (cm or {}).get("data", {}).get("policy.csv", "")
+        if set(LINES) <= {line.strip() for line in policy.splitlines()}:
+            return
+        if attempt % 5 == 0:
+            print(json.dumps({"status": "WAITING_MONITORING_ARGO_POLICY"}), flush=True)
+        time.sleep(3)
+    raise RuntimeError("ARGO_MONITORING_POLICY_NOT_RECONCILED")
+
+
+def resume_objects(root, previous):
+    need(previous.resolve().is_relative_to(root), "PREVIOUS_REGISTRATION_OUTSIDE_ROOT")
+    receipt = json.loads((previous / "receipt.json").read_text())
+    need(receipt.get("status") == "STOP_MONITORING_REGISTRATION"
+         and receipt.get("phase") == "MONITORING_REGISTRATION_READBACK"
+         and receipt.get("create_attempted") is True and receipt.get("argo_policy_patch_attempted") is True
+         and receipt.get("sync_started") is False and receipt.get("application_started") is False
+         and receipt.get("sql_calls") == 0, "PREVIOUS_READBACK_STOP_REQUIRED")
+    objects = [json.loads((previous / f"object-{number}.json").read_text()) for number in range(4)]
+    role, binding = role_objects()
+    for current, desired in zip(objects[:2], (role, binding)):
+        need(current.get("kind") == desired["kind"] and current["metadata"]["name"] == ROLE_NAME
+             and current["metadata"]["namespace"] == NS, "SAVED_CONTROLLER_SCOPE_CHANGED")
+        owned_same(current, desired)
+    app = copy.deepcopy(objects[3])
+    need(app["spec"]["source"]["targetRevision"] == REVISION, "SAVED_MONITORING_REVISION_CHANGED")
+    app["spec"]["source"]["targetRevision"] = "GITOPS_REVISION_INPUT_REQUIRED"
+    validate_sources(objects[2], app)
+    for item in objects[2:]:
+        owned_same(item, item)
+    return objects
+
+
+def previous_diagnostic(previous):
+    errors = list(previous.glob("command-*.stderr"))
+    text = "\n".join(file.read_text(errors="replace").lower() for file in errors)
+    return {"status": "PREVIOUS_MONITORING_READBACK_DIAGNOSTIC",
+            "classification": "IMPERSONATION_NOT_ALLOWED" if "impersonat" in text else "AUTHORIZATION_REVIEW_ACCESS_DENIED" if "forbidden" in text else "PRIVATE_ERROR_RECORDED",
+            "raw_output": "PRIVATE_NOT_PRINTED"}
 
 
 def connection_from_native_log(root, log, fallback=None):
@@ -160,6 +242,7 @@ def main():
     parser.add_argument("--native-run-log", type=Path, required=True)
     parser.add_argument("--cloud-api", required=True)
     parser.add_argument("--fallback-kubeconfig", type=Path)
+    parser.add_argument("--resume-from", type=Path, help="Finish a stopped post-registration readback without configuration writes")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     root = args.root.resolve()
@@ -168,18 +251,49 @@ def main():
     create_attempted, policy_patch_attempted = False, False
     objects = []
     runner = None
+    lock = None
     result = {}
     try:
         kubeconfig = connection_from_native_log(root, args.native_run_log, args.fallback_kubeconfig)
         oc = shutil.which("oc") or str(Path.home() / ".local/share/seokpan/oc-cli-4.20/oc")
         need(Path(oc).is_file(), "EXISTING_OC_REQUIRED")
-        need(shutil.which("ansible-playbook"), "EXISTING_ANSIBLE_REQUIRED_NO_INSTALL_ATTEMPTED")
+        need(args.resume_from or shutil.which("ansible-playbook"), "EXISTING_ANSIBLE_REQUIRED_NO_INSTALL_ATTEMPTED")
         import fcntl
         lock = (root / "cloud-continuation.lock").open("a")
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         runner = Runner(oc, kubeconfig, folder)
         need(runner.run("whoami", "--show-server").strip().rstrip("/") == args.cloud_api.rstrip("/"), "WRONG_CLOUD_TARGET")
         need(runner.run("whoami").strip() == "tjung03", "PERSONAL_TJUNG03_LOGIN_REQUIRED")
+        if args.resume_from:
+            need(not args.apply, "READBACK_RESUME_MUST_NOT_REQUEST_APPLY")
+            phase = "RESUME_SAVED_MONITORING_OBJECTS"
+            objects = resume_objects(root, args.resume_from)
+            print(json.dumps(previous_diagnostic(args.resume_from)), flush=True)
+            phase = "MONITORING_REGISTRATION_READBACK"
+            for item in objects:
+                current = runner.get(item["kind"], item["metadata"]["name"], item["metadata"]["namespace"])
+                need(current, "REGISTERED_OBJECT_NOT_READABLE")
+                owned_same(current, item)
+            argo = runner.get("argocd", "openshift-gitops", ARGO_NS)
+            need(argo and argo["spec"].get("rbac", {}).get("scopes") in ("[groups]", ["groups"]), "ARGO_GROUP_SCOPE_REQUIRED")
+            policy = argo["spec"]["rbac"].get("policy", "")
+            need(scoped_policy(policy) == policy, "MONITORING_POLICY_READBACK_MISMATCH")
+            phase = "MONITORING_CONTROLLER_AUTHORIZATION"
+            api, checks = controller_authorization(runner, folder)
+            phase = "ARGO_MONITORING_POLICY_RECONCILIATION"
+            wait_policy(runner)
+            result = {"status": "PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING", "resumed_from": str(args.resume_from),
+                      "project": PROJECT, "application": PROJECT, "namespace": NS, "source_revision": REVISION,
+                      "controller_checks": len(checks), "authorization_api": api, "impersonation_used": False,
+                      "D_actions": ["get", "sync"], "D_browser_acceptance": "NOT_VERIFIED",
+                      "configuration_mutations": 0, "create_attempted": False, "argo_policy_patch_attempted": False,
+                      "automatic_sync": False, "sync_started": False, "monitoring_resources_synced": False,
+                      "application_started": False, "sql_calls": 0, "native_stage_repeated": False,
+                      "existing_runtime_tests_repeated": False, "oc_commands": runner.calls}
+            (folder / "receipt.json").write_text(json.dumps(result, indent=2))
+            print(json.dumps(result))
+            print("Private monitoring registration directory: " + str(folder))
+            return 0
         phase = "PINNED_MONITORING_SOURCE"
         source = folder / "source"
         for path, expected in SOURCE_HASHES.items():
@@ -255,27 +369,15 @@ def main():
                 current = runner.get(item["kind"], item["metadata"]["name"], item["metadata"]["namespace"])
                 need(current, "REGISTERED_OBJECT_NOT_READABLE")
                 owned_same(current, item)
-            checks = []
-            for resource in ("servicemonitors.monitoring.coreos.com", "prometheusrules.monitoring.coreos.com", "networkpolicies.networking.k8s.io"):
-                for action in VERBS:
-                    answer = runner.run("auth", "can-i", action, resource, "-n", NS, "--as=system:serviceaccount:" + ARGO_NS + ":" + SA, allow_no=True).strip().lower()
-                    checks.append(answer == "yes")
-            need(all(checks), "CONTROLLER_MONITORING_PERMISSION_NOT_CONFIRMED")
+            phase = "MONITORING_CONTROLLER_AUTHORIZATION"
+            api, checks = controller_authorization(runner, folder)
             phase = "ARGO_MONITORING_POLICY_RECONCILIATION"
-            for attempt in range(21):
-                cm = runner.get("configmap", "argocd-rbac-cm", ARGO_NS)
-                policy = (cm or {}).get("data", {}).get("policy.csv", "")
-                if set(LINES) <= {line.strip() for line in policy.splitlines()}:
-                    break
-                if attempt % 5 == 0:
-                    print(json.dumps({"status": "WAITING_MONITORING_ARGO_POLICY"}), flush=True)
-                time.sleep(3)
-            else:
-                raise RuntimeError("ARGO_MONITORING_POLICY_NOT_RECONCILED")
+            wait_policy(runner)
         result = {"status": "PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING" if args.apply else "MONITORING_REGISTRATION_PREFLIGHT_ONLY",
                   "project": PROJECT, "application": PROJECT, "namespace": NS, "argo_namespace": ARGO_NS,
                   "controller_service_account": SA, "source_revision": REVISION,
                   "controller_checks": 18 if args.apply else 0, "registration_method": "MINIMAL_ANSIBLE_BOOTSTRAP",
+                  "authorization_api": api if args.apply else None, "impersonation_used": False,
                   "dependent_admission_checks": len(deferred),
                   "D_actions": ["get", "sync"], "D_browser_acceptance": "NOT_VERIFIED",
                   "create_attempted": create_attempted, "argo_policy_patch_attempted": policy_patch_attempted,
@@ -287,7 +389,11 @@ def main():
                   "reason": str(error) if isinstance(error, RuntimeError) else type(error).__name__,
                   "create_attempted": create_attempted, "argo_policy_patch_attempted": policy_patch_attempted,
                   "automatic_retry": False, "sync_started": False, "application_started": False, "sql_calls": 0}
+        result["failed_operation"] = runner.last_operation if runner else None
         return_code = 1
+    finally:
+        if lock is not None:
+            lock.close()
     result["oc_commands"] = runner.calls if runner else 0
     (folder / "receipt.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result))

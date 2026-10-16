@@ -7,6 +7,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import subprocess
+import contextlib
+import io
+import sys
+import types
 
 spec = importlib.util.spec_from_file_location("monitoring_bootstrap", Path(__file__).with_name("register-rosa-monitoring.py"))
 m = importlib.util.module_from_spec(spec)
@@ -25,6 +29,38 @@ def declarations():
                     "destination": {"server": "https://kubernetes.default.svc", "namespace": m.NS},
                     "syncPolicy": {"syncOptions": ["FailOnSharedResource=true", "Prune=false", "Delete=false"]}}}
     return project, app
+
+
+def stopped_registration(root):
+    previous = root / "stopped"
+    previous.mkdir()
+    (previous / "receipt.json").write_text(json.dumps({"status": "STOP_MONITORING_REGISTRATION",
+        "phase": "MONITORING_REGISTRATION_READBACK", "create_attempted": True,
+        "argo_policy_patch_attempted": True, "sync_started": False, "application_started": False, "sql_calls": 0}))
+    project, app = declarations()
+    project, app = m.validate_sources(project, app)
+    objects = m.role_objects() + [project, app]
+    for number, item in enumerate(objects):
+        item["metadata"]["annotations"] = {m.OWNER: "rosa-monitoring"}
+        (previous / f"object-{number}.json").write_text(json.dumps(item))
+    return previous, objects
+
+
+class ReviewRunner:
+    def __init__(self, *, allowed=True, evaluation_error="", capabilities=("yes",)):
+        self.allowed, self.error = allowed, evaluation_error
+        self.capabilities = iter(capabilities)
+        self.commands, self.requests = [], []
+        self.calls = 0
+
+    def run(self, *args, **kwargs):
+        self.calls += 1
+        self.commands.append(args)
+        if args[:2] == ("auth", "can-i"):
+            return next(self.capabilities)
+        self.requests.append(json.loads(Path(args[-1]).read_text()))
+        status = {"allowed": self.allowed, "evaluationError": self.error}
+        return json.dumps({"status": status} if self.requests[-1]["apiVersion"] == "authorization.k8s.io/v1" else status)
 
 
 class MonitoringTests(unittest.TestCase):
@@ -143,6 +179,108 @@ class MonitoringTests(unittest.TestCase):
             with patch.object(m.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"Forbidden: cannot impersonate")):
                 with self.assertRaisesRegex(RuntimeError, "ACCESS_DENIED"):
                     runner.run("auth", "can-i", "create", "servicemonitors", allow_no=True)
+
+    def test_controller_reviews_include_serviceaccount_groups_without_impersonation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ReviewRunner()
+            api, checks = m.controller_authorization(runner, Path(directory))
+            self.assertEqual(api, "authorization.k8s.io")
+            self.assertEqual(len(checks), 18)
+            self.assertTrue(all(item["pass"] for item in checks))
+            for item in runner.requests:
+                self.assertEqual(item["spec"]["user"], f"system:serviceaccount:{m.ARGO_NS}:{m.SA}")
+                self.assertEqual(item["spec"]["groups"], ["system:serviceaccounts", "system:serviceaccounts:" + m.ARGO_NS, "system:authenticated"])
+                self.assertEqual(item["spec"]["resourceAttributes"]["namespace"], m.NS)
+            self.assertFalse(any("--as" in str(command) or "token" in command for command in runner.commands))
+            self.assertTrue(all(command[1] == "--raw" for command in runner.commands[1:]))
+
+    def test_review_denial_and_evaluation_error_cannot_be_reported_as_pass(self):
+        for runner in (ReviewRunner(allowed=False), ReviewRunner(evaluation_error="policy lookup failed")):
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(RuntimeError, "CONTROLLER_MONITORING_PERMISSION_NOT_CONFIRMED"):
+                    m.controller_authorization(runner, Path(directory))
+                checks = json.loads((Path(directory) / "controller-authorization.json").read_text())["checks"]
+                self.assertEqual(len(checks), 18)
+                self.assertTrue(all(not check["pass"] for check in checks))
+
+    def test_no_review_capability_stops_without_a_privilege_or_token_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ReviewRunner(capabilities=("no", "no"))
+            with self.assertRaisesRegex(RuntimeError, "NAMESPACE_AUTHORIZATION_REVIEW_NOT_PERMITTED"):
+                m.controller_authorization(runner, Path(directory))
+            self.assertEqual(len(runner.requests), 0)
+            self.assertTrue(all(command[:2] == ("auth", "can-i") for command in runner.commands))
+
+    def test_openshift_review_api_uses_its_own_shape_when_authorized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = ReviewRunner(capabilities=("no", "yes"))
+            api, checks = m.controller_authorization(runner, Path(directory))
+            self.assertEqual(api, "authorization.openshift.io")
+            self.assertEqual(len(checks), 18)
+            self.assertTrue(all(item["pass"] for item in checks))
+            self.assertTrue(all(item["namespace"] == m.NS and "spec" not in item for item in runner.requests))
+
+    def test_resume_requires_exact_stop_and_saved_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, objects = stopped_registration(root)
+            self.assertEqual(len(m.resume_objects(root, previous)), 4)
+            objects[0]["rules"][0]["verbs"].append("delete")
+            (previous / "object-0.json").write_text(json.dumps(objects[0]))
+            with self.assertRaisesRegex(RuntimeError, "EXISTING_MONITORING_RESOURCE_DRIFT"):
+                m.resume_objects(root, previous)
+            with self.assertRaisesRegex(RuntimeError, "PREVIOUS_REGISTRATION_OUTSIDE_ROOT"):
+                m.resume_objects(root / "elsewhere", previous)
+
+    def test_resume_rejects_receipts_before_registration_completed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, _ = stopped_registration(root)
+            file = previous / "receipt.json"
+            receipt = json.loads(file.read_text())
+            for key, value in (("phase", "ANSIBLE_MONITORING_REGISTRATION"), ("create_attempted", False), ("sync_started", True)):
+                changed = dict(receipt, **{key: value})
+                file.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(RuntimeError, "PREVIOUS_READBACK_STOP_REQUIRED"):
+                    m.resume_objects(root, previous)
+
+    def test_resume_completes_checks_without_native_bootstrap_apply_or_policy_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, objects = stopped_registration(root)
+            kubeconfig = root / "personal-kubeconfig"
+            kubeconfig.write_text("PRIVATE_NOT_READ")
+            native_log = root / "native.log"
+            native_log.write_text(json.dumps({"status": "PASS_CLOUD_RUNTIME_TEMPORARY_PULL_REFERENCE_DETACHED", "kubeconfig_file": str(kubeconfig)}) + "\nPrivate result directory: " + str(root))
+            runner = ReviewRunner()
+            run_review = runner.run
+            def run(*args, **kwargs):
+                if args[0] == "whoami":
+                    runner.calls += 1
+                    return "https://expected" if len(args) > 1 else "tjung03"
+                return run_review(*args, **kwargs)
+            def get(kind, name, namespace=None):
+                runner.calls += 1
+                for item in objects:
+                    if item["kind"] == kind and item["metadata"]["name"] == name:
+                        return copy.deepcopy(item)
+                if kind == "argocd":
+                    return {"spec": {"rbac": {"scopes": "[groups]", "policy": "\n".join(m.LINES)}}}
+                if kind == "configmap":
+                    return {"data": {"policy.csv": "\n".join(m.LINES)}}
+                raise AssertionError("Unexpected configuration query")
+            runner.run, runner.get = run, get
+            fcntl = types.SimpleNamespace(flock=lambda *args: None, LOCK_EX=1, LOCK_NB=2)
+            args = ["register", str(root), "--native-run-log", str(native_log), "--resume-from", str(previous), "--cloud-api", "https://expected"]
+            with patch.object(sys, "argv", args), patch.dict(sys.modules, {"fcntl": fcntl}), \
+                 patch.object(m.shutil, "which", return_value=str(kubeconfig)), patch.object(m, "Runner", return_value=runner), \
+                 patch.object(m.subprocess, "run", side_effect=AssertionError("No bootstrap subprocess allowed")), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(m.main(), 0)
+            receipt = json.loads(next(root.glob("cloud-monitoring-registration-*/receipt.json")).read_text())
+            self.assertEqual(receipt["status"], "PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING")
+            self.assertEqual(receipt["configuration_mutations"], 0)
+            self.assertFalse(receipt["create_attempted"] or receipt["argo_policy_patch_attempted"] or receipt["native_stage_repeated"])
+            self.assertEqual(receipt["controller_checks"], 18)
 
 
 if __name__ == "__main__":
