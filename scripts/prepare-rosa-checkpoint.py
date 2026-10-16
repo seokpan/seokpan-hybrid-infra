@@ -3,6 +3,7 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -13,10 +14,12 @@ import socket
 import stat
 import subprocess
 import tempfile
+import tarfile
 import urllib.request
 
 MAX_BYTES = 96 * 1024 * 1024
 SOPS_SHA = "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b"
+AGE_KEYGEN_TAR_SHA = "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
 
 def need(ok, code):
     if not ok:
@@ -35,7 +38,7 @@ def private_file(path, limit=MAX_BYTES):
             need(s.st_uid == os.getuid() and stat.S_IMODE(s.st_mode) & 0o077 == 0, "PRIVATE_OWNED_INPUT_REQUIRED")
         return f.read(limit + 1)
 
-def age_recipient(raw):
+def age_recipients(raw):
     """Read public recipients from SOPS metadata, never from payload fields."""
     text = raw.decode("utf-8-sig")
     if text.lstrip().startswith("{"):
@@ -78,9 +81,47 @@ def age_recipient(raw):
             m = re.fullmatch(r'''\s+(?:-\s+)?(?:recipient|"recipient"|'recipient'):\s*(?:"(age1[0-9a-z]+)"|'(age1[0-9a-z]+)'|(age1[0-9a-z]+))[ \t]*(?:#.*)?''', line)
             if m: values.append(next(x for x in m.groups() if x is not None))
         form = "SOPS_BLOCK_YAML"
-    need(values and all(isinstance(x, str) and re.fullmatch(r"age1[0-9a-z]+", x) for x in values)
-         and len(set(values)) == 1, "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
+    need(values and all(isinstance(x, str) and re.fullmatch(r"age1[0-9a-z]+", x) for x in values), "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
+    return sorted(set(values)), form
+
+def age_recipient(raw):
+    values, form = age_recipients(raw)
+    need(len(values) == 1, "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
     return values[0], form
+
+def age_keygen_binary(args, out):
+    if getattr(args,"age_keygen",None):
+        path = Path(args.age_keygen)
+        need(path.is_file() and not path.is_symlink(), "EXISTING_AGE_KEYGEN_REQUIRED")
+        return str(path.resolve())
+    found = shutil.which("age-keygen")
+    if found: return found
+    need(platform.system() == "Linux" and platform.machine() in ("x86_64","amd64"), "EXISTING_AGE_KEYGEN_REQUIRED_ON_THIS_PLATFORM")
+    url = "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz"
+    with urllib.request.urlopen(url,timeout=40) as response: raw = response.read(33554433)
+    need(len(raw) <= 33554432 and hashlib.sha256(raw).hexdigest() == AGE_KEYGEN_TAR_SHA,"AGE_KEYGEN_RELEASE_HASH_MISMATCH")
+    with tarfile.open(fileobj=io.BytesIO(raw),mode="r:gz") as archive:
+        member = archive.getmember("age/age-keygen")
+        need(member.isfile() and member.size <= 33554432,"AGE_KEYGEN_REGULAR_MEMBER_REQUIRED")
+        stream = archive.extractfile(member)
+        need(stream is not None,"AGE_KEYGEN_MEMBER_REQUIRED")
+        binary = stream.read(33554433)
+    need(len(binary) == member.size,"AGE_KEYGEN_MEMBER_SIZE_MISMATCH")
+    path = out/"age-keygen";path.write_bytes(binary);path.chmod(0o700)
+    return str(path)
+
+def key_matched_recipient(values, args, out):
+    raw = private_file(args.key_file,65536)
+    identities = [line.strip() for line in raw.decode("ascii").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    need(len(identities) == 1 and re.fullmatch(r"AGE-SECRET-KEY-1[0-9A-Z]+",identities[0]), "ONE_EXISTING_X25519_IDENTITY_REQUIRED")
+    binary = age_keygen_binary(args,out)
+    p = subprocess.run([binary,"-y"],input=raw,capture_output=True,timeout=20)
+    need(p.returncode == 0,"EXISTING_IDENTITY_PUBLIC_DERIVATION_FAILED")
+    public = p.stdout.decode("ascii").splitlines()
+    need(public and all(re.fullmatch(r"age1[0-9a-z]+",line) for line in public),"AGE_PUBLIC_OUTPUT_REQUIRED")
+    matched = set(values).intersection(public)
+    need(len(matched) == 1,"ONE_EXISTING_KEY_MATCHING_SOURCE_RECIPIENT_REQUIRED")
+    return next(iter(matched))
 
 def recipient_shape(raw):
     """Counts/styles only. No recipient, ciphertext, key or payload is returned."""
@@ -304,8 +345,8 @@ def backup(args, out, binary, audit=None):
     audit["phase"] = "RECIPIENT_PREFLIGHT"
     cipher_raw = private_file(c["recipient_source"], 262144)
     need(hashlib.sha256(cipher_raw).hexdigest() == c["recipient_source_sha256"], "RECIPIENT_SOURCE_HASH_MISMATCH")
-    recipient, form = age_recipient(cipher_raw)
-    audit.update(recipient_metadata_format=form, unique_age_recipients=1)
+    recipients, form = age_recipients(cipher_raw)
+    audit.update(recipient_metadata_format=form, source_age_recipients=len(recipients))
     cloud = c["cloud_namespace"]
     previous = Path(c["previous_inventory"])
     receipt = json.loads(private_file(previous/"receipt.json", 262144))
@@ -314,19 +355,23 @@ def backup(args, out, binary, audit=None):
          and receipt.get("pvc_count") == counts["pvc"] and receipt.get("secret_inventory_counts", {}).get(cloud) == counts["cloud_secrets"],
          "ACCEPTED_PREVIOUS_INVENTORY_REQUIRED")
     private_file(args.kubeconfig, 262144)
+    audit["phase"] = "EXISTING_KEY_RECIPIENT_MATCH"
+    recipient = key_matched_recipient(recipients,args,out)
+    audit.update(matched_existing_key_recipients=1,encryption_recipient_policy="EXISTING_OPERATOR_KEY_ONLY")
     audit["phase"] = "CONFIG_CAPTURE"
     errors = []
-    def get(resource, name=None, namespace=None):
+    def get(resource, name=None, namespace=None, optional=False):
         cmd = ["oc", "--kubeconfig", args.kubeconfig, "--request-timeout=20s", "get", resource]
         if name: cmd.append(name)
         if namespace: cmd += ["-n", namespace]
+        if optional: cmd.append("--ignore-not-found=true")
         p = subprocess.run(cmd + ["-o", "json"], capture_output=True, timeout=35)
         if p.returncode:
             if any(x in p.stderr.lower() for x in (b"unauthorized", b"must be logged in", b"provide credentials")):
                 raise RuntimeError("CHECKPOINT_AUTH_REQUIRED_NO_RETRY")
             errors.append({"resource": resource, "namespace": namespace, "result": "READ_DENIED_OR_FAILED"})
             return None
-        return json.loads(p.stdout)
+        return json.loads(p.stdout) if p.stdout.strip() else None
     p = subprocess.run(["oc", "--kubeconfig", args.kubeconfig, "config", "view", "--minify", "-o", "json"], capture_output=True, timeout=20)
     need(p.returncode == 0, "CHECKPOINT_LOCAL_CONTEXT_REQUIRED")
     cluster = json.loads(p.stdout)["clusters"][0]["cluster"]
@@ -336,7 +381,7 @@ def backup(args, out, binary, audit=None):
     for resource in ("namespace",):
         obj = get(resource, cloud)
         if obj: snapshots.append(obj)
-    for resource in ("secrets", "configmaps", "serviceaccounts", "roles", "rolebindings", "networkpolicies", "deployments", "statefulsets", "services", "routes"):
+    for resource in ("secrets", "configmaps", "serviceaccounts", "roles", "rolebindings", "networkpolicies", "deployments", "statefulsets", "services", "routes", "servicemonitors", "prometheusrules", "poddisruptionbudgets"):
         obj = get(resource, namespace=cloud)
         if obj is not None:
             for item in obj.get("items", []):
@@ -356,6 +401,9 @@ def backup(args, out, binary, audit=None):
                 if obj: snapshots.append(obj)
     for name in c["groups"]:
         obj = get("group", name)
+        if obj: snapshots.append(obj)
+    for name, namespace in [("cluster-monitoring-config","openshift-monitoring"),("user-workload-monitoring-config","openshift-user-workload-monitoring")]:
+        obj = get("configmap",name,namespace,optional=True)
         if obj: snapshots.append(obj)
     files = collect_files(c["local_roots"], {out.resolve()})
     expected = json.loads(private_file(previous/(cloud+"-secret-inventory.json"), 262144))
@@ -397,10 +445,44 @@ def verify(args, out, binary):
             "independent_storage_acceptance": "REQUIRES_OPERATOR_CONFIRMATION_NOT_PROVEN_BY_HOSTNAME",
             "file_count": len(b["files"]), "snapshots": len(b["snapshots"]), "deletion_ready": False}
 
+def seal(args, out, binary, audit):
+    c = json.loads(private_file(args.contract,262144))
+    need(c.get("schema") == 1,"CHECKPOINT_CONTRACT_REQUIRED")
+    cipher = private_file(c["recipient_source"],262144)
+    need(hashlib.sha256(cipher).hexdigest() == c["recipient_source_sha256"],"RECIPIENT_SOURCE_HASH_MISMATCH")
+    values,form = age_recipients(cipher)
+    audit.update(phase="SUPPLEMENT_KEY_MATCH",source_age_recipients=len(values),recipient_metadata_format=form)
+    recipient = key_matched_recipient(values,args,out)
+    audit.update(matched_existing_key_recipients=1,encryption_recipient_policy="EXISTING_OPERATOR_KEY_ONLY")
+    directory = Path(args.seal_dir)
+    need(directory.is_dir() and not directory.is_symlink(),"REGULAR_PLAN_DIRECTORY_REQUIRED")
+    need((directory/"receipt.json").is_file(),"PLAN_RECEIPT_REQUIRED")
+    names = ["before.tfstate","saved.tfplan","plan-private.json","plan-private.log","plan-manifest.json","receipt.json","failure-private.log"]
+    files = [];total = 0
+    for name in names:
+        path = directory/name
+        if not path.exists(): continue
+        raw = private_file(path)
+        total += len(raw);need(total <= MAX_BYTES,"SUPPLEMENT_TOO_LARGE")
+        files.append({"root":str(directory),"path":name,"sha256":hashlib.sha256(raw).hexdigest(),"data":base64.b64encode(raw).decode()})
+    bundle = {"schema":1,"origin_host":socket.gethostname(),"captured_at_utc":dt.datetime.now(dt.timezone.utc).isoformat(),
+        "snapshots":[],"files":files,"purpose":"ROSA_PLAN_STATE_SUPPLEMENT_NOT_APPROVAL","remote_state_capture_present":(directory/"before.tfstate").is_file()}
+    raw = canonical(bundle)
+    audit.update(phase="SUPPLEMENT_ENCRYPT",encryption_attempted=True)
+    encrypted = crypt(binary,raw,recipient=recipient)
+    archive = out/"checkpoint.sops.json";archive.write_bytes(encrypted)
+    audit.update(phase="SUPPLEMENT_LOCAL_DECRYPT",archive_written=True)
+    need(canonical(json.loads(crypt(binary,encrypted,decrypt=True,key_file=args.key_file))) == raw,"SUPPLEMENT_ROUNDTRIP_MISMATCH")
+    audit["phase"] = "SUPPLEMENT_COMPLETE"
+    return {"status":"PASS_ENCRYPTED_PLAN_SUPPLEMENT_LOCAL_ROUNDTRIP","archive":str(archive),
+        "archive_sha256":hashlib.sha256(encrypted).hexdigest(),"project_files":len(files),
+        "local_decrypt_verified":True,"remote_state_capture_present":bundle["remote_state_capture_present"],
+        "independent_copy_verified":False,"deletion_ready":False}
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("backup", "verify", "diagnose", "inputs"))
-    for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops", "resume-from"):
+    p.add_argument("mode", choices=("backup", "verify", "diagnose", "inputs", "seal"))
+    for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops", "resume-from", "age-keygen", "seal-dir"):
         p.add_argument("--"+key)
     p.add_argument("--output-parent", required=True)
     args = p.parse_args()
@@ -421,11 +503,13 @@ def main():
             need(args.key_file, "EXISTING_SEPARATE_AGE_IDENTITY_REQUIRED")
             private_file(args.key_file, 65536)
             binary = sops_binary(args, out)
-            result = backup(args, out, binary, audit) if args.mode == "backup" else verify(args, out, binary)
+            if args.mode == "backup": result = backup(args,out,binary,audit)
+            elif args.mode == "seal": result = seal(args,out,binary,audit)
+            else: result = verify(args,out,binary)
     except Exception as error:
         result = {"status": "STOP_CHECKPOINT", "reason": str(error) if type(error) is RuntimeError else type(error).__name__, "deletion_ready": False}
     result.update(resource_mutations=0, SQL=0, sync_started=False, credential_values_printed=False)
-    if args.mode in ("backup","diagnose","inputs"): result.update(audit)
+    if args.mode in ("backup","diagnose","inputs","seal"): result.update(audit)
     (out/"receipt.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2)); print("Private checkpoint directory: "+str(out))
     return 1 if result["status"].startswith("STOP_") else 0

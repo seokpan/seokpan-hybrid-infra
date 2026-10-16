@@ -145,7 +145,7 @@ class RecipientFixBoundaries(unittest.TestCase):
                 (d/name).write_bytes(data);(d/name).chmod(0o600)
             cfg=b'{"clusters":[{"cluster":{"server":"https://test.invalid"}}]}'
             responses=[subprocess.CompletedProcess([],0,cfg,b""),subprocess.CompletedProcess([],1,b"",b"Unauthorized")]
-            with patch.object(B.subprocess,"run",side_effect=responses) as called,patch.object(B,"crypt") as encrypted:
+            with patch.object(B.subprocess,"run",side_effect=responses) as called,patch.object(B,"crypt") as encrypted,patch.object(B,"key_matched_recipient",return_value="age1fixture"):
                 with self.assertRaisesRegex(RuntimeError,"AUTH_REQUIRED_NO_RETRY"):
                     B.backup(argparse.Namespace(contract=str(d/"contract.json"),kubeconfig=str(d/"kubeconfig")),d,"unused")
                 self.assertEqual(called.call_count,2)
@@ -247,5 +247,78 @@ class PreservationInputInspectionBoundaries(unittest.TestCase):
             self.assertEqual(called.call_count,2)
             self.assertEqual(r["pvcs"][1]["read"],"SKIPPED_AFTER_AUTH_REQUIRED")
             self.assertEqual(len(r["plan_inputs"]),2)
+
+class ExistingKeyRecipientSelectionBoundaries(unittest.TestCase):
+    def identity(self,d):
+        p=d/"identity.txt";p.write_bytes(b"# fixture only\nAGE-SECRET-KEY-1FIXTUREONLY\n");p.chmod(0o600)
+        return argparse.Namespace(key_file=str(p),age_keygen="fixture-keygen")
+    def test_existing_key_selects_one_of_three_without_broadening_access(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.identity(d)
+            with patch.object(B,"age_keygen_binary",return_value="fixture-keygen"),patch.object(B.subprocess,"run",return_value=subprocess.CompletedProcess([],0,b"age1second\n",b"")) as called:
+                self.assertEqual(B.key_matched_recipient(["age1first","age1second","age1third"],a,d),"age1second")
+            self.assertEqual(called.call_args.args[0],["fixture-keygen","-y"])
+            self.assertNotIn("AGE-SECRET",str(called.call_args.args[0]))
+    def test_wrong_existing_key_stops_without_choosing_first(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.identity(d)
+            with patch.object(B,"age_keygen_binary",return_value="fixture-keygen"),patch.object(B.subprocess,"run",return_value=subprocess.CompletedProcess([],0,b"age1other\n",b"")):
+                with self.assertRaisesRegex(RuntimeError,"EXISTING_KEY_MATCHING_SOURCE"):B.key_matched_recipient(["age1first","age1second","age1third"],a,d)
+    def test_multi_identity_file_is_not_exported_or_implicitly_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.identity(d)
+            Path(a.key_file).write_bytes(b"AGE-SECRET-KEY-1FIRST\nAGE-SECRET-KEY-1SECOND\n")
+            with patch.object(B,"age_keygen_binary") as binary:
+                with self.assertRaisesRegex(RuntimeError,"ONE_EXISTING_X25519_IDENTITY"):B.key_matched_recipient(["age1first"],a,d)
+                binary.assert_not_called()
+    def test_derivation_failure_never_echoes_raw_output(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.identity(d)
+            with patch.object(B,"age_keygen_binary",return_value="fixture-keygen"),patch.object(B.subprocess,"run",return_value=subprocess.CompletedProcess([],1,b"PRIVATE",b"PRIVATE")):
+                with self.assertRaises(RuntimeError) as caught:B.key_matched_recipient(["age1first"],a,d)
+                self.assertEqual(str(caught.exception),"EXISTING_IDENTITY_PUBLIC_DERIVATION_FAILED")
+    def test_multi_recipient_backup_reaches_target_guard_after_key_match(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp)
+            raw=json.dumps({"sops":{"age":[{"recipient":v} for v in ["age1first","age1second","age1third"]]}}).encode()
+            c={"schema":1,"expected_api":"https://expected.invalid","cloud_namespace":"cloud","previous_inventory":str(d),"inventory_counts":{"pvc":0,"cloud_secrets":0},"recipient_source":str(d/"cipher.json"),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            for n,data in [("cipher.json",raw),("contract.json",json.dumps(c).encode()),("receipt.json",b'{"pvc_count":0,"secret_inventory_counts":{"cloud":0}}'),("kubeconfig",b"fixture")]:
+                (d/n).write_bytes(data);(d/n).chmod(0o600)
+            cfg=b'{"clusters":[{"cluster":{"server":"https://wrong.invalid"}}]}'
+            with patch.object(B,"key_matched_recipient",return_value="age1second") as matched,patch.object(B.subprocess,"run",return_value=subprocess.CompletedProcess([],0,cfg,b"")):
+                with self.assertRaisesRegex(RuntimeError,"TARGET_MISMATCH"):B.backup(argparse.Namespace(contract=str(d/"contract.json"),kubeconfig=str(d/"kubeconfig")),d,"unused")
+                self.assertEqual(len(matched.call_args.args[0]),3)
+
+class PlanSupplementBoundaries(unittest.TestCase):
+    def test_whitelisted_plan_files_are_encrypted_without_identity_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);out=d/"out";out.mkdir();plan=d/"plan";plan.mkdir()
+            raw=b'{"sops":{"age":[{"recipient":"age1fixture"}]}}'
+            c={"schema":1,"recipient_source":str(d/"cipher.json"),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            for path,data in [(d/"cipher.json",raw),(d/"contract.json",json.dumps(c).encode()),(plan/"receipt.json",b'{}'),(plan/"before.tfstate",b'PRIVATE_STATE_FIXTURE'),(plan/"identity.txt",b'PRIVATE_IDENTITY_FIXTURE')]:
+                path.write_bytes(data);path.chmod(0o600)
+            captured={}
+            def crypto(binary,data,decrypt=False,**kwargs):
+                if decrypt:return captured["raw"]
+                captured["raw"]=data;return b"encrypted-fixture-only"
+            a=argparse.Namespace(contract=str(d/"contract.json"),seal_dir=str(plan),key_file="fixture")
+            with patch.object(B,"key_matched_recipient",return_value="age1fixture"),patch.object(B,"crypt",side_effect=crypto):
+                r=B.seal(a,out,"fixture",{})
+            self.assertTrue(r["local_decrypt_verified"])
+            self.assertEqual({x["path"] for x in json.loads(captured["raw"])["files"]},{"receipt.json","before.tfstate"})
+            self.assertNotIn(b"PRIVATE",(out/"checkpoint.sops.json").read_bytes())
+    def test_missing_plan_receipt_stops_before_encryption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);raw=b'{"sops":{"age":[{"recipient":"age1fixture"}]}}'
+            c={"schema":1,"recipient_source":str(d/"cipher.json"),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            for n,data in [("cipher.json",raw),("contract.json",json.dumps(c).encode())]:(d/n).write_bytes(data);(d/n).chmod(0o600)
+            a=argparse.Namespace(contract=str(d/"contract.json"),seal_dir=str(d),key_file="fixture")
+            with patch.object(B,"key_matched_recipient",return_value="age1fixture"),patch.object(B,"crypt") as crypt:
+                with self.assertRaisesRegex(RuntimeError,"PLAN_RECEIPT_REQUIRED"):B.seal(a,d,"fixture",{})
+                crypt.assert_not_called()
 
 if __name__=="__main__":unittest.main()
