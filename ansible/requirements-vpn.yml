@@ -1,0 +1,9 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-07
+# 작성내용: Ansible 2.14 환경의 VPN SSM 접속용 컬렉션 검증 후보 (#16)
+collections:
+  - name: amazon.aws
+    version: "7.6.1"
+  - name: community.aws
+    version: "7.2.0"

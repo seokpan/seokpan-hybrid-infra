@@ -157,6 +157,52 @@ data "aws_iam_policy_document" "tf_bootstrap" {
     }
   }
 
+  # 작성자: 이유빈
+  # 작성일: 2026-10-07
+  # 작성내용: Bootstrap의 지정 Hybrid 정책 생성·관리·연결 권한 추가 (#16)
+
+  # 지정한 Hybrid 정책 두 개만 생성하고 관리합니다.
+  statement {
+    sid = "ManageFoundationHybridPolicy"
+
+    actions = [
+      "iam:CreatePolicy",
+      "iam:DeletePolicy",
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion",
+      "iam:ListPolicyVersions",
+      "iam:CreatePolicyVersion",
+      "iam:DeletePolicyVersion",
+      "iam:TagPolicy",
+      "iam:UntagPolicy",
+      "iam:ListPolicyTags",
+    ]
+
+    resources = [
+      "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-hybrid",
+      "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-hybrid-ec2",
+    ]
+  }
+
+  # 위 Hybrid 정책을 Foundation 실행 Role에만 연결·해제합니다.
+  statement {
+    sid     = "AttachFoundationHybridPolicy"
+    actions = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+
+    resources = [
+      "arn:aws:iam::${local.account_id}:role/seokpan-tf-foundation",
+    ]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "iam:PolicyARN"
+      values = [
+        "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-hybrid",
+        "arn:aws:iam::${local.account_id}:policy/seokpan-tf-foundation-hybrid-ec2",
+      ]
+    }
+  }
+
 }
 
 resource "aws_iam_role_policy" "tf_bootstrap" {

@@ -56,8 +56,11 @@ if version["terraform_version"] != "1.16.4":
     stop("기존 Terraform 1.16.4가 필요합니다.")
 
 platform = version["platform"]
+provider_root = Path(os.environ.get(
+    "SEOKPAN_TEST_PROVIDER_ROOT", str(foundation)
+))
 provider_folder = (
-    Path(os.environ.get("SEOKPAN_TEST_PROVIDER_ROOT", str(foundation)))
+    provider_root
     / ".terraform/providers/registry.terraform.io/hashicorp/aws"
     / "6.67.0"
     / platform
@@ -130,6 +133,26 @@ if iam.count(hook) != 1:
     stop("새 권한의 조건부 연결 위치가 예상과 다릅니다.")
 
 
+
+def strip_vpn_bootstrap_additions(text):
+    # 별도 유지 검사에서 확인한 VPN 문장 두 개만 비교에서 분리합니다.
+    # 실제 시험 구성에는 두 문장을 그대로 포함합니다.
+    for sid in (
+        "ManageFoundationHybridPolicy",
+        "AttachFoundationHybridPolicy",
+    ):
+        pattern = (
+            r'(?ms)^  statement\s*\{\n'
+            r'(?:(?!^  \}).)*?\bsid\s*=\s*"'
+            + re.escape(sid)
+            + r'"(?:(?!^  \}).)*?^  \}[ \t]*$'
+        )
+        text, count = re.subn(pattern, "", text)
+        if count > 1:
+            stop("VPN 권한 문장이 중복돼 있습니다.")
+    return text
+
+
 def canonical_source(text):
     result = invoke(
         ["terraform", "fmt", "-no-color", "-"], repo, env, text
@@ -151,8 +174,8 @@ if baseline.stdout.count(attribute_read_line) not in (0, 1):
     stop("기준 코드의 EIP 속성 조회 선언 수가 다릅니다.")
 comparison_iam = iam.replace(attribute_read_line, "", 1)
 comparison_baseline = baseline.stdout.replace(attribute_read_line, "", 1)
-if canonical_source(comparison_iam.replace(hook, "", 1)) != canonical_source(
-    comparison_baseline.replace(hook, "", 1)
+if canonical_source(strip_vpn_bootstrap_additions(comparison_iam).replace(hook, "", 1)) != canonical_source(
+    strip_vpn_bootstrap_additions(comparison_baseline).replace(hook, "", 1)
 ):
     stop("조건부 연결 외에 기존 IAM 선언의 차이가 있습니다. 별도 검토가 필요합니다.")
 
@@ -945,6 +968,8 @@ with tempfile.TemporaryDirectory(
         "ManageCiBoundaryPolicy",
         "ManageFoundationNetworkPolicy",
         "AttachFoundationNetworkPolicy",
+        "ManageFoundationHybridPolicy",
+        "AttachFoundationHybridPolicy",
     ]
     active_sids = bootstrap_sids + list(expected_bootstrap)
 

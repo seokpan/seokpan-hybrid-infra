@@ -234,3 +234,29 @@ Provider alias를 참조하는 자원 정리가 끝날 때까지 위 설정을 �
 
 공식 기준:
 https://docs.redhat.com/en/documentation/red_hat_openshift_service_on_aws_classic_architecture/4/html/prepare_your_environment/rosa-sts-aws-prereqs
+
+### VPN EC2 디스크 수명
+
+<!-- 작성자: 이유빈 -->
+<!-- 작성일: 2026-10-07 -->
+<!-- 작성내용: VPN 루트 디스크와 비용 운영 기준 확정 (#16) -->
+
+- VPN 루트 디스크: 암호화 gp3 16GiB.
+- Stop 시 디스크를 유지하며, Start 후 기존 설정을 사용합니다.
+- EC2 종료·교체 시 루트 디스크도 삭제하도록
+  `delete_on_termination = true`를 코드에 반영합니다.
+- 전용 ENI·EIP 재사용 설계는 루트 디스크 수명과 별개입니다.
+
+운영 조건:
+
+- Stop 전 Data 담당과 진행 중인 DB 연결·전송 및 예약 백업을 확인합니다.
+- 다음 작업 전에 VPN을 켜고 Tunnel·RDS 접속을 검증합니다.
+- EC2 삭제 전 필요한 로그를 확보하고, 설정·WireGuard 키의
+  외부 보관 및 새 서버 재공급 절차를 검증합니다.
+- 모든 VPN 사용 일정이 끝난 뒤 최종 삭제·EIP 반납을 검토합니다.
+- Stop 중에도 EBS·보관 EIP 비용이 발생합니다.
+- EC2 삭제 후에도 남긴 EIP·Snapshot 등은 별도로 확인·정리합니다.
+
+이 기록은 설계 결정입니다. VPN 생성·Stop·삭제나
+WireGuard 키 복원 검증 완료를 의미하지 않습니다.
+실제 가동·보관 기간은 전체 Cost Gate에 반영합니다.

@@ -1,0 +1,44 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-07
+# 작성내용: AWS WireGuard 설정의 비밀값 없는 입력 예시 (#16)
+
+# 이 파일은 설정 입력의 예시입니다.
+# 실제 적용 전에 대상·경로·공개키·허용 범위를 확인합니다.
+# 개인키·AWS 인증정보·age 복호화 키를 넣지 않습니다.
+# 개인키 공급 방법은 별도 준비하며 이 파일로 공급하지 않습니다.
+
+# 설계의 터널 주소입니다. 실제 서버의 LAN 주소와 다릅니다.
+vpn_wireguard_interface: wg0
+vpn_wireguard_aws_tunnel_address: "10.200.0.1/30"
+vpn_wireguard_onprem_tunnel_address: "10.200.0.2/32"
+
+# 설계의 통신 포트와 초기 시험값입니다.
+vpn_wireguard_listen_port: 51820
+vpn_wireguard_mtu: 1420
+
+# 이 값은 온프렘 측 설정을 준비할 때 사용합니다.
+# AWS 측 설정에 자동으로 적용하는 값이 아닙니다.
+vpn_wireguard_onprem_keepalive_seconds: 25
+
+# 최종 전용 온프렘 Gateway의 공개키를 확인 후 공급합니다.
+# 과거 PoC 키를 재사용하지 않습니다.
+vpn_wireguard_onprem_public_key: ""
+
+# AWS에서 온프렘으로 보낼 실제 작업 Host /32 목록입니다.
+# 터널의 상대 주소는 위 항목으로 별도 관리합니다.
+# 값이 없다는 이유로 전체 사설망을 허용하지 않습니다.
+vpn_wireguard_onprem_job_host_cidrs: []
+
+# 온프렘에서 접근할 AWS 목적지와 업무 포트입니다.
+# 최종 경로·SG·호스트 방화벽과 대조 후 공급합니다.
+vpn_wireguard_aws_destination_cidrs: []
+vpn_wireguard_allowed_tcp_ports: []
+
+# 상대를 확인하는 입력과 업무 접근을 허용하는 정책은 구분합니다.
+# AllowedIPs 설정만으로 호스트 방화벽의 접근 제한을 대체하지 않습니다.
+# 실제 적용 승인과 필수 입력 검사는 후속 설정 Playbook에서 준비합니다.
+
+# AWS 공개키와 실제 공인 주소는 생성 후 보호 입력으로 공급합니다.
+vpn_wireguard_aws_public_key: ""
+vpn_wireguard_aws_public_endpoint: ""

@@ -1,0 +1,89 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-07
+# 작성내용: AWS VPN 서버 설정 전 확인용 Playbook (#16)
+# 실제 실행은 AWS 기반·권한·비용·실행 조건 확인 후 진행합니다.
+
+- name: AWS VPN 서버 설정 전 상태 확인
+  hosts: vpn_aws
+  gather_facts: false
+
+  vars:
+    ansible_connection: community.aws.aws_ssm
+    ansible_aws_ssm_region: ap-northeast-2
+    ansible_aws_ssm_plugin: /usr/local/sessionmanagerplugin/bin/session-manager-plugin
+
+  pre_tasks:
+    - name: 실제 EC2와 파일 전달 버킷 입력 확인
+      ansible.builtin.assert:
+        that:
+          - (ansible_host | default('')) is match('^i-[0-9a-f]+$')
+          - (ansible_aws_ssm_bucket_name | default('') | length) > 0
+        fail_msg: 승인된 EC2 ID와 SSM 파일 전달용 버킷을 공급해야 합니다.
+      delegate_to: localhost
+      become: false
+
+  tasks:
+    - name: 서버 운영체제와 아키텍처 수집
+      ansible.builtin.setup:
+        gather_subset:
+          - "!all"
+          - "!min"
+          - distribution
+          - architecture
+
+    - name: 채택한 AL2023 x86_64 구성 확인
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Amazon'
+          - ansible_facts.distribution_major_version == '2023'
+          - ansible_facts.architecture == 'x86_64'
+        fail_msg: 채택한 Amazon Linux 2023 x86_64 구성과 다릅니다.
+
+    - name: 현재 커널 버전 확인
+      ansible.builtin.command:
+        argv:
+          - uname
+          - -r
+      register: vpn_kernel
+      changed_when: false
+
+    - name: SSM Agent 설치 버전 확인
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - amazon-ssm-agent
+      changed_when: false
+
+    - name: SSM Agent 실행 상태 확인
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - amazon-ssm-agent
+      changed_when: false
+
+    - name: SSM 파일 전달에 필요한 curl 확인
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --version
+      changed_when: false
+
+    - name: WireGuard 도구 설치 여부 확인
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - wireguard-tools
+      register: vpn_wireguard_package
+      changed_when: false
+      failed_when: vpn_wireguard_package.rc not in [0, 1]
+
+    - name: 확인 결과 요약
+      ansible.builtin.debug:
+        msg:
+          - "커널: {{ vpn_kernel.stdout }}"
+          - "WireGuard 도구 설치됨: {{ vpn_wireguard_package.rc == 0 }}"
+          - "이 확인은 WireGuard 설정·터널·DB 통신 검증을 의미하지 않습니다."

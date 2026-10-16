@@ -1,0 +1,30 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-07
+# 작성내용: AWS VPN 서버의 Ansible 접속 대상 목록 예시 (#16)
+
+# 이 파일은 문법 검사와 입력 안내용 예시입니다.
+# 실제 실행용 사본은 Git 밖의 보호된 경로에 보관합니다.
+# 인증정보·MFA 코드·WireGuard 개인키를 넣지 않습니다.
+# 실제 접속은 승인된 자원과 실행 조건 확인 후 진행합니다.
+
+all:
+  children:
+    vpn_aws:
+      hosts:
+        vpn_aws_gateway:
+          # 실제 생성된 VPN EC2의 인스턴스 ID로 교체합니다.
+          # 이 예시 값은 확인용 Playbook의 입력 검사에서 거부됩니다.
+          ansible_host: "승인된 EC2 인스턴스 ID 입력"
+
+      vars:
+        ansible_connection: community.aws.aws_ssm
+        ansible_aws_ssm_region: ap-northeast-2
+        ansible_aws_ssm_plugin: /usr/local/sessionmanagerplugin/bin/session-manager-plugin
+
+        # 실제 생성된 전용 전달 버킷의 이름으로 교체합니다.
+        # State·Data 백업 버킷의 이름을 넣지 않습니다.
+        ansible_aws_ssm_bucket_name: "승인된 전용 전달 버킷 이름 입력"
+        ansible_aws_ssm_bucket_sse_mode: AES256
+
+        # AWS 인증정보는 실행 터미널의 개인 MFA 임시 세션으로 공급합니다.
