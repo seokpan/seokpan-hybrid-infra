@@ -194,4 +194,58 @@ class RecipientDiagnosticBoundaries(unittest.TestCase):
             self.assertFalse(result["archive_written"])
             self.assertNotIn("age1fixture",captured.getvalue())
 
+class PreservationInputInspectionBoundaries(unittest.TestCase):
+    def fixture(self,d,count=1):
+        c={"schema":1,"expected_api":"https://test.invalid","previous_inventory":str(d),"inventory_counts":{"pvc":count},"local_roots":[str(d)]}
+        rows=[{"namespace":"cloud","name":"claim"+str(i),"uid":"uid"+str(i),"volume":"pv"+str(i)} for i in range(count)]
+        backend=d/"backend.json";variables=d/"vars.json"
+        values={"contract.json":c,"receipt.json":{"pvc_count":count},"pvc-inventory.json":rows,
+                "backend.json":{"backend":{"type":"s3","config":{"key":"phase2/rosa/terraform.tfstate","secret":"PRIVATE_FIXTURE"}}},
+                "vars.json":{"foundation":{"credential":"PRIVATE_FIXTURE"},"cluster_name":"PRIVATE_CLUSTER_NAME"},
+                "local-preservation-file-inventory.json":[{"path":str(backend)},{"path":str(variables)}]}
+        for n,v in values.items():(d/n).write_text(json.dumps(v));(d/n).chmod(0o600)
+        (d/"kubeconfig").write_text("fixture");(d/"kubeconfig").chmod(0o600)
+        source=d/"terraform/rosa";source.mkdir(parents=True)
+        (source/"main.tf").write_text("fixture");(source/".terraform.lock.hcl").write_text("fixture")
+        return argparse.Namespace(contract=str(d/"contract.json"),kubeconfig=str(d/"kubeconfig"))
+    def config(self,server="https://test.invalid"):
+        import subprocess
+        return subprocess.CompletedProcess([],0,json.dumps({"clusters":[{"cluster":{"server":server}}]}).encode(),b"")
+    def test_target_guard_blocks_all_remote_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.fixture(d)
+            with patch.object(B.subprocess,"run",return_value=self.config("https://wrong.invalid")) as called:
+                with self.assertRaisesRegex(RuntimeError,"TARGET_MISMATCH"):B.inspect_inputs(a)
+                self.assertEqual(called.call_count,1)
+                self.assertIn("config",called.call_args.args[0])
+    def test_catalog_and_pv_details_omit_protected_values(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.fixture(d)
+            pv={"spec":{"claimRef":{"uid":"uid0"},"persistentVolumeReclaimPolicy":"Retain","csi":{"driver":"test.csi","volumeHandle":"PRIVATE_VOLUME_HANDLE"}}}
+            with patch.object(B.subprocess,"run",side_effect=[self.config(),subprocess.CompletedProcess([],0,json.dumps(pv).encode(),b"")]):
+                r=B.inspect_inputs(a)
+            self.assertTrue(r["pvcs"][0]["claim_uid_matches"])
+            self.assertEqual(len(r["tf_roots"]),1)
+            self.assertFalse(r["plan_started"])
+            self.assertNotIn("PRIVATE",json.dumps(r))
+    def test_forbidden_pv_does_not_skip_local_plan_catalog(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.fixture(d)
+            with patch.object(B.subprocess,"run",side_effect=[self.config(),subprocess.CompletedProcess([],1,b"",b"Forbidden")]) as called:
+                r=B.inspect_inputs(a)
+            self.assertEqual(called.call_count,2)
+            self.assertEqual(len(r["plan_inputs"]),2)
+            self.assertTrue(r["status"].startswith("PARTIAL_"))
+    def test_auth_failure_skips_remaining_pvs_but_keeps_local_catalog(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);a=self.fixture(d,count=2)
+            with patch.object(B.subprocess,"run",side_effect=[self.config(),subprocess.CompletedProcess([],1,b"",b"Unauthorized")]) as called:
+                r=B.inspect_inputs(a)
+            self.assertEqual(called.call_count,2)
+            self.assertEqual(r["pvcs"][1]["read"],"SKIPPED_AFTER_AUTH_REQUIRED")
+            self.assertEqual(len(r["plan_inputs"]),2)
+
 if __name__=="__main__":unittest.main()

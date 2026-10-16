@@ -152,6 +152,79 @@ def diagnose(args):
             "cipher_sha256_matches":True, "recipient_structure":recipient_shape(raw),
             "sops_decrypt_invocations":0, "backup_retried":False}
 
+def inspect_inputs(args):
+    """Independent exact-PV reads and local Plan-input catalog; never Plan/Apply."""
+    c = json.loads(private_file(args.contract,262144))
+    need(c.get("schema") == 1, "CHECKPOINT_CONTRACT_REQUIRED")
+    prior = Path(c["previous_inventory"])
+    accepted = json.loads(private_file(prior/"receipt.json",262144))
+    need(accepted.get("pvc_count") == c["inventory_counts"]["pvc"], "ACCEPTED_PVC_INVENTORY_REQUIRED")
+    private_file(args.kubeconfig,262144)
+    prefix = ["oc","--kubeconfig",args.kubeconfig,"--request-timeout=15s"]
+    local = subprocess.run(prefix+["config","view","--minify","-o","json"],capture_output=True,timeout=25)
+    need(local.returncode == 0,"LOCAL_ACCEPTED_CONTEXT_REQUIRED")
+    cluster = json.loads(local.stdout)["clusters"][0]["cluster"]
+    need(cluster.get("server","").rstrip("/") == c["expected_api"].rstrip("/") and not cluster.get("insecure-skip-tls-verify"), "CHECKPOINT_TARGET_MISMATCH")
+    r = {"status":"COLLECTED_PRESERVATION_INPUTS_NOT_PLAN", "pvcs":[], "read_errors":[],
+         "plan_inputs":[], "tf_roots":[], "deletion_ready":False, "plan_started":False,
+         "remote_state_read":False,"data_backup_accepted":False,"previous_inventory_reused":True}
+    claims = json.loads(private_file(prior/"pvc-inventory.json",262144))
+    need(len(claims) == c["inventory_counts"]["pvc"], "ACCEPTED_PVC_COUNT_REQUIRED")
+    auth_stopped = False
+    for claim in claims:
+        row = {"namespace":claim["namespace"], "claim":claim["name"], "data_backup_accepted":False}
+        if auth_stopped: row["read"] = "SKIPPED_AFTER_AUTH_REQUIRED"
+        elif not claim.get("volume"): row["read"] = "NO_BOUND_VOLUME"
+        else:
+            try:
+                p = subprocess.run(prefix+["get","pv",claim["volume"],"-o","json"],capture_output=True,timeout=25)
+                if p.returncode:
+                    auth_stopped = any(x in p.stderr.lower() for x in (b"unauthorized",b"must be logged in",b"provide credentials"))
+                    row["read"] = "AUTH_REQUIRED_NO_RETRY" if auth_stopped else "DENIED_OR_FAILED_NO_RETRY"
+                    r["read_errors"].append({"claim":claim["name"],"reason":row["read"]})
+                else:
+                    s = json.loads(p.stdout).get("spec",{})
+                    row.update(reclaim=s.get("persistentVolumeReclaimPolicy"),storage_class=s.get("storageClassName"),
+                        capacity=s.get("capacity"),csi_driver=s.get("csi",{}).get("driver"),
+                        claim_uid_matches=s.get("claimRef",{}).get("uid") == claim["uid"])
+            except Exception as error:
+                row["read"] = type(error).__name__
+                r["read_errors"].append({"claim":claim["name"],"reason":row["read"]})
+        r["pvcs"].append(row)
+    candidates = json.loads(private_file(prior/"local-preservation-file-inventory.json",262144))
+    for candidate in candidates:
+        path = Path(candidate["path"])
+        row = {"path":str(path),"exists":path.is_file(),"kind":"INPUT_CANDIDATE_ONLY"}
+        if path.is_file() and not path.is_symlink() and path.stat().st_size < 10485760:
+            try:
+                v = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(v,dict):
+                    if "foundation" in v and "cluster_name" in v: row["kind"] = "ROSA_VAR_FILE_CANDIDATE"
+                    if isinstance(v.get("backend"),dict):
+                        b = v["backend"];cfg = b.get("config") or {}
+                        row.update(kind="BACKEND_METADATA_NOT_REMOTE_STATE",backend_type=b.get("type"),
+                                   state_key=cfg.get("key"),tf_data_directory=str(path.parent))
+                    elif "lineage" in v: row.update(kind="LOCAL_STATE_NOT_FRESHNESS_ACCEPTED",serial=v.get("serial"))
+            except (ValueError,UnicodeError,OSError): pass
+        r["plan_inputs"].append(row)
+    scanned = 0
+    for base in c.get("local_roots",[]):
+        for folder, dirs, files in os.walk(base,followlinks=False):
+            scanned += 1
+            if scanned > 2000: break
+            p = Path(folder)
+            dirs[:] = [name for name in dirs if name not in ("providers",".git","node_modules",".venv","__pycache__") and not (p/name).is_symlink()]
+            if p.name == "rosa" and p.parent.name == "terraform":
+                r["tf_roots"].append({"path":str(p),"source_files":sum(name.endswith((".tf",".tf.json")) for name in files),
+                    "provider_lock_present":(p/".terraform.lock.hcl").is_file(),
+                    "automatic_inputs_present":any(name.startswith("terraform.tfvars") or ".auto.tfvars" in name for name in files)})
+        if scanned > 2000: break
+    r.update(source_search_truncated=scanned>2000,
+        local_plan_runtime={"terraform_on_path":bool(shutil.which("terraform")),"aws_on_path":bool(shutil.which("aws")),
+                            "rhcs_input_present":bool(os.environ.get("RHCS_TOKEN")),"aws_session_validity":"NOT_QUERIED"})
+    if r["read_errors"] or r["source_search_truncated"]: r["status"] = "PARTIAL_PRESERVATION_INPUTS_NOT_PLAN"
+    return r
+
 def validate_resume(path):
     previous = Path(path)
     result = json.loads(private_file(previous/"receipt.json", 262144))
@@ -326,7 +399,7 @@ def verify(args, out, binary):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("backup", "verify", "diagnose"))
+    p.add_argument("mode", choices=("backup", "verify", "diagnose", "inputs"))
     for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops", "resume-from"):
         p.add_argument("--"+key)
     p.add_argument("--output-parent", required=True)
@@ -341,6 +414,9 @@ def main():
         if args.mode == "diagnose":
             audit["phase"] = "RECIPIENT_STRUCTURE_DIAGNOSTIC_ONLY"
             result = diagnose(args)
+        elif args.mode == "inputs":
+            audit["phase"] = "PVC_AND_LOCAL_PLAN_INPUTS_ONLY"
+            result = inspect_inputs(args)
         else:
             need(args.key_file, "EXISTING_SEPARATE_AGE_IDENTITY_REQUIRED")
             private_file(args.key_file, 65536)
@@ -349,7 +425,7 @@ def main():
     except Exception as error:
         result = {"status": "STOP_CHECKPOINT", "reason": str(error) if type(error) is RuntimeError else type(error).__name__, "deletion_ready": False}
     result.update(resource_mutations=0, SQL=0, sync_started=False, credential_values_printed=False)
-    if args.mode in ("backup","diagnose"): result.update(audit)
+    if args.mode in ("backup","diagnose","inputs"): result.update(audit)
     (out/"receipt.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2)); print("Private checkpoint directory: "+str(out))
     return 1 if result["status"].startswith("STOP_") else 0
