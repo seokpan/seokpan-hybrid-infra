@@ -151,4 +151,47 @@ class RecipientFixBoundaries(unittest.TestCase):
                 self.assertEqual(called.call_count,2)
                 encrypted.assert_not_called()
 
+class RecipientDiagnosticBoundaries(unittest.TestCase):
+    def test_multiple_json_recipients_report_counts_not_values(self):
+        raw=b'{"sops":{"age":[{"recipient":"age1firstprivate"},{"recipient":"age1secondprivate"}]}}'
+        result=B.recipient_shape(raw)
+        self.assertEqual(result["unique_age_syntax_scalars"],2)
+        self.assertFalse(result["current_single_recipient_parser_accepts"])
+        self.assertNotIn("age1",json.dumps(result))
+    def test_missing_and_invalid_are_distinguishable(self):
+        missing=B.recipient_shape(b'{"sops":{"age":[]}}')
+        invalid=B.recipient_shape(b'{"sops":{"age":[{"recipient":"NON_AGE_PRIVATE_VALUE"}]}}')
+        self.assertEqual(missing["recipient_fields"],0)
+        self.assertEqual(invalid["recipient_fields"],1)
+        self.assertEqual(invalid["age_syntax_scalars"],0)
+        self.assertNotIn("PRIVATE",json.dumps(invalid))
+    def test_yaml_scalar_styles_are_reported_without_content(self):
+        raw=b'payload: ENC[PRIVATE_PAYLOAD]\nsops:\n  age:\n  - recipient: >-\n      age1privatefoldedvalue\n    enc: PRIVATE_ENVELOPE\n'
+        result=B.recipient_shape(raw)
+        self.assertEqual(result["recipient_fields"],1)
+        self.assertEqual(result["scalar_styles"],{"block":1})
+        self.assertFalse(result["current_single_recipient_parser_accepts"])
+        self.assertNotIn("PRIVATE",json.dumps(result))
+        self.assertNotIn("age1",json.dumps(result))
+    def test_duplicate_metadata_is_diagnostic_not_acceptance(self):
+        result=B.recipient_shape(b'{"sops":{"age":[],"age":[{"recipient":"age1fixture"}]}}')
+        self.assertEqual(result["duplicate_json_keys"],1)
+        self.assertFalse(result["current_single_recipient_parser_accepts"])
+    def test_diagnose_cli_needs_no_key_binary_or_cluster_calls(self):
+        import contextlib,io,sys
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);raw=b'{"sops":{"age":[{"recipient":"age1fixture"}]}}'
+            c={"schema":1,"recipient_source":str(d/"cipher.json"),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            for n,data in [("cipher.json",raw),("contract.json",json.dumps(c).encode())]:
+                (d/n).write_bytes(data);(d/n).chmod(0o600)
+            captured=io.StringIO()
+            with patch.object(sys,"argv",["checkpoint.py","diagnose","--contract",str(d/"contract.json"),"--output-parent",str(d)]),patch.object(B.subprocess,"run") as called,patch.object(B,"sops_binary") as binary,contextlib.redirect_stdout(captured):
+                self.assertEqual(B.main(),0)
+                called.assert_not_called();binary.assert_not_called()
+            result=json.JSONDecoder().raw_decode(captured.getvalue())[0]
+            self.assertFalse(result["backup_retried"])
+            self.assertFalse(result["encryption_attempted"])
+            self.assertFalse(result["archive_written"])
+            self.assertNotIn("age1fixture",captured.getvalue())
+
 if __name__=="__main__":unittest.main()

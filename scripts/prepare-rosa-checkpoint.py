@@ -82,6 +82,76 @@ def age_recipient(raw):
          and len(set(values)) == 1, "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
     return values[0], form
 
+def recipient_shape(raw):
+    """Counts/styles only. No recipient, ciphertext, key or payload is returned."""
+    text = raw.decode("utf-8-sig")
+    result = {"format":"JSON" if text.lstrip().startswith("{") else "YAML_TEXT_STRUCTURE",
+              "duplicate_json_keys":0, "recipient_fields":0, "scalar_styles":{}}
+    candidates = []
+    if result["format"] == "JSON":
+        def pairs(rows):
+            obj = {}
+            for key, value in rows:
+                if key in obj: result["duplicate_json_keys"] += 1
+                obj[key] = value
+            return obj
+        doc = json.loads(text, object_pairs_hook=pairs)
+        meta = doc.get("sops") if isinstance(doc, dict) else None
+        result["sops_mapping_present"] = isinstance(meta, dict)
+        age = meta.get("age") if isinstance(meta, dict) else None
+        result["age_container_type"] = type(age).__name__
+        result["key_groups_present"] = bool(meta.get("key_groups")) if isinstance(meta, dict) else False
+        result["age_entries"] = len(age) if isinstance(age, list) else 0
+        for row in age if isinstance(age, list) else []:
+            if isinstance(row, dict) and "recipient" in row:
+                result["recipient_fields"] += 1
+                value = row["recipient"]
+                style = "string" if isinstance(value, str) else "non_string"
+                result["scalar_styles"][style] = result["scalar_styles"].get(style,0)+1
+                if isinstance(value, str): candidates.append(value)
+    else:
+        lines = text.splitlines()
+        starts = [i for i,line in enumerate(lines) if re.fullmatch(r'''(?:sops|"sops"|'sops'):[ \t]*(?:#.*)?''',line)]
+        result["sops_headers"] = len(starts)
+        block = []
+        if len(starts) == 1:
+            for line in lines[starts[0]+1:]:
+                if line.strip() and not line.startswith(" ") and not line.lstrip().startswith("#"): break
+                block.append(line)
+        result["age_header_indents"] = [len(m[1]) for line in block
+            if (m := re.fullmatch(r'''( +)(?:age|"age"|'age'):[ \t]*''',line))]
+        result["key_groups_present"] = any(re.match(r'''\s+(?:key_groups|"key_groups"|'key_groups'):''',line) for line in block)
+        result["recipient_field_indents"] = []
+        for line in block:
+            match = re.fullmatch(r'''( +)(?:-\s+)?(?:recipient|"recipient"|'recipient'):[ \t]*(.*)''',line)
+            if not match: continue
+            result["recipient_fields"] += 1
+            result["recipient_field_indents"].append(len(match[1]))
+            value = match[2].split(" #",1)[0].strip()
+            style = "empty" if not value else "block" if value[0] in "|>" else "quoted" if value[0] in "\"'" else "plain"
+            result["scalar_styles"][style] = result["scalar_styles"].get(style,0)+1
+            if style == "quoted" and len(value)>1 and value[-1]==value[0]: value=value[1:-1]
+            candidates.append(value)
+    valid = [value for value in candidates if re.fullmatch(r"age1[0-9a-z]+",value)]
+    result.update(age_syntax_scalars=len(valid), unique_age_syntax_scalars=len(set(valid)),
+                  semantic_yaml_validation=False, crypto_validation=False)
+    try:
+        age_recipient(raw)
+        result["current_single_recipient_parser_accepts"] = True
+    except Exception as error:
+        result.update(current_single_recipient_parser_accepts=False,
+            parser_stop=str(error) if type(error) is RuntimeError else type(error).__name__)
+    return result
+
+def diagnose(args):
+    c = json.loads(private_file(args.contract,262144))
+    need(c.get("schema") == 1, "CHECKPOINT_CONTRACT_REQUIRED")
+    raw = private_file(c["recipient_source"],262144)
+    need(hashlib.sha256(raw).hexdigest() == c["recipient_source_sha256"], "RECIPIENT_SOURCE_HASH_MISMATCH")
+    return {"status":"COLLECTED_RECIPIENT_METADATA_ONLY_NOT_BACKUP", "deletion_ready":False,
+            "cipher_sha256_matches":True, "recipient_structure":recipient_shape(raw),
+            "sops_decrypt_invocations":0, "backup_retried":False}
+
 def validate_resume(path):
     previous = Path(path)
     result = json.loads(private_file(previous/"receipt.json", 262144))
@@ -256,7 +326,7 @@ def verify(args, out, binary):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("mode", choices=("backup", "verify"))
+    p.add_argument("mode", choices=("backup", "verify", "diagnose"))
     for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops", "resume-from"):
         p.add_argument("--"+key)
     p.add_argument("--output-parent", required=True)
@@ -266,16 +336,20 @@ def main():
     audit = {"phase":"LOCAL_INPUT_PREFLIGHT", "encryption_attempted":False, "archive_written":False}
     try:
         if args.resume_from:
-            need(args.mode == "backup", "RESUME_BACKUP_ONLY")
+            need(args.mode in ("backup","diagnose"), "RESUME_BACKUP_OR_DIAGNOSE_ONLY")
             audit["resumed_from"] = validate_resume(args.resume_from)
-        need(args.key_file, "EXISTING_SEPARATE_AGE_IDENTITY_REQUIRED")
-        private_file(args.key_file, 65536)
-        binary = sops_binary(args, out)
-        result = backup(args, out, binary, audit) if args.mode == "backup" else verify(args, out, binary)
+        if args.mode == "diagnose":
+            audit["phase"] = "RECIPIENT_STRUCTURE_DIAGNOSTIC_ONLY"
+            result = diagnose(args)
+        else:
+            need(args.key_file, "EXISTING_SEPARATE_AGE_IDENTITY_REQUIRED")
+            private_file(args.key_file, 65536)
+            binary = sops_binary(args, out)
+            result = backup(args, out, binary, audit) if args.mode == "backup" else verify(args, out, binary)
     except Exception as error:
         result = {"status": "STOP_CHECKPOINT", "reason": str(error) if type(error) is RuntimeError else type(error).__name__, "deletion_ready": False}
     result.update(resource_mutations=0, SQL=0, sync_started=False, credential_values_printed=False)
-    if args.mode == "backup": result.update(audit)
+    if args.mode in ("backup","diagnose"): result.update(audit)
     (out/"receipt.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2)); print("Private checkpoint directory: "+str(out))
     return 1 if result["status"].startswith("STOP_") else 0
