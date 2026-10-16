@@ -14,7 +14,7 @@ SOURCE = Path(__file__).with_name("collect-cutover-readiness.py")
 
 
 class ReadOnlyDiscoveryTests(unittest.TestCase):
-    def exercise(self, *, cloud=False, correct_source=True, accessible=True):
+    def exercise(self, *, cloud=False, correct_source=True, accessible=True, allow_source=True, wrong_namespace=False):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             previous = root / "completed"; previous.mkdir()
@@ -35,11 +35,13 @@ class ReadOnlyDiscoveryTests(unittest.TestCase):
                 elif "deployment" in command:
                     value = {"metadata":{"namespace":"application","uid":"deployment-fixture"},"spec":{"replicas":2,"template":{"spec":{"containers":[{"name":"backend","image":"approved@sha256:fixture"}]}}}}
                 elif "application.argoproj.io" in command:
-                    value = {"metadata":{"uid":"application-fixture"},"spec":{"source":{"repoURL":repo,"path":"apps/backend","targetRevision":"main"},"syncPolicy":{"automated":{"selfHeal":True}}}}
+                    value = {"metadata":{"uid":"application-fixture","namespace":"elsewhere" if wrong_namespace else "argocd"},"spec":{"source":{"repoURL":repo,"path":"apps/backend","targetRevision":"main"},"syncPolicy":{"automated":{"selfHeal":True}}}}
                 else:
                     value = {"items":[]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(value).encode(), b"")
             arguments = [str(SOURCE), str(root), str(previous), str(held), "--cloud-api", "https://cloud.invalid:6443"]
+            if allow_source:
+                arguments += ["--source-api", "https://original.invalid:6443"]
             old_mask = os.umask(0o077)
             try:
                 with patch.object(sys, "argv", arguments), patch.dict(os.environ, {"KUBECONFIG":str(config)}), patch("pathlib.Path.home", return_value=root), patch("shutil.which", return_value="fixture-oc"), patch("subprocess.run", side_effect=fake_run), contextlib.redirect_stdout(io.StringIO()) as output:
@@ -77,6 +79,16 @@ class ReadOnlyDiscoveryTests(unittest.TestCase):
         result, calls = self.exercise(accessible=False)
         self.assertEqual(result["original_cluster_contract_match_count"], 0)
         self.assertEqual(result["contexts"][0]["read_status"], "TARGET_NOT_FOUND_OR_ACCESS_UNAVAILABLE")
+
+    def test_missing_allowlist_never_sends_a_cluster_request(self):
+        result, calls = self.exercise(allow_source=False)
+        self.assertEqual(result["source_api_allowlist_count"], 0)
+        self.assertFalse(any("get" in call for call in calls))
+
+    def test_wrong_application_namespace_never_triggers_writer_inventory(self):
+        result, calls = self.exercise(wrong_namespace=True)
+        self.assertEqual(result["original_cluster_contract_match_count"], 0)
+        self.assertFalse(any("hpa,jobs,cronjobs" in call for call in calls))
 
 
 if __name__ == "__main__":

@@ -127,6 +127,42 @@ class GateTests(unittest.TestCase):
                 self.assertEqual(client.return_value.snapshot.call_count, 5)
             self.assertEqual(json.loads((result / "receipt.json").read_text())["status"], "PASS_KUBERNETES_BACKEND_STOP_GATE")
 
+    def test_descendant_with_identical_held_manifest_is_accepted_and_cached(self):
+        expected, snapshot = fixtures()
+        revision = "c" * 40
+        snapshot["applications"][1]["status"]["sync"]["revision"] = revision
+        content = b"spec:\n  replicas: 0\n"
+        digest = hashlib.sha256(content).hexdigest()
+        comparison = {"status": "ahead", "ahead_by": 2, "behind_by": 0, "merge_base_commit": {"sha": SHA}}
+        cache = {}
+        with patch.object(gate, "fetch", side_effect=[comparison, content]) as fetch:
+            self.assertTrue(gate.evaluate(snapshot, expected, SHA, digest, cache)[0])
+            self.assertTrue(gate.evaluate(snapshot, expected, SHA, digest, cache)[0])
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn(SHA + "..." + revision, fetch.call_args_list[0].args[0])
+
+    def test_non_descendant_and_invalid_revision_are_never_accepted(self):
+        for comparison in ({"status": "behind"}, {"status": "diverged"},
+                           {"status": "ahead", "ahead_by": 1, "behind_by": 0, "merge_base_commit": {"sha": "b" * 40}}):
+            with patch.object(gate, "fetch", return_value=comparison) as fetch:
+                self.assertFalse(gate.accepted_sync_revision(SHA, "c" * 40, "b" * 64, {}))
+                self.assertEqual(fetch.call_count, 1)
+        with patch.object(gate, "fetch") as fetch:
+            self.assertFalse(gate.accepted_sync_revision(SHA, "main;invalid", "b" * 64, {}))
+            fetch.assert_not_called()
+
+    def test_descendant_revert_or_changed_backend_manifest_stops(self):
+        comparison = {"status": "ahead", "ahead_by": 1, "behind_by": 0, "merge_base_commit": {"sha": SHA}}
+        for content in (b"spec:\n  replicas: 2\n", b"spec:\n  replicas: 0\nimage: changed\n"):
+            with patch.object(gate, "fetch", side_effect=[comparison, content]):
+                with self.assertRaisesRegex(gate.Stop, "SYNCED_DESCENDANT_MANIFEST_CHANGED"):
+                    gate.accepted_sync_revision(SHA, "c" * 40, hashlib.sha256(b"spec:\n  replicas: 0\n").hexdigest(), {})
+
+    def test_comparison_failure_is_not_treated_as_a_stopped_backend(self):
+        with patch.object(gate, "fetch", side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                gate.accepted_sync_revision(SHA, "c" * 40, "b" * 64, {})
+
 
 if __name__ == "__main__":
     unittest.main()

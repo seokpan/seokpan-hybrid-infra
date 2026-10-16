@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 
 os.umask(0o077)
 parser = argparse.ArgumentParser(description=__doc__)
@@ -17,7 +18,14 @@ parser.add_argument("input_root")
 parser.add_argument("resume_directory")
 parser.add_argument("held_directory")
 parser.add_argument("--cloud-api", required=True)
+parser.add_argument("--source-api", action="append", default=[], help="Allowed original API URL; repeat to allow more than one. Without it only local configs are read")
 args = parser.parse_args()
+allowed_sources = set()
+for value in args.source_api:
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
+        raise SystemExit("STOP: SOURCE_API_HTTPS_ORIGIN_REQUIRED")
+    allowed_sources.add(value.rstrip("/"))
 root = Path(args.input_root).resolve()
 previous = Path(args.resume_directory).resolve()
 held_directory = Path(args.held_directory).resolve()
@@ -68,6 +76,8 @@ for filename in sorted(configurations):
             continue
         if not server.startswith("https://"):
             continue
+        if server not in allowed_sources:
+            continue
         contexts.append({"kubeconfig": str(path), "context": entry["name"],
                          "server_sha256": hashlib.sha256(server.encode()).hexdigest()})
 
@@ -84,6 +94,7 @@ def investigate(context):
     matched = (source.get("repoURL", "").removesuffix(".git").rstrip("/") == "https://github.com/seokpan/seokpan-gitops"
                and source.get("path") == "apps/backend"
                and deployment.get("metadata", {}).get("namespace") == "application"
+               and application.get("metadata", {}).get("namespace") == "argocd"
                and not spec.get("sources"))
     row.update(source_contract_match=matched, read_status="READ_COMPLETED")
     if not matched:
@@ -125,6 +136,7 @@ summary = {"status": "READ_ONLY_CUTOVER_PREPARATION_COLLECTED", "existing_pool_a
            "pool_total_budget": pool["total_budget"], "pool_runtime_adopted": pool["runtime_adopted"],
            "foundation_plan_direct_comparison_pending": sg["foundation_plan_read_access_pending"],
            "cloud_resource_configuration": resources, "local_config_read_failures": local_config_failures,
+           "source_api_allowlist_count": len(allowed_sources),
            "original_cluster_contract_match_count": len(matches), "contexts": rows,
            "temporary_pull_receipt_expiry_utc": expiry, "temporary_pull_receipt_expired": expired,
            "pull_secret_current_contents_or_native_worker_pull": "NOT_QUERIED",

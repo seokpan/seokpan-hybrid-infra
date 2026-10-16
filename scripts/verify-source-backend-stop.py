@@ -49,6 +49,27 @@ def merged_source(pr_number, expected_hash):
     return sha
 
 
+def accepted_sync_revision(merge_sha, revision, expected_hash, cache):
+    if not isinstance(revision, str) or not re.fullmatch("[0-9a-f]{40}", revision):
+        return False
+    if revision == merge_sha:
+        return True
+    if revision in cache:
+        return cache[revision]
+    comparison = fetch("https://api.github.com/repos/" + REPO + "/compare/" + merge_sha + "..." + revision + "?per_page=1")
+    descendant = (comparison.get("status") == "ahead" and comparison.get("ahead_by", 0) > 0
+                  and comparison.get("behind_by") == 0
+                  and comparison.get("merge_base_commit", {}).get("sha") == merge_sha)
+    if not descendant:
+        cache[revision] = False
+        return False
+    content = fetch("https://raw.githubusercontent.com/" + REPO + "/" + revision + "/" + DEPLOYMENT_PATH, False)
+    require(hashlib.sha256(content).hexdigest() == expected_hash and content.count(b"\n  replicas: 0\n") == 1,
+            "SYNCED_DESCENDANT_MANIFEST_CHANGED")
+    cache[revision] = True
+    return True
+
+
 def expected_inputs(contract, source, api):
     require(contract.get("status") == "SOURCE_GIT_CONTROL_CONTRACT_COLLECTED", "ACCEPTED_GIT_CONTRACT_REQUIRED")
     require(source.get("status") == "SOURCE_LOCAL_READ_COMPLETED", "ACCEPTED_SOURCE_READ_REQUIRED")
@@ -83,7 +104,7 @@ class Client:
             "controllers": self.read("get", "hpa,jobs,cronjobs", "-n", "application", "-o", "json")["items"]}
 
 
-def evaluate(snapshot, expected, merge_sha):
+def evaluate(snapshot, expected, merge_sha, expected_hash=None, revision_cache=None):
     for app in snapshot["applications"]:
         name = app["metadata"]["name"]
         baseline = expected["applications"][name]
@@ -109,10 +130,14 @@ def evaluate(snapshot, expected, merge_sha):
               "endpoint_addresses_including_not_ready": sum(len(endpoint.get("addresses", [])) for item in snapshot["slices"] for endpoint in item.get("endpoints", [])),
               "legacy_endpoint_addresses_including_not_ready": sum(len(subset.get("addresses", [])) + len(subset.get("notReadyAddresses", [])) for subset in (snapshot["endpoints"] or {}).get("subsets", [])),
               "active_jobs": active_jobs, "enabled_cronjobs": enabled_crons, "backend_hpa": backend_hpa}
+    revision = apps["apps-backend"].get("status", {}).get("sync", {}).get("revision")
+    revision_accepted = (revision == merge_sha if expected_hash is None else
+                         accepted_sync_revision(merge_sha, revision, expected_hash,
+                                                revision_cache if revision_cache is not None else {}))
     ready = (dep["spec"].get("replicas") == 0 and status.get("observedGeneration", -1) >= dep["metadata"]["generation"] and
              all((status.get(key) or 0) == 0 for key in ("replicas", "readyReplicas", "availableReplicas", "updatedReplicas")) and
              not any(counts.values()) and not any(app.get("operation") or app.get("status", {}).get("operationState", {}).get("phase") in ("Running", "Terminating") for app in apps.values()) and
-             apps["apps-backend"].get("status", {}).get("sync", {}).get("revision") == merge_sha and
+             revision_accepted and
              apps["apps-backend"].get("status", {}).get("sync", {}).get("status") == "Synced")
     return ready, counts
 
@@ -145,12 +170,15 @@ def main():
         config = client.read("config", "view", "--minify", "-o", "json")
         require(config["clusters"][0]["cluster"]["server"].rstrip("/") == args.source_api.rstrip("/"), "WRONG_SOURCE_CLUSTER")
         deadline, stable_since = time.monotonic() + args.timeout, None
+        revision_cache = {}
         while True:
-            ready, counts = evaluate(client.snapshot(), expected, merge_sha)
+            snapshot = client.snapshot()
+            ready, counts = evaluate(snapshot, expected, merge_sha, args.manifest_sha256, revision_cache)
             now = time.monotonic()
             stable_since = (stable_since if stable_since is not None else now) if ready else None
             if stable_since is not None and now - stable_since >= args.settle_seconds:
                 result = {"status": "PASS_KUBERNETES_BACKEND_STOP_GATE", "merge_sha": merge_sha, "stable_seconds": args.settle_seconds,
+                          "accepted_child_sync_revision": next(app for app in snapshot["applications"] if app["metadata"]["name"] == "apps-backend")["status"]["sync"]["revision"],
                           "counts": counts, "resource_mutations": 0, "sql_calls": 0,
                           "final_dump_requires_external_writer_hold_and_A_replication_checks": True}
                 return 0

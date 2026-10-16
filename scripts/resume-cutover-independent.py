@@ -40,7 +40,7 @@ for filename in sorted(paths):
     for ctx in cfg.get("contexts",[]):
         server=servers.get(ctx["context"].get("cluster"),"")
         if not server.startswith("https://") or server==CLOUD_API.rstrip("/"):continue
-        if SOURCE_API and server!=SOURCE_API.rstrip("/"):continue
+        if not SOURCE_API or server!=SOURCE_API.rstrip("/"):continue
         prefix=["--kubeconfig",str(path),"--context",ctx["name"],"--request-timeout=15s"]
         dep=run(prefix+["get","deployment","backend","-n","application","-o","json"])
         app=run(prefix+["get","application.argoproj.io","apps-backend","-n","argocd","-o","json"])
@@ -48,7 +48,7 @@ for filename in sorted(paths):
         if dep is None or app is None:
             row["status"]="TARGET_NOT_FOUND_OR_ACCESS_UNAVAILABLE";rows.append(row);continue
         source=app.get("spec",{}).get("source",{})
-        match=(source.get("repoURL","").removesuffix(".git").rstrip("/")=="https://github.com/seokpan/seokpan-gitops" and source.get("path")=="apps/backend" and not app.get("spec",{}).get("sources"))
+        match=(source.get("repoURL","").removesuffix(".git").rstrip("/")=="https://github.com/seokpan/seokpan-gitops" and source.get("path")=="apps/backend" and dep.get("metadata",{}).get("namespace")=="application" and app.get("metadata",{}).get("namespace")=="argocd" and not app.get("spec",{}).get("sources"))
         row.update(status="READ_COMPLETED",source_contract_match=match)
         if match:
             row.update(server_sha256=hashlib.sha256(server.encode()).hexdigest(),deployment_uid=dep["metadata"]["uid"],replicas=dep["spec"].get("replicas"),sync_policy=app["spec"].get("syncPolicy",{}),active_operation=bool(app.get("operation")),parent_references=[{"kind":p["kind"],"name":p["name"]} for p in app["metadata"].get("ownerReferences",[])])
@@ -188,7 +188,10 @@ def pull_stage(cloud, helper_path, namespace, account, user, backend, renew, fol
     secret.clear()
     if needs:
         require(renew, "EXPIRED_PROJECT_PULL_RENEWAL_NOT_ENABLED")
-        require(cloud.get(["get", "serviceaccount", "seokpan-cloud-runtime", "-n", namespace], "existing-runtime-serviceaccount") is not None, "EXISTING_RUNTIME_SERVICEACCOUNT_REQUIRED")
+        service_account = cloud.get(["get", "serviceaccount", "seokpan-cloud-runtime", "-n", namespace], "existing-runtime-serviceaccount")
+        require(service_account is not None, "EXISTING_RUNTIME_SERVICEACCOUNT_REQUIRED")
+        require(any(ref.get("name") == "seokpan-cloud-ecr-pull" for ref in service_account.get("imagePullSecrets", [])),
+                "NATIVE_RUNTIME_DETACHED_NO_LEGACY_PULL_RELINK")
         require(hashlib.sha256(helper_path.read_bytes()).hexdigest() == ECR_HELPER_SHA, "ECR_HELPER_HASH_MISMATCH")
         spec = importlib.util.spec_from_file_location("pinned_ecr_helper", helper_path)
         helper = importlib.util.module_from_spec(spec)

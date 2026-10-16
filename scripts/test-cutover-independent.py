@@ -4,6 +4,9 @@ from pathlib import Path
 import tempfile
 import types
 import unittest
+import contextlib
+import io
+import subprocess
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("cutover_resume", Path(__file__).with_name("resume-cutover-independent.py"))
@@ -12,14 +15,17 @@ spec.loader.exec_module(m)
 
 
 class FakeCloud:
-    def __init__(self, expires="2999-01-01T00:00:00+00:00"):
+    def __init__(self, expires="2999-01-01T00:00:00+00:00", native=False):
         self.calls = []
         self.expires = expires
+        self.native = native
 
     def get(self, args, label):
         self.calls.append(("get", args))
         if args[1] == "secret":
             return {"type":"kubernetes.io/dockerconfigjson","metadata":{"labels":{"app.kubernetes.io/part-of":"seokpan","seokpan.io/environment":"cloud"},"annotations":{"seokpan.io/pull-expires-at":self.expires}},"data":{".dockerconfigjson":"NEVER_PRINT_THIS"}}
+        if args[1] == "serviceaccount":
+            return {"imagePullSecrets": [] if self.native else [{"name": "seokpan-cloud-ecr-pull"}]}
         return {"items":[]}
 
     def run(self, args, *unused, **kwargs):
@@ -124,6 +130,38 @@ class IndependentStagesTests(unittest.TestCase):
         self.assertTrue(result["secret_changed"])
         self.assertEqual(result["app_pods_created"],0)
         self.assertEqual(sum(kind=="renew" for kind,args in cloud.calls),1)
+
+    def test_legacy_renewal_cannot_relink_an_accepted_native_runtime(self):
+        cloud = FakeCloud("2000-01-01T00:00:00+00:00", native=True)
+        with self.assertRaisesRegex(m.Failure, "NATIVE_RUNTIME_DETACHED_NO_LEGACY_PULL_RELINK"), patch.object(m.importlib.util, "spec_from_file_location") as load:
+            m.pull_stage(cloud, self.root / "missing", "seokpan-cloud", "account", "user", "image", True, self.root)
+        load.assert_not_called()
+        self.assertFalse(any(kind in ("run", "renew") for kind, _ in cloud.calls))
+
+    def test_remote_reader_filters_api_and_namespace_before_writer_inventory(self):
+        config = self.root / "config"
+        config.write_text("PRIVATE_NOT_READ")
+        for namespace in ("argocd", "elsewhere"):
+            calls = []
+            def command(args, **kwargs):
+                calls.append(args)
+                if "config" in args:
+                    result = {"clusters": [{"name": name, "cluster": {"server": server}} for name, server in (("allowed", "https://source.invalid"), ("other", "https://unrelated.invalid"))],
+                              "contexts": [{"name": name, "context": {"cluster": name}} for name in ("allowed", "other")]}
+                elif "deployment" in args:
+                    result = {"metadata": {"namespace": "application", "uid": "deployment"}, "spec": {"replicas": 2}}
+                elif "application.argoproj.io" in args:
+                    result = {"metadata": {"namespace": namespace}, "spec": {"source": {"repoURL": "https://github.com/seokpan/seokpan-gitops.git", "path": "apps/backend"}}}
+                else:
+                    result = {"items": []}
+                return subprocess.CompletedProcess(args, 0, json.dumps(result).encode(), b"")
+            with patch.dict(m.os.environ, {"KUBECONFIG": str(config)}), patch.object(m.Path, "home", return_value=self.root), \
+                 patch.object(m.shutil, "which", return_value="fixture-kubectl"), patch.object(m.subprocess, "run", side_effect=command), contextlib.redirect_stdout(io.StringIO()) as output:
+                exec(m.REMOTE_READER, {"CLOUD_API": "https://cloud.invalid", "SOURCE_API": "https://source.invalid"})
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["contexts"][0]["source_contract_match"], namespace == "argocd")
+            self.assertFalse(any("other" in call for call in calls if "get" in call))
+            self.assertEqual(any("hpa,jobs,cronjobs" in call for call in calls), namespace == "argocd")
 
 
 if __name__ == "__main__":

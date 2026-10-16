@@ -5,12 +5,15 @@
 `scripts/collect-cutover-readiness.py`는 Pool·Worker SG 결과 파일과 Replica 0 배포 후보를 입력받아 설정된 Kubernetes Context를 조회한다.
 
 ```bash
-python3 scripts/collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER_DIR --cloud-api CLOUD_API_URL
+python3 scripts/collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER_DIR \
+  --cloud-api CLOUD_API_URL --source-api SOURCE_API_URL
 ```
 
 결과 디렉터리 두 개는 `INPUT_ROOT` 바로 아래에 있어야 한다. 배포 후보의 CPU·메모리 설정과 임시 Pull 인증 만료 기록을 읽는다. Secret 값과 kubeconfig 원문은 출력하지 않는다.
 
-조회 경로는 `KUBECONFIG`와 `~/.kube/config`다. 지정한 Cloud API Context를 제외한 Context에서 `application/backend` Deployment와 `argocd/apps-backend` Application을 읽는다. Application의 저장소·경로가 원본 계약과 일치하면 같은 Namespace의 HPA·Job·CronJob을 조회한다. 명령마다 kubeconfig·Context와 30초 제한을 지정한다.
+조회 경로는 `KUBECONFIG`와 `~/.kube/config`다. 반복 지정할 수 있는 `--source-api` 허용 목록의 HTTPS API와 일치하는 Context만 원격 조회한다. 지정하지 않으면 로컬 설정만 읽고 클러스터 요청을 보내지 않는다. Cloud API Context는 제외한다.
+
+대상은 `application/backend` Deployment와 `argocd/apps-backend` Application이다. 저장소·경로·두 Namespace와 단일 Source가 원본 계약과 일치하면 HPA·Job·CronJob을 조회한다. 원격 관리 서버 조회도 같은 Namespace·Source 조건을 사용한다. 명령마다 kubeconfig·Context와 30초 제한을 지정한다.
 
 Context·이미지·Replica·자동 동기화·Parent·쓰기 주체 목록은 보호 결과 디렉터리에 저장한다. 공개 기록에는 판정과 검증 범위만 포함한다.
 
@@ -22,7 +25,9 @@ Context·이미지·Replica·자동 동기화·Parent·쓰기 주체 목록은 �
 
 - 원본 경로: SSH Host 별칭과 제한된 Ansible inventory에서 후보를 찾는다. `--source-ssh 계정@호스트`와 `--source-api`를 지정한 경우에만 SSH 조회를 실행한다. 인증과 Host Key 검증을 유지하며 새 Host Key 자동 수락이나 키 복사는 허용하지 않는다.
 - 배포 자원: 단일 프로세스·Pool 후보에 BE CPU 100m/500m·메모리 128Mi/256Mi, FE CPU 25m/250m·메모리 32Mi/64Mi의 요청/제한을 반영한다. Deployment 두 개를 Replica 0으로 서버 dry-run한다. 이는 실제 부하·스케줄링·Pool 운영값 수락과 구분한다.
-- 임시 Pull 인증: Secret 소유와 만료 기록을 확인한다. `--renew-expired-pull`을 지정한 경우에만 고정 해시 ECR 도구로 인증을 갱신한다. 읽기 범위는 프로젝트 FE/BE 저장소이며 자격증명은 메모리와 해당 Secret에 공급한다. IAM 정책·Worker 역할은 변경하지 않는다.
+- 임시 Pull 인증: Secret 소유와 만료 기록을 확인한다. 만료했거나 남은 시간이 1시간 이하이고 `--renew-expired-pull`을 지정한 경우에만 고정 해시 ECR 도구로 인증을 갱신한다. 읽기 범위는 프로젝트 FE/BE 저장소이며 자격증명은 메모리와 해당 Secret에 공급한다. IAM 정책·Worker 역할은 변경하지 않는다. Runtime SA에서 임시 참조가 이미 분리됐다면 갱신 도구를 호출하지 않고 `NATIVE_RUNTIME_DETACHED_NO_LEGACY_PULL_RELINK`로 중단한다.
+
+갱신 도우미는 [고정 개정의 `configure_ecr_pull`](https://github.com/seokpan/seokpan-hybrid-infra/blob/e2e00cde6b9883a40104127ef9bfb9568b081e83/scripts/rosa-cloud-connection-preflight.py)이며 파일 SHA-256은 `0223957be6df4f25c24173b1ab3fae2c6fa4227545fffeaab420985d0bf30ee5`다. 사람 IAM 사용자·AWS 계정을 대조하고 두 저장소 읽기 전용 STS 세션으로 인증한다. Secret 갱신 외에 Runtime SA의 임시 Pull 참조를 연결할 수 있으므로 Native 분리 이후에는 이 경로를 사용하지 않는다.
 
 원본 관리 서버에서 조회를 실행하려면 같은 고정 개정의 `REMOTE_READER`와 해당 서버의 kubeconfig·Context를 사용한다. 지정 API와 Source·Parent·쓰기 주체를 조회하며 인증 자료를 다른 서버로 복사하지 않는다.
 
@@ -34,13 +39,15 @@ Context·이미지·Replica·자동 동기화·Parent·쓰기 주체 목록은 �
 
 노드의 Digest 목록을 기록하되 캐시·Credential Provider와 분리된 Worker 자격증명 추적으로 해석하지 않는다. 신규 노드·12시간 만료 후 시험은 별도 검증 범위다.
 
+이미지 두 개와 AWS 계정은 이 실행의 승인 대상으로 코드에 고정돼 있다. 다른 이미지·계정의 검증으로 확대하지 않는다. 승인 이미지가 바뀌면 도구 입력 계약과 해당 실행 증거도 새로 검토한다.
+
 임시 Pod 여섯 개와 ServiceAccount는 생성 UID를 기록하고 UID 사전조건으로 삭제한다. 다른 UID의 객체는 보존한다. 생성 결과 불명확·삭제 실패·잔존 객체는 정리 필요로 보고한다. 앱 서버와 SQL은 실행하지 않는다.
 
 ## Git 중지 개정의 실행 결과 확인
 
 `scripts/verify-source-backend-stop.py`는 원본 계약 receipt 두 개, 이관 PR 번호와 Backend 선언 SHA-256을 입력받는다. PR의 병합·대상 main·단일 Backend 파일 범위와 병합 파일 해시를 대조한다. 미병합 상태에서는 `HOLD_SOURCE_STOP_PR_NOT_MERGED`를 출력하고 클러스터 조회를 생략한다.
 
-병합 후에는 API·Deployment/Root/Child UID·Source·오버라이드를 대조한다. Backend desired/actual Replica 0, 종료 중 Pod 0, 준비되지 않은 주소를 포함한 EndpointSlice/Endpoints 주소 0, 활성 Job·실행 가능한 CronJob·Backend HPA 부재와 Argo 진행 작업 부재를 확인한다. Child는 병합 개정에 Synced 상태여야 한다.
+병합 후에는 API·Deployment/Root/Child UID·Source·오버라이드를 대조한다. Backend desired/actual Replica 0, 종료 중 Pod 0, 준비되지 않은 주소를 포함한 EndpointSlice/Endpoints 주소 0, 활성 Job·실행 가능한 CronJob·Backend HPA 부재와 Argo 진행 작업 부재를 확인한다. Child는 병합 개정 또는 GitHub 비교 API로 확인한 후속 개정에 Synced 상태여야 한다. 후속 개정은 해당 Backend 파일의 해시가 승인 해시와 같고 Replica 0이 유지돼야 수락한다. Revert·이미지 등 Backend 파일 변경·갈라진 이력·비교 실패는 수락하지 않는다. 같은 개정의 성공한 비교 결과만 실행 메모리에서 재사용한다.
 
 기본 30초 동안 중지가 유지되면 `PASS_KUBERNETES_BACKEND_STOP_GATE`를 기록한다. Pod 재출현 시 유지 시간을 다시 계산하며 기본 관측 기한은 300초다. 이 도구는 PR 병합·scale·Sync·SQL·Dump를 실행하지 않는다.
 
