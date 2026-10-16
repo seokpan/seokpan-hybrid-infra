@@ -1,0 +1,197 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-08
+# 작성내용: 온프렘 Gateway WireGuard 키 생성·암호화 보관·복구 확인 초안 (#16)
+
+- name: 온프렘 Gateway의 WireGuard 키를 암호화해 보관
+  hosts: all
+  gather_facts: false
+  become: false
+
+  vars:
+    # 비밀값을 포함할 수 있는 모듈 임시 파일은 메모리 경로를 사용합니다.
+    # 실제 실행 시 Controller의 로컬 임시 경로도 별도로 지정합니다.
+    ansible_remote_tmp: /dev/shm
+    ansible_pipelining: true
+    ansible_python_interpreter: /usr/bin/python3
+    vpn_key_generation_approved: false
+    vpn_key_archive_directory: "{{ lookup('env', 'HOME') }}/.local/share/seokpan-hybrid/secrets/vpn"
+    vpn_key_archive_file: "{{ vpn_key_archive_directory }}/onprem-gateway-wireguard.sops.json"
+    vpn_age_identity_file: "{{ lookup('env', 'HOME') }}/.config/sops/age/keys.txt"
+    vpn_primary_age_recipient: "age1236mx0a84t6qq6shyqdtg06g60kqx2exshh7z8wkm366n2xf894q2mmtmf"
+    vpn_backup_age_recipient: "age159cw58jmknv4qmpsq8dx7k3jqu0gt7dggk6ltthmgjc65csfdyas6w8ark"
+
+  tasks:
+    - name: 명시적인 실행 선택과 단일 Gateway 대상을 확인
+      ansible.builtin.assert:
+        that:
+          - vpn_key_generation_approved | bool
+          - not ansible_check_mode
+          - ansible_play_hosts_all | length == 1
+          - (ansible_host | default(inventory_hostname)) == '10.1.93.98'
+        fail_msg: "실제 키 생성 실행 선택과 단일 Gateway 대상이 필요합니다."
+
+    - name: 실제 Gateway 이름 확인
+      ansible.builtin.command:
+        argv:
+          - hostname
+          - -s
+      register: vpn_gateway_hostname
+      changed_when: false
+
+    - name: 예상한 Gateway인지 확인
+      ansible.builtin.assert:
+        that:
+          - vpn_gateway_hostname.stdout == 'vpn-gw-01'
+        fail_msg: "예상한 vpn-gw-01이 아닙니다."
+
+    - name: Controller의 보관 조건 확인
+      delegate_to: localhost
+      vars:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      block:
+        - name: 기존 암호화 원본 존재 여부 확인
+          ansible.builtin.stat:
+            path: "{{ vpn_key_archive_file }}"
+            follow: false
+          register: vpn_existing_archive
+
+        - name: 기존 파일을 덮어쓰지 않도록 확인
+          ansible.builtin.assert:
+            that:
+              - not vpn_existing_archive.stat.exists
+            fail_msg: "기존 키 암호문이 있습니다. 재생성하지 말고 기존 기록을 확인합니다."
+
+        - name: 기존 age 개인키에서 공개키 확인
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/age-keygen
+              - -y
+              - "{{ vpn_age_identity_file }}"
+          register: vpn_controller_recipient
+          changed_when: false
+
+        - name: 주 보관자의 공개키가 기존 기록과 일치하는지 확인
+          ansible.builtin.assert:
+            that:
+              - vpn_controller_recipient.stdout | trim == vpn_primary_age_recipient
+            fail_msg: "기존 age 공개키와 일치하지 않습니다."
+
+        - name: Git 밖의 개인키 암호문 보관 폴더 준비
+          ansible.builtin.file:
+            path: "{{ vpn_key_archive_directory }}"
+            state: directory
+            mode: "0700"
+
+    - name: Gateway에서 새 WireGuard 개인키 생성
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/wg
+          - genkey
+      register: vpn_generated_private
+      no_log: true
+      changed_when: true
+
+    - name: 생성한 개인키에서 공개키 계산
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/wg
+          - pubkey
+        stdin: "{{ vpn_generated_private.stdout | trim }}"
+      register: vpn_generated_public
+      no_log: true
+      changed_when: false
+
+    - name: Controller에서 암호화 보관 및 복구 확인
+      delegate_to: localhost
+      vars:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      block:
+        - name: 두 보관자의 공개키로 개인키 암호화
+          ansible.builtin.command:
+            argv:
+              - /usr/local/bin/sops
+              - --encrypt
+              - --age
+              - "{{ vpn_primary_age_recipient }},{{ vpn_backup_age_recipient }}"
+              - --input-type
+              - json
+              - --output-type
+              - json
+              - /dev/stdin
+            stdin: >-
+              {{
+                {
+                  'purpose': 'onprem-gateway-wireguard',
+                  'gateway': 'vpn-gw-01',
+                  'wireguard_private_key': vpn_generated_private.stdout | trim,
+                  'wireguard_public_key': vpn_generated_public.stdout | trim
+                } | to_json
+              }}
+          register: vpn_encrypted_archive
+          no_log: true
+          changed_when: false
+
+        - name: 암호문을 새 파일로 저장
+          ansible.builtin.copy:
+            content: "{{ vpn_encrypted_archive.stdout }}\n"
+            dest: "{{ vpn_key_archive_file }}"
+            mode: "0600"
+            force: false
+          register: vpn_archive_write
+          no_log: true
+
+        - name: 새 암호문 저장 성공 확인
+          ansible.builtin.assert:
+            that:
+              - vpn_archive_write.changed
+            fail_msg: "새 파일 저장을 확인할 수 없습니다. 기존 파일을 덮어쓰지 않습니다."
+
+        - name: 기존 age 개인키로 암호문 복호화
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/env
+              - -u
+              - SOPS_AGE_KEY
+              - -u
+              - SOPS_AGE_KEY_CMD
+              - /usr/local/bin/sops
+              - --decrypt
+              - --input-type
+              - json
+              - --output-type
+              - json
+              - "{{ vpn_key_archive_file }}"
+          environment:
+            SOPS_AGE_KEY_FILE: "{{ vpn_age_identity_file }}"
+          register: vpn_restored_archive
+          no_log: true
+          changed_when: false
+
+    - name: 복구한 개인키에서 공개키 재계산
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/wg
+          - pubkey
+        stdin: "{{ (vpn_restored_archive.stdout | from_json).wireguard_private_key }}"
+      register: vpn_restored_public
+      no_log: true
+      changed_when: false
+
+    - name: 원래 키와 복구한 키의 공개키 일치 확인
+      ansible.builtin.assert:
+        that:
+          - vpn_restored_public.stdout | trim == vpn_generated_public.stdout | trim
+          - (vpn_restored_archive.stdout | from_json).wireguard_public_key == vpn_generated_public.stdout | trim
+        fail_msg: "복구한 키의 공개키가 생성 당시 공개키와 다릅니다."
+      no_log: true
+
+    - name: 수행 범위 안내
+      ansible.builtin.debug:
+        msg:
+          - "완료: 온프렘 WireGuard 키 생성·암호화 보관·주 보관자 복구 확인"
+          - "암호문은 Git 밖의 지정 보호 폴더에 보관했습니다."
+          - "미검증: 예비 보관자의 실제 키 복구·USB 사본 복구·Controller 없는 복구"
+          - "미실행: Gateway 키 설치·VPN 설정·AWS 접속·터널 연결"

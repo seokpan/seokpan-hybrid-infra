@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 작성자: 이유빈 -->
+<!-- 작성 내용: 승인한 작업 서버의 DB 접속만 VPN으로 전달 -->
+<policy target="DROP" priority="-100">
+  <short>작업 서버에서 VPN으로</short>
+  <ingress-zone name="ANY"/>
+  <egress-zone name="seokpan-vpn"/>
+{% for host in vpn_wireguard_onprem_job_host_cidrs %}
+{% for destination in vpn_wireguard_aws_destination_cidrs %}
+{% for port in vpn_wireguard_allowed_tcp_ports %}
+  <rule family="ipv4">
+    <source address="{{ host }}"/>
+    <destination address="{{ destination }}"/>
+    <port port="{{ port }}" protocol="tcp"/>
+    <accept/>
+  </rule>
+{% endfor %}
+{% endfor %}
+{% endfor %}
+</policy>

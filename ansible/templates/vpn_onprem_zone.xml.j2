@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 작성자: 이유빈 -->
+<!-- 작성 내용: VPN 내부 인터페이스 전용 방화벽 구역 후보 -->
+<zone target="DROP">
+  <short>석판 VPN 전용 구역</short>
+  <description>VPN 내부 통신은 별도 전달 정책에서 제한합니다.</description>
+  <interface name="{{ vpn_wireguard_interface }}"/>
+</zone>

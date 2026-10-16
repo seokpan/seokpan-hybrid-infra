@@ -1,0 +1,16 @@
+# 작성자: 이유빈
+# 작성 내용: 온프레미스 VPN 공개 설정 후보
+# 개인키는 별도 보호 파일에서 읽습니다.
+# 키 공급과 방화벽 준비 전에는 실제 실행하지 않습니다.
+[Interface]
+Address = {{ vpn_wireguard_onprem_tunnel_address }}
+ListenPort = {{ vpn_wireguard_listen_port }}
+MTU = {{ vpn_wireguard_mtu }}
+SaveConfig = false
+PreUp = /usr/bin/wg set %i private-key /etc/wireguard/keys/%i.key
+
+[Peer]
+PublicKey = {{ vpn_wireguard_aws_public_key }}
+AllowedIPs = {{ vpn_wireguard_aws_allowed_ips | join(', ') }}
+Endpoint = {{ vpn_wireguard_aws_public_endpoint }}:{{ vpn_wireguard_listen_port }}
+PersistentKeepalive = {{ vpn_wireguard_onprem_keepalive_seconds }}

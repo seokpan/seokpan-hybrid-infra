@@ -1,0 +1,121 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-07
+# 작성내용: AL2023 WireGuard 설치 전 확인 초안 (#16)
+
+# 현재는 문법 검사만 수행합니다.
+# 실제 실행 시 저장소 조회로 패키지 메타데이터 캐시가 갱신될 수 있습니다.
+# 패키지 설치·운영체제 업그레이드·모듈 로드·터널 생성은 수행하지 않습니다.
+
+- name: AWS VPN 서버의 WireGuard 설치 전 확인
+  hosts: vpn_aws
+  gather_facts: false
+  become: true
+
+  vars:
+    vpn_allow_remote_checks: false
+
+  pre_tasks:
+    - name: 실제 서버 확인 승인과 대상 검사
+      ansible.builtin.assert:
+        that:
+          - vpn_allow_remote_checks | bool
+          - (ansible_host | default('')) is match('^i-([0-9a-f]{8}|[0-9a-f]{17})$')
+          - (ansible_aws_ssm_bucket_name | default('') | length) > 0
+        fail_msg: 실제 서버 확인 승인과 승인된 접속 대상을 공급해야 합니다.
+      delegate_to: localhost
+      become: false
+
+    - name: 서버 운영체제와 아키텍처 수집
+      ansible.builtin.setup:
+        gather_subset:
+          - "!all"
+          - "!min"
+          - distribution
+          - architecture
+
+    - name: AL2023 x86_64 구성 검사
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.distribution == 'Amazon'
+          - ansible_facts.distribution_major_version == '2023'
+          - ansible_facts.architecture == 'x86_64'
+        fail_msg: 승인한 AL2023 x86_64 서버와 다릅니다.
+
+  tasks:
+    - name: 실행 중인 커널 버전 확인
+      ansible.builtin.command:
+        argv:
+          - uname
+          - -r
+      register: vpn_kernel_check
+      changed_when: false
+
+    - name: 설치된 운영체제 릴리스 패키지 확인
+      ansible.builtin.command:
+        argv:
+          - rpm
+          - -q
+          - system-release
+      register: vpn_release_check
+      changed_when: false
+
+    - name: 활성화된 저장소 목록 확인
+      ansible.builtin.command:
+        argv:
+          - dnf
+          - repolist
+          - --enabled
+      register: vpn_repository_check
+      changed_when: false
+
+    - name: 저장소에서 제공하는 WireGuard 패키지 조회
+      ansible.builtin.command:
+        argv:
+          - dnf
+          - list
+          - --showduplicates
+          - --available
+          - wireguard-tools
+      register: vpn_package_check
+      changed_when: false
+      failed_when: false
+
+    - name: 실행 중인 커널의 WireGuard 모듈 정보 조회
+      ansible.builtin.command:
+        argv:
+          - modinfo
+          - wireguard
+      register: vpn_module_check
+      changed_when: false
+      failed_when: false
+
+    - name: 운영체제와 저장소 확인 결과
+      ansible.builtin.debug:
+        msg:
+          - "커널: {{ vpn_kernel_check.stdout }}"
+          - "운영체제 릴리스: {{ vpn_release_check.stdout }}"
+          - "활성 저장소: {{ vpn_repository_check.stdout }}"
+
+    - name: 패키지 제공 여부 확인 결과
+      ansible.builtin.debug:
+        msg:
+          - "패키지 조회 종료값: {{ vpn_package_check.rc }}"
+          - "조회 결과: {{ vpn_package_check.stdout }}"
+          - "오류 안내: {{ vpn_package_check.stderr }}"
+          - "조회가 실패하면 원인을 확인하기 전 설치를 진행하지 않습니다."
+
+    - name: 커널 모듈 정보 확인 결과
+      ansible.builtin.debug:
+        msg:
+          - "모듈 조회 종료값: {{ vpn_module_check.rc }}"
+          - "조회 결과: {{ vpn_module_check.stdout }}"
+          - "오류 안내: {{ vpn_module_check.stderr }}"
+          - "정보 조회 실패만으로 커널 지원이 없다고 확정하지 않습니다."
+          - "이 결과는 실제 터널 통신 성공을 의미하지 않습니다."
+
+    - name: 패키지 조회 성공 여부 검사
+      ansible.builtin.assert:
+        that:
+          - vpn_package_check.rc == 0
+        fail_msg: 패키지 제공 여부를 확인하지 못했습니다. 설치를 보류합니다.
