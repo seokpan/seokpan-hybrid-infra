@@ -244,6 +244,17 @@ class MonitoringTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "PREVIOUS_READBACK_STOP_REQUIRED"):
                     m.resume_objects(root, previous)
 
+    def test_resume_requires_completed_argo_policy_patch_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, _ = stopped_registration(root)
+            file = previous / "receipt.json"
+            receipt = json.loads(file.read_text())
+            receipt["argo_policy_patch_attempted"] = False
+            file.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, "PREVIOUS_READBACK_STOP_REQUIRED"):
+                m.resume_objects(root, previous)
+
     def test_resume_completes_checks_without_native_bootstrap_apply_or_policy_patch(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

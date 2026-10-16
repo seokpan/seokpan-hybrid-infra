@@ -43,6 +43,8 @@ python3 scripts/register-rosa-monitoring.py INPUT_ROOT \
 
 `--resume-from`은 생성·Argo 정책 변경을 시도한 뒤 `MONITORING_REGISTRATION_READBACK`에서 중단된 receipt만 수락한다. 보호 결과의 네 객체 선언을 고정 개정·권한 범위와 대조한 뒤 실제 객체, Argo 정책과 남은 권한 결과를 읽는다. Native 단계, Ansible bootstrap, 서버 dry-run, 객체 생성·Patch는 실행하지 않는다. `--apply`를 함께 지정하면 중단한다. 기존 실패 원문은 보호 경로에 유지하고 분류만 출력한다.
 
+`MONITORING_CONTROLLER_AUTHORIZATION`에서 중단된 receipt는 위 재개 대상이 아니다. 권한 조회가 가능해진 뒤 최초 등록 명령에서 `--resume-from` 없이 `--apply`로 다시 실행한다. 기존 객체는 소유·선언이 일치할 때 재사용하며, 모두 존재하고 Argo 정책도 같으면 객체 생성·정책 Patch 없이 권한 조회로 진행한다. 일반 실행은 Ansible 실행 파일 존재·고정 원본 확인과 렌더의 서버 dry-run을 다시 수행한다. 기존 객체나 정책이 달라졌다면 읽기 전용 재개로 간주하지 않으며, 소유·선언 오류는 중단하고 누락 객체 생성·누락 정책 반영 가능성은 최초 등록과 같다.
+
 ## 실행 경계와 실패
 
 도구는 Application Sync·smoke·앱·Migration·SQL·Terraform·IAM 변경을 실행하지 않는다. 모니터링 선언은 서버 dry-run만 수행하며, 실제 생성은 수동 Sync로 진행한다.
