@@ -1,6 +1,6 @@
 # ROSA 후속 HCL 수신계약
 
-이 문서는 승인된 **비밀값이 아닌 필요한 출력만 전달하는 경로**를 rosa HCL 구현에 연결하는 계약이다. 현재 PR #28에는 HCL 변수·형식 검사·Root Lock의 B 소비 후보가 있으며, 이 계약이나 정적 Source 검사만으로 실제 입력 파일의 추출·공급/소비 합의·수신 완료를 뜻하지 않는다. 정확한 공급 필드·JSON/HCL 표현·보호 파일 위치·개정 형식은 이유빈의 foundation 공통 틀과 정태훈의 소비 HCL을 대조해 원래 Issue에서 수락 범위를 확정한다.
+이 문서는 승인된 **비밀값이 아닌 필요한 출력만 전달하는 경로**를 rosa HCL 구현에 연결하는 계약이다. PR #28의 HCL 변수·형식 검사·Root Lock은 병합된 Source이며, 설치 입력의 실제 소비·Plan/Apply·Ready와 Data Binding2개 적용은 [원 실행 #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)·[10/16 완결 결과 문서 PR](https://github.com/seokpan/seokpan-hybrid-docs/pull/134)에 연결한다. 계약/정적 검사와 실제 수락을 구분하며 최종 인계 metadata·재생성·전체 비용의 미충족 복합 조건은 유지한다. 보호 파일 위치·값을 공개 예시에 복사하지 않는다.
 
 - 작성/소비: 정태훈(tjung03)
 - 기반 출력 공급·foundation 전체 통합/실행 및 리뷰: 이유빈(ggbun2)
@@ -16,7 +16,7 @@ A는 공통 Backend·Provider·버전·변수·출력을 작성한다. C/D의 �
 
 ## 필요한 필드 의미
 
-아래 자료형은 **후속 HCL 소비에 필요한 의미**다. 실제 공급 파일의 필드 이름과 표현은 아직 합의 전이다. Data Branch의 `rds_security_group_id`·`redis_security_group_id`는 기존 이름 후보로 대조하고 최종 공통 출력 개정을 수락한다. 값이 없으면 예시 ID로 채우지 않는다.
+아래 자료형은 **HCL 소비에 필요한 의미**다. 실제 설치에서 소비한 보호 입력과 이 표의 의미 계약을 구분하고, Data의 `rds_security_group_id`·`redis_security_group_id` 및 입력/Code 개정은 각 인계의 원본에서 대조한다. 값이 없으면 예시 ID로 채우지 않는다.
 
 | 입력 묶음 | 전달할 의미·소비 형태 | 공급/대조 | 소비 전 확인 |
 |---|---|---|---|
@@ -27,7 +27,7 @@ A는 공통 Backend·Provider·버전·변수·출력을 작성한다. C/D의 �
 | 설치 Subnet | Public 3 + ROSA Private 3의 ID 목록과 AZ/종류 매핑 | A 공급, B 소비 | 같은 VPC·서로 다른 3 AZ의 승인 역할. Data Private 3은 설치 목록에서 제외 |
 | ROSA 공통 Role | 실제 Classic Account-wide Role/Policy 참조·Prefix·공유 범위 등 필요한 설치 입력 | A 공급, B 지원 Schema 대조 | 실제 Role 존재·Classic 지원·Owner/공유 영향. Cluster 종속 Operator Role/OIDC와 중복 관리하지 않음 |
 | Data SG Binding | Data SG ID 각각, DB/Redis 목적·Port·허용 Source SG 의미 | C/A 공급, B 소비 | Data SG/기반 Rule은 foundation. 실제 Worker SG와 연결하는 종속 Rule은 rosa이며 inline Rule 혼용 금지 |
-| ECR Worker Pull | FE/BE Repository 범위·실제 Worker Role·Pull Policy/Attachment Owner·검증 상태 | D/A 공급, B 협업 | foundation Owner 기준, 현재 미완료. CI Push Token을 Runtime Pull Secret으로 복사하지 않음 |
+| ECR Worker Pull | FE/BE Repository 범위·실제 Worker Role·Pull Policy/Attachment Owner·검증 상태 | D/A 공급, B 협업 | foundation Owner의 정책/연결과 승인 FE/BE×Compute3 실행6/6·Native 임시 참조 분리 수락. 새 Worker·12시간 경과 Pull은 별도 원 미완료 조건. CI Push Token을 Runtime Pull Secret으로 복사하지 않음 |
 | 실행 조합 | 실제 지원 Classic GA 패치·Provider/도구/Lock·Quota/구독·생성/삭제 지원 조건의 근거 | B 확인, A 리뷰 | 문서 후보·Bootstrap 성공을 ROSA 지원/전체 권한 검증으로 대체하지 않음 |
 
 App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업에서 별도 대조한다. rosa가 DB/Redis 비밀번호나 App Secret을 필요 출력으로 가져오는 구조로 확장하지 않는다. GitOps 최초 인계에 필요한 새 Cluster ID/Context·Node/Role/Host 참조는 rosa **실행 후** 확인한 범위만 후속 담당자에게 전달한다.

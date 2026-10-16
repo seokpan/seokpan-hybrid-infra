@@ -1,6 +1,12 @@
-# ROSA Classic Root — TH-10 Source candidate
+# ROSA Classic Root — TH-10 구현·실행 계약
 
-원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비한 별도 HCL 후속 PR이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 공개 승인 [03 §3-F](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)와 [04](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md)를 정적 Source로 연결한다. 개인 계획 TH-10은 별도 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 실제 foundation 입력·IAM 서비스 권한·Cloud Plan/Apply·Cost Gate·ROSA 생성은 아직 수행하지 않았다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
+원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비하는 HCL이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 공개 승인 [03 §3-F](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)와 [04](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md)를 정적 Source로 연결한다. 개인 계획 TH-10은 별도 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
+
+## 완료된 실행 범위 — 2026-10-16
+
+기존 실제 결과에서 설치 입력·목적 권한/Backend·저장 Plan과 B 내용22항목 검토, 10/14 23:30:33 KST Apply 종료0을 확인했다. 이후 노드9/9 Ready(Control Plane3/Infra3/Compute3)·Operator34 안정·보호 관리 인계를 수락했다. ROSA State의 Worker→Data 규칙2개(TCP3306/6379), 승인 FE/BE×Compute3 실행6/6·임시 객체 정리와 Native 임시 Pull 참조 분리도 완료됐다. [실행 도구 #79](https://github.com/seokpan/seokpan-hybrid-infra/pull/79)·[완결 결과 문서 PR](https://github.com/seokpan/seokpan-hybrid-docs/pull/134)에 원 근거와 범위를 연결한다. 완료된 설치/Plan·검사는 반복하지 않는다.
+
+이 결과로 전체 Cost Gate·실제 사용 개정의 A 리뷰 metadata·Cloud 업무·새 Worker/12시간 경과 Pull·전체 Recovery·중간 재생성·최종 자격/자원/비용 정리를 완료 처리하지 않는다. TH36/81의 원 체크는 [Docs #21](https://github.com/seokpan/seokpan-hybrid-docs/issues/21)을 따른다. 기존 ROSA/NAT는 검증 완료까지 유지하며 삭제 실행/예약과 예산 증액은 없다. $450 계획/$500 한도를 유지한다.
 
 실제 첫 Plan 전 본인 Source/도구·보호 입력·Backend/Caller의 단계별 준비는 [로컬 준비 절차](LOCAL_PREPARATION.md)를 따른다. 기존 도구만 사용하며 오프라인 확인과 실제 인증/Cloud 실행을 구분한다.
 
@@ -32,7 +38,7 @@ TH-11은 정상 개인 IDP/RBAC·Argo 권한·유지 비상 경로와 Cloud Secr
 
 ## foundation 입력 계약 제안
 
-`variables.tf`의 `foundation`은 **B 소비 Schema 제안**이다. A/C/D 수신·실제 Output 구현은 미완료다. A가 권한 있는 사본에서 필요한 Output만 추출해 Git 밖 보호 입력으로 제공한다. 전체 Output dump·`terraform_remote_state`를 추가하지 않는다.
+`variables.tf`의 `foundation`은 B 소비 Schema다. 실제 설치와 Data Binding에 필요한 보호 입력 소비는 위 완료 결과로 연결한다. 최종 인계 metadata·Foundation 계획의 동일 규칙 대조 등 원 복합 조건은 #25/Docs21에서 유지한다. A가 권한 있는 사본에서 필요한 Output만 추출해 Git 밖 보호 입력으로 제공한다. 전체 Output dump·`terraform_remote_state`를 추가하지 않는다.
 
 | 필드 | 의미 / 공급 확인 |
 |---|---|
