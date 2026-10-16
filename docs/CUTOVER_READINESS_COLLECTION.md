@@ -51,3 +51,11 @@ python3 collect-cutover-readiness.py INPUT_ROOT COMPLETED_RESULT_DIR HELD_RENDER
 `scripts/prepare-native-runtime-pull.py`는 승인 FE/BE×Compute3 실행 및 정리 PASS receipt를 재사용한다. 기존 자원/Pool 후보의 Replica0 Deployment 두 개와 프로젝트 런타임 ServiceAccount에서 알려진 임시 ECR Secret 참조만 제거한다. 다른 Pull 참조·컨테이너 설정·Pool·자원·승인 이미지는 유지하며 별도의 보호 후보 파일을 만든다. `--apply`는 ServiceAccount의 해당 목록만 resourceVersion과 기존 목록 비교 조건을 포함한 JSON Patch로 반영한다. GitOps 소유 ServiceAccount이면 선언 Owner 검토를 위해 중단한다.
 
 임시 Secret 자체는 다른 작업자가 사용할 수 있어 삭제하지 않는다. Pod·앱·SQL·IAM·기존 Pull/서버 admission 시험을 실행하지 않는다. 결과는 알려진 임시 참조의 분리와 새 후보 준비이며, 실제 앱의 최초 기동/Pull 또는 Worker 자격증명의 독립적인 추적을 완료했다는 뜻은 아니다. 이후 배포에서는 새 후보와 receipt를 사용하고 기존 임시 인증 갱신 도구를 다시 실행해 참조를 되붙이지 않는다.
+
+`--resume-from`은 이전 receipt가 중단과 ServiceAccount 변경 미시도를 증명할 때만 허용한다. 접속 대상 확인과 ServiceAccount 조회는 별도 단계로 기록하며, 실패한 명령의 stderr는 보호 결과 디렉터리에만 저장한다. 공개 출력은 인증 필요·권한 거부·TLS·통신·대상 부재 등의 분류만 포함한다.
+
+`--reauthenticate-if-required`를 명시하면 변경 전 조회에서 인증 필요가 확인된 경우에만 개인 API Token을 숨김 입력받는다. 기존 kubeconfig의 검증된 대상과 CA를 유지한 별도 보호 kubeconfig를 만들고 `tjung03` 본인인지 확인한 뒤 실패한 조회를 한 번 재개한다. 기존 초기 관리자 자격은 덮어쓰지 않는다. 권한 거부·TLS 오류나 변경 시도 뒤의 오류에는 재인증·자동 재시도를 하지 않는다. 성공 receipt의 `kubeconfig_file`은 이후 작업에서 사용할 실제 파일 경로다.
+
+오프라인 검증은 `python3 scripts/test-native-runtime-pull.py`로 수행한다. 실제 인증이나 클러스터 접속 없이 오류 분류, 로그인 격리, 기존 참조 보존, 경쟁 변경과 부분 실행 후 재시도 거부를 검증한다.
+
+인증 재개 시 이전 보호 디렉터리의 개인 kubeconfig가 있으면 먼저 재사용한다. 새 Token 검증 명령의 실패는 `PERSONAL_LOGIN_AUTHENTICATION_REQUIRED` 등으로, 정상 로그인한 계정이 다른 경우는 `PERSONAL_USER_MISMATCH`로 구분한다. Token 발급 화면의 `Your API token`이 API Token이며 `Display Token`은 그 화면을 여는 동작이다. Token 대신 같은 화면의 단일 `oc login --token=... --server=...` 명령을 숨김 입력해도 된다. 이 문자열은 실행하지 않고 두 필드만 파싱하며, 다른 서버나 추가 옵션·셸 구문은 거부한다. API Token 자체나 자격 명령을 공개 기록에 넣지 않는다.
