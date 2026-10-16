@@ -35,6 +35,61 @@ def private_file(path, limit=MAX_BYTES):
             need(s.st_uid == os.getuid() and stat.S_IMODE(s.st_mode) & 0o077 == 0, "PRIVATE_OWNED_INPUT_REQUIRED")
         return f.read(limit + 1)
 
+def age_recipient(raw):
+    """Read public recipients from SOPS metadata, never from payload fields."""
+    text = raw.decode("utf-8-sig")
+    if text.lstrip().startswith("{"):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                need(key not in result, "DUPLICATE_SOPS_JSON_KEY")
+                result[key] = value
+            return result
+        document = json.loads(text, object_pairs_hook=unique)
+        metadata = document.get("sops") if isinstance(document, dict) else None
+        need(isinstance(metadata, dict) and not metadata.get("key_groups"), "SUPPORTED_SOPS_METADATA_REQUIRED")
+        rows = metadata.get("age")
+        need(isinstance(rows, list) and all(isinstance(x, dict) for x in rows), "SOPS_AGE_ROWS_REQUIRED")
+        values = [x.get("recipient") for x in rows]
+        form = "SOPS_JSON"
+    else:
+        # Standard SOPS block YAML; no general YAML loader or tag evaluation.
+        lines = text.splitlines()
+        starts = [i for i, line in enumerate(lines) if re.fullmatch(r'''(?:sops|"sops"|'sops'):[ \t]*(?:#.*)?''', line)]
+        need(len(starts) == 1, "SUPPORTED_SOPS_YAML_METADATA_REQUIRED")
+        block = []
+        for line in lines[starts[0]+1:]:
+            if line.strip() and not line.startswith(" ") and not line.lstrip().startswith("#"):
+                break
+            block.append(line)
+        need(not any(re.match(r"^\s+key_groups:", line) for line in block), "SUPPORTED_SOPS_METADATA_REQUIRED")
+        ages = [(i, len(m[1])) for i, line in enumerate(block)
+                if (m := re.fullmatch(r'''( +)(?:age|"age"|'age'):[ \t]*''', line))]
+        need(len(ages) == 1, "SOPS_AGE_ROWS_REQUIRED")
+        start, indent = ages[0]
+        section = []
+        for line in block[start+1:]:
+            width = len(line)-len(line.lstrip(" "))
+            if line.strip() and not line.lstrip().startswith("#") and (width < indent or (width == indent and not line.lstrip().startswith("- "))):
+                break
+            section.append(line)
+        values = []
+        for line in section:
+            m = re.fullmatch(r'''\s+(?:-\s+)?(?:recipient|"recipient"|'recipient'):\s*(?:"(age1[0-9a-z]+)"|'(age1[0-9a-z]+)'|(age1[0-9a-z]+))[ \t]*(?:#.*)?''', line)
+            if m: values.append(next(x for x in m.groups() if x is not None))
+        form = "SOPS_BLOCK_YAML"
+    need(values and all(isinstance(x, str) and re.fullmatch(r"age1[0-9a-z]+", x) for x in values)
+         and len(set(values)) == 1, "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
+    return values[0], form
+
+def validate_resume(path):
+    previous = Path(path)
+    result = json.loads(private_file(previous/"receipt.json", 262144))
+    need(result.get("status") == "STOP_CHECKPOINT" and result.get("reason") == "ONE_EXISTING_AGE_RECIPIENT_REQUIRED"
+         and result.get("resource_mutations") == 0 and not result.get("sync_started")
+         and not (previous/"checkpoint.sops.json").exists(), "UNENCRYPTED_RECIPIENT_STOP_ONLY_RESUME_REQUIRED")
+    return str(previous)
+
 def sops_binary(args, out):
     if args.sops:
         need(Path(args.sops).is_file(), "EXISTING_SOPS_REQUIRED")
@@ -99,9 +154,15 @@ def collect_files(roots, excluded):
                              "sha256": hashlib.sha256(raw).hexdigest(), "data": base64.b64encode(raw).decode()})
     return rows
 
-def backup(args, out, binary):
+def backup(args, out, binary, audit=None):
+    audit = audit if audit is not None else {}
     c = json.loads(private_file(args.contract, 262144))
     need(c.get("schema") == 1 and c.get("expected_api", "").startswith("https://"), "CHECKPOINT_CONTRACT_REQUIRED")
+    audit["phase"] = "RECIPIENT_PREFLIGHT"
+    cipher_raw = private_file(c["recipient_source"], 262144)
+    need(hashlib.sha256(cipher_raw).hexdigest() == c["recipient_source_sha256"], "RECIPIENT_SOURCE_HASH_MISMATCH")
+    recipient, form = age_recipient(cipher_raw)
+    audit.update(recipient_metadata_format=form, unique_age_recipients=1)
     cloud = c["cloud_namespace"]
     previous = Path(c["previous_inventory"])
     receipt = json.loads(private_file(previous/"receipt.json", 262144))
@@ -110,6 +171,7 @@ def backup(args, out, binary):
          and receipt.get("pvc_count") == counts["pvc"] and receipt.get("secret_inventory_counts", {}).get(cloud) == counts["cloud_secrets"],
          "ACCEPTED_PREVIOUS_INVENTORY_REQUIRED")
     private_file(args.kubeconfig, 262144)
+    audit["phase"] = "CONFIG_CAPTURE"
     errors = []
     def get(resource, name=None, namespace=None):
         cmd = ["oc", "--kubeconfig", args.kubeconfig, "--request-timeout=20s", "get", resource]
@@ -117,6 +179,8 @@ def backup(args, out, binary):
         if namespace: cmd += ["-n", namespace]
         p = subprocess.run(cmd + ["-o", "json"], capture_output=True, timeout=35)
         if p.returncode:
+            if any(x in p.stderr.lower() for x in (b"unauthorized", b"must be logged in", b"provide credentials")):
+                raise RuntimeError("CHECKPOINT_AUTH_REQUIRED_NO_RETRY")
             errors.append({"resource": resource, "namespace": namespace, "result": "READ_DENIED_OR_FAILED"})
             return None
         return json.loads(p.stdout)
@@ -160,16 +224,15 @@ def backup(args, out, binary):
               "pvc_inventory": json.loads(private_file(previous/"pvc-inventory.json", 262144)),
               "remote_state_current": False, "volume_data_backed_up": False,
               "gitops_secret_gap": "OPERATOR_REGENERATION_OR_OWNER_EXPORT_ACCEPTANCE_REQUIRED"}
-    cipher = Path(c["recipient_source"])
-    need(hashlib.sha256(private_file(cipher, 262144)).hexdigest() == c["recipient_source_sha256"], "RECIPIENT_SOURCE_HASH_MISMATCH")
-    recipients = re.findall(r"recipient:\s*[\"']?(age1[0-9a-z]+)", cipher.read_text(encoding="utf-8"))
-    need(len(set(recipients)) == 1, "ONE_EXISTING_AGE_RECIPIENT_REQUIRED")
     raw = canonical(bundle)
-    encrypted = crypt(binary, raw, recipient=recipients[0])
+    audit.update(phase="ENCRYPT", encryption_attempted=True)
+    encrypted = crypt(binary, raw, recipient=recipient)
     archive = out/"checkpoint.sops.json"
     archive.write_bytes(encrypted)
+    audit.update(phase="LOCAL_DECRYPT_AND_COMPARE", archive_written=True)
     decrypted = json.loads(crypt(binary, encrypted, decrypt=True, key_file=args.key_file))
     need(canonical(decrypted) == raw, "LOCAL_CHECKPOINT_ROUNDTRIP_MISMATCH")
+    audit["phase"] = "LOCAL_CHECKPOINT_COMPLETE"
     return {"status": "PARTIAL_ENCRYPTED_CHECKPOINT" if errors else "PASS_CONFIG_CHECKPOINT_LOCAL_ROUNDTRIP",
             "archive": str(archive), "archive_sha256": hashlib.sha256(encrypted).hexdigest(),
             "snapshot_objects": len(snapshots), "project_files": len(files), "read_errors": errors,
@@ -194,20 +257,25 @@ def verify(args, out, binary):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("mode", choices=("backup", "verify"))
-    for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops"):
+    for key in ("contract", "kubeconfig", "key-file", "archive", "archive-sha256", "sops", "resume-from"):
         p.add_argument("--"+key)
     p.add_argument("--output-parent", required=True)
     args = p.parse_args()
     os.umask(0o077)
     out = Path(tempfile.mkdtemp(prefix="rosa-checkpoint-", dir=args.output_parent))
+    audit = {"phase":"LOCAL_INPUT_PREFLIGHT", "encryption_attempted":False, "archive_written":False}
     try:
+        if args.resume_from:
+            need(args.mode == "backup", "RESUME_BACKUP_ONLY")
+            audit["resumed_from"] = validate_resume(args.resume_from)
         need(args.key_file, "EXISTING_SEPARATE_AGE_IDENTITY_REQUIRED")
         private_file(args.key_file, 65536)
         binary = sops_binary(args, out)
-        result = backup(args, out, binary) if args.mode == "backup" else verify(args, out, binary)
+        result = backup(args, out, binary, audit) if args.mode == "backup" else verify(args, out, binary)
     except Exception as error:
         result = {"status": "STOP_CHECKPOINT", "reason": str(error) if type(error) is RuntimeError else type(error).__name__, "deletion_ready": False}
     result.update(resource_mutations=0, SQL=0, sync_started=False, credential_values_printed=False)
+    if args.mode == "backup": result.update(audit)
     (out/"receipt.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2)); print("Private checkpoint directory: "+str(out))
     return 1 if result["status"].startswith("STOP_") else 0

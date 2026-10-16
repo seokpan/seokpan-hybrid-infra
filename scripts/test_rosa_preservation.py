@@ -81,6 +81,9 @@ class PreservationBoundaries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             d=Path(tmp)
             c={"schema":1,"expected_api":"https://test.invalid","cloud_namespace":"test-cloud","previous_inventory":str(d),"inventory_counts":{"pvc":4,"cloud_secrets":8}}
+            raw=json.dumps({"sops":{"age":[{"recipient":"age1fixture"}]}}).encode()
+            cipher=d/"cipher.json";cipher.write_bytes(raw);cipher.chmod(0o600)
+            c.update(recipient_source=str(cipher),recipient_source_sha256=hashlib.sha256(raw).hexdigest())
             for name,obj in [("contract.json",c),("receipt.json",{"pvc_count":99})]:
                 (d/name).write_text(json.dumps(obj));(d/name).chmod(0o600)
             a=argparse.Namespace(contract=str(d/"contract.json"))
@@ -93,5 +96,59 @@ class PreservationBoundaries(unittest.TestCase):
             with self.assertRaises(RuntimeError) as caught:B.crypt("unused",b"PRIVATE_TEST_VALUE",recipient="age1test")
             self.assertEqual(str(caught.exception),"CHECKPOINT_ENCRYPT_FAILED")
             self.assertNotIn("PRIVATE_TEST_VALUE",str(caught.exception))
+
+class RecipientFixBoundaries(unittest.TestCase):
+    def test_quoted_json_metadata_without_payload_recipient_confusion(self):
+        raw=json.dumps({"recipient":"age1ignoredpayload","sops":{"age":[{"recipient":"age1fixture"}]}}).encode()
+        self.assertEqual(B.age_recipient(raw),("age1fixture","SOPS_JSON"))
+    def test_block_yaml_quoted_and_indentless_lists(self):
+        for text in [
+            'payload: ENC[fixture]\nsops:\n    age:\n        - recipient: age1fixture\n          enc: fixture\n    version: 3.13.3\n',
+            'payload: ENC[fixture]\n"sops":\n  "age":\n  - enc: fixture\n    "recipient": "age1fixture"\n  version: 3.13.3\n']:
+            with self.subTest(text=text):
+                self.assertEqual(B.age_recipient(text.encode()),("age1fixture","SOPS_BLOCK_YAML"))
+    def test_missing_multiple_and_duplicate_metadata_rejected(self):
+        for raw in [b'{"recipient":"age1payload","sops":{"age":[]}}',
+                    b'{"sops":{"age":[{"recipient":"age1first"},{"recipient":"age1second"}]}}',
+                    b'{"sops":{"age":[{"recipient":"age1first","recipient":"age1second"}]}}']:
+            with self.subTest(raw=raw),self.assertRaises(RuntimeError) as caught:
+                B.age_recipient(raw)
+            self.assertNotIn("age1",str(caught.exception))
+    def test_bad_recipient_stops_before_any_cluster_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);raw=b'{"sops":{"age":[]}}'
+            cipher=d/"cipher.json";cipher.write_bytes(raw);cipher.chmod(0o600)
+            c={"schema":1,"expected_api":"https://test.invalid","recipient_source":str(cipher),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            contract=d/"contract.json";contract.write_text(json.dumps(c));contract.chmod(0o600)
+            with patch.object(B.subprocess,"run") as mocked:
+                with self.assertRaisesRegex(RuntimeError,"ONE_EXISTING_AGE_RECIPIENT"):
+                    B.backup(argparse.Namespace(contract=str(contract)),d,"unused")
+                mocked.assert_not_called()
+    def test_resume_only_known_stop_and_no_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);p=d/"receipt.json"
+            p.write_text(json.dumps({"status":"STOP_CHECKPOINT","reason":"ONE_EXISTING_AGE_RECIPIENT_REQUIRED","resource_mutations":0,"sync_started":False}));p.chmod(0o600)
+            self.assertEqual(B.validate_resume(d),str(d))
+            (d/"checkpoint.sops.json").write_text("uncertain-existing-cipher")
+            with self.assertRaisesRegex(RuntimeError,"RESUME_REQUIRED"):B.validate_resume(d)
+    def test_unrelated_stop_not_resumed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);p=d/"receipt.json"
+            p.write_text(json.dumps({"status":"STOP_CHECKPOINT","reason":"CHECKPOINT_DECRYPT_FAILED","resource_mutations":0}));p.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError,"RESUME_REQUIRED"):B.validate_resume(d)
+    def test_auth_stop_does_not_repeat_reads_or_encrypt(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);raw=b'{"sops":{"age":[{"recipient":"age1fixture"}]}}'
+            c={"schema":1,"expected_api":"https://test.invalid","cloud_namespace":"cloud","argo_namespace":"argo", "previous_inventory":str(d),"inventory_counts":{"pvc":4,"cloud_secrets":8},"recipient_source":str(d/"cipher.json"),"recipient_source_sha256":hashlib.sha256(raw).hexdigest()}
+            for name,data in [("cipher.json",raw),("contract.json",json.dumps(c).encode()),("kubeconfig",b"fixture"),("receipt.json",b'{"pvc_count":4,"secret_inventory_counts":{"cloud":8}}')]:
+                (d/name).write_bytes(data);(d/name).chmod(0o600)
+            cfg=b'{"clusters":[{"cluster":{"server":"https://test.invalid"}}]}'
+            responses=[subprocess.CompletedProcess([],0,cfg,b""),subprocess.CompletedProcess([],1,b"",b"Unauthorized")]
+            with patch.object(B.subprocess,"run",side_effect=responses) as called,patch.object(B,"crypt") as encrypted:
+                with self.assertRaisesRegex(RuntimeError,"AUTH_REQUIRED_NO_RETRY"):
+                    B.backup(argparse.Namespace(contract=str(d/"contract.json"),kubeconfig=str(d/"kubeconfig")),d,"unused")
+                self.assertEqual(called.call_count,2)
+                encrypted.assert_not_called()
 
 if __name__=="__main__":unittest.main()
