@@ -10,7 +10,7 @@ python3 scripts/register-rosa-monitoring.py INPUT_ROOT \
   --cloud-api CLOUD_API_URL --apply
 ```
 
-`NATIVE_RESULT_LOG`는 `prepare-native-runtime-pull.py`의 표준출력 기록이다. 결과에서 검증된 개인 kubeconfig를 선택하고 API·로그인 계정을 대조한다. 인증이 수락되지 않은 결과에서는 클러스터 조회를 시작하지 않는다. `oc`와 `ansible-playbook`은 설치돼 있어야 한다.
+`NATIVE_RESULT_LOG`는 `prepare-native-runtime-pull.py`의 표준출력 기록이다. Native PASS 또는 `personal_user=tjung03`이 기록된 STOP에서 보호 kubeconfig 후보를 선택한다. STOP의 사용자 기록만으로 현재 접속을 수락하지 않으며, API·실제 `oc whoami`를 다시 대조한 뒤에만 등록 대상 조회를 시작한다. Native의 인증 이후 단계가 실패해도 모니터링 조회는 독립적으로 진행할 수 있다. 사용자 확인 기록이 없는 STOP은 접속 후보로 수락하지 않는다. `oc`와 최초 등록에 필요한 `ansible-playbook`은 설치돼 있어야 한다.
 
 ## 선언과 개정
 
