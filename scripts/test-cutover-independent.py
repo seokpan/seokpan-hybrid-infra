@@ -138,6 +138,20 @@ class IndependentStagesTests(unittest.TestCase):
         load.assert_not_called()
         self.assertFalse(any(kind in ("run", "renew") for kind, _ in cloud.calls))
 
+    def test_other_pull_secret_does_not_enable_legacy_renewal(self):
+        cloud = FakeCloud("2000-01-01T00:00:00+00:00", native=True)
+        original_get = cloud.get
+        def get(args, label):
+            result = original_get(args, label)
+            if args[1] == "serviceaccount":
+                return {"imagePullSecrets": [{"name": "unrelated-pull-secret"}]}
+            return result
+        cloud.get = get
+        with self.assertRaisesRegex(m.Failure, "NATIVE_RUNTIME_DETACHED_NO_LEGACY_PULL_RELINK"), patch.object(m.importlib.util, "spec_from_file_location") as load:
+            m.pull_stage(cloud, self.root / "missing", "seokpan-cloud", "account", "user", "image", True, self.root)
+        load.assert_not_called()
+        self.assertFalse(any(kind in ("run", "renew") for kind, _ in cloud.calls))
+
     def test_remote_reader_filters_api_and_namespace_before_writer_inventory(self):
         config = self.root / "config"
         config.write_text("PRIVATE_NOT_READ")
