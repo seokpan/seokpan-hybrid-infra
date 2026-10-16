@@ -1,0 +1,60 @@
+name: Cutover readiness reader validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/collect-cutover-readiness.py'
+      - 'scripts/test-cutover-readiness.py'
+      - 'scripts/resume-cutover-independent.py'
+      - 'scripts/test-cutover-independent.py'
+      - 'scripts/check-worker-secret-free-pull.py'
+      - 'scripts/test-worker-secret-free-pull.py'
+      - 'scripts/verify-source-backend-stop.py'
+      - 'scripts/test-source-backend-stop.py'
+      - 'scripts/prepare-native-runtime-pull.py'
+      - 'scripts/test-native-runtime-pull.py'
+      - '.github/workflows/cutover-readiness-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/collect-cutover-readiness.py'
+      - 'scripts/test-cutover-readiness.py'
+      - 'scripts/resume-cutover-independent.py'
+      - 'scripts/test-cutover-independent.py'
+      - 'scripts/check-worker-secret-free-pull.py'
+      - 'scripts/test-worker-secret-free-pull.py'
+      - 'scripts/verify-source-backend-stop.py'
+      - 'scripts/test-source-backend-stop.py'
+      - 'scripts/prepare-native-runtime-pull.py'
+      - 'scripts/test-native-runtime-pull.py'
+      - '.github/workflows/cutover-readiness-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Test read-only target selection without credentials
+        run: python3 scripts/test-cutover-readiness.py
+      - name: Test isolated resource and pull renewal stages without credentials
+        run: python3 scripts/test-cutover-independent.py
+      - name: Test secret-free probes and UID cleanup without credentials
+        run: python3 scripts/test-worker-secret-free-pull.py
+      - name: Test merged-source and backend stop evidence without credentials
+        run: python3 scripts/test-source-backend-stop.py
+      - name: Test native runtime read failures and isolated personal login
+        run: python3 scripts/test-native-runtime-pull.py
+      - name: Confirm source remained unchanged
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
