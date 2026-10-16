@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import subprocess
 
 spec = importlib.util.spec_from_file_location("monitoring_bootstrap", Path(__file__).with_name("register-rosa-monitoring.py"))
 m = importlib.util.module_from_spec(spec)
@@ -123,6 +125,24 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(m.connection_from_native_log(root, log, fallback), fallback)
             with self.assertRaises(RuntimeError):
                 m.connection_from_native_log(root / "other", log, fallback)
+
+    def test_dependent_binding_and_application_validate_after_parent_creation(self):
+        files = ["role.json", "binding.json", "project.json", "application.json"]
+        tasks = m.bootstrap_tasks(["oc"], files, ["binding.json", "application.json"])
+        commands = [task["ansible.builtin.command"]["argv"] for task in tasks]
+        self.assertEqual(commands[0], ["oc", "create", "-f", "role.json", "-o", "name"])
+        self.assertEqual(commands[1], ["oc", "create", "--dry-run=server", "-f", "binding.json", "-o", "name"])
+        self.assertEqual(commands[3], ["oc", "create", "-f", "project.json", "-o", "name"])
+        self.assertEqual(commands[4], ["oc", "create", "--dry-run=server", "-f", "application.json", "-o", "name"])
+
+    def test_can_i_no_is_a_negative_result_and_impersonation_error_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = m.Runner("oc", Path(directory) / "config", Path(directory))
+            with patch.object(m.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"no\n", b"")):
+                self.assertEqual(runner.run("auth", "can-i", "create", "servicemonitors", allow_no=True).strip(), "no")
+            with patch.object(m.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", b"Forbidden: cannot impersonate")):
+                with self.assertRaisesRegex(RuntimeError, "ACCESS_DENIED"):
+                    runner.run("auth", "can-i", "create", "servicemonitors", allow_no=True)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,8 @@ AppProject는 `seokpan-cloud`의 ServiceMonitor·PrometheusRule·NetworkPolicy�
 
 생성 전 서버 dry-run과 소유 검사를 수행한다. Argo 정책은 resourceVersion·기존 정책 비교 조건을 포함한 JSON Patch로 변경한다. 같은 이름의 외부 소유 객체나 선언 차이가 있으면 덮어쓰지 않는다.
 
+참조할 Role·AppProject가 없는 경우 RoleBinding·Application의 서버 dry-run은 선행 객체 생성 직후에 수행한다. 검증이 성공해야 해당 객체를 생성한다. 이렇게 지연한 검사는 결과에 별도로 기록하며 선행 객체의 부분 생성도 보호 receipt와 Ansible 로그에 남긴다.
+
 등록 후 Controller 실효 권한 18개와 Argo 정책 반영을 확인한다. `PASS_MONITORING_REGISTERED_MANUAL_SYNC_PENDING`은 등록·권한 설정 결과이며 운영자 브라우저 권한 수락과 수동 Sync 결과는 별도다.
 
 ## 실행 경계와 실패

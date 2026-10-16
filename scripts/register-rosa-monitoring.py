@@ -93,6 +93,19 @@ def owned_same(current, desired):
     need(not current.get("operation"), "MONITORING_OPERATION_ALREADY_RUNNING")
 
 
+def bootstrap_tasks(prefix, missing, deferred):
+    tasks = []
+    for number, file in enumerate(missing):
+        if file in deferred:
+            tasks.append({"name": f"Validate dependent bootstrap object {number}",
+                          "ansible.builtin.command": {"argv": prefix + ["create", "--dry-run=server", "-f", file, "-o", "name"]},
+                          "changed_when": False})
+        tasks.append({"name": f"Create absent bootstrap object {number}",
+                      "ansible.builtin.command": {"argv": prefix + ["create", "-f", file, "-o", "name"]},
+                      "changed_when": True})
+    return tasks
+
+
 class Runner:
     def __init__(self, oc, kubeconfig, folder):
         self.prefix = [oc, "--kubeconfig=" + str(kubeconfig), "--request-timeout=25s"]
@@ -195,16 +208,22 @@ def main():
                  {"op": "replace", "path": "/spec/rbac/policy", "value": new_policy}]
         patch_file = folder / "argo-monitoring-policy-patch.json"
         patch_file.write_text(json.dumps(patch))
-        missing = []
+        missing, deferred, existing = [], [], {}
         for number, item in enumerate(objects):
             item["metadata"].setdefault("annotations", {})[OWNER] = "rosa-monitoring"
             current = runner.get(item["kind"], item["metadata"]["name"], item["metadata"]["namespace"])
+            existing[item["kind"]] = current is not None
             if current:
                 owned_same(current, item)
             else:
                 file = folder / f"object-{number}.json"
                 file.write_text(json.dumps(item))
-                runner.run("create", "--dry-run=server", "-f", str(file), "-o", "name")
+                depends_on_absent_object = ((item["kind"] == "RoleBinding" and not existing.get("Role"))
+                                           or (item["kind"] == "Application" and not existing.get("AppProject")))
+                if depends_on_absent_object:
+                    deferred.append(str(file))
+                else:
+                    runner.run("create", "--dry-run=server", "-f", str(file), "-o", "name")
                 missing.append(str(file))
         if new_policy != old_policy:
             runner.run("patch", "argocd", "openshift-gitops", "-n", ARGO_NS, "--type=json", "--patch-file", str(patch_file), "--dry-run=server", "-o", "name")
@@ -216,7 +235,7 @@ def main():
             phase = "ANSIBLE_MONITORING_REGISTRATION"
             if missing:
                 playbook = [{"name": "Register the pinned manual monitoring application", "hosts": "localhost", "connection": "local", "gather_facts": False,
-                             "tasks": [{"name": "Create an absent validated bootstrap object", "ansible.builtin.command": {"argv": [oc, "--kubeconfig=" + str(kubeconfig), "--request-timeout=25s", "create", "-f", "{{ item }}", "-o", "name"]}, "loop": missing, "changed_when": True}]}]
+                             "tasks": bootstrap_tasks(runner.prefix, missing, deferred)}]
                 play_file = folder / "monitoring-bootstrap.json"
                 play_file.write_text(json.dumps(playbook))
                 create_attempted = True
@@ -257,6 +276,7 @@ def main():
                   "project": PROJECT, "application": PROJECT, "namespace": NS, "argo_namespace": ARGO_NS,
                   "controller_service_account": SA, "source_revision": REVISION,
                   "controller_checks": 18 if args.apply else 0, "registration_method": "MINIMAL_ANSIBLE_BOOTSTRAP",
+                  "dependent_admission_checks": len(deferred),
                   "D_actions": ["get", "sync"], "D_browser_acceptance": "NOT_VERIFIED",
                   "create_attempted": create_attempted, "argo_policy_patch_attempted": policy_patch_attempted,
                   "automatic_sync": False, "sync_started": False, "monitoring_resources_synced": False,
