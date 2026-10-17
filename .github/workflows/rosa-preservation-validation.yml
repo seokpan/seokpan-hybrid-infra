@@ -10,6 +10,7 @@ on:
       - scripts/rosa-create.sh
       - scripts/rosa-lifecycle-entry.sh
       - scripts/rosa-lifecycle-entry.py
+      - scripts/collect-rosa-restoration-gaps.py
       - docs/ROSA_CHECKPOINT_LIFECYCLE.md
       - .github/workflows/rosa-preservation-validation.yml
   push:
@@ -23,6 +24,7 @@ on:
       - scripts/rosa-create.sh
       - scripts/rosa-lifecycle-entry.sh
       - scripts/rosa-lifecycle-entry.py
+      - scripts/collect-rosa-restoration-gaps.py
       - .github/workflows/rosa-preservation-validation.yml
 permissions:
   contents: read

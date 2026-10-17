@@ -415,4 +415,45 @@ class CloneableLifecycleEntryBoundaries(unittest.TestCase):
         self.assertEqual(set(L.approval_gates('create')),{'recreation_inputs_accepted','network_ready','budget_accepted'})
         self.assertIn('independent_decrypt_access_accepted',L.approval_gates('delete'))
 
+class RestorationGapBoundaries(unittest.TestCase):
+    def fixture(self):
+        G=load('collect-rosa-restoration-gaps')
+        claim={'namespace':'openshift-monitoring','name':'fixture','uid':'claim-one','volume':'pv-one'}
+        pv={'apiVersion':'v1','kind':'PersistentVolume','metadata':{'name':'pv-one','uid':'pv-uid'},
+            'spec':{'claimRef':{'namespace':claim['namespace'],'name':claim['name'],'uid':claim['uid']},
+                    'csi':{'driver':'ebs.csi.aws.com','volumeHandle':'vol-0123abc'},
+                    'capacity':{'storage':'10Gi'},'persistentVolumeReclaimPolicy':'Delete'}}
+        return G,claim,pv
+    def test_volume_mapping_is_not_data_preservation(self):
+        G,claim,pv=self.fixture();row=G.validate_pv(claim,pv)
+        self.assertEqual(row['volume_id'],'vol-0123abc');self.assertFalse(row['data_preserved'])
+        self.assertEqual(row['restore_volume'],'INPUT_REQUIRED')
+    def test_foreign_claim_or_non_ebs_cannot_enter_snapshot_plan(self):
+        G,claim,pv=self.fixture();pv['spec']['claimRef']['uid']='foreign'
+        with self.assertRaisesRegex(RuntimeError,'PV_CLAIM_OWNERSHIP'):G.validate_pv(claim,pv)
+        pv['spec']['claimRef']['uid']=claim['uid'];pv['spec']['csi']['volumeHandle']='../../other'
+        with self.assertRaisesRegex(RuntimeError,'EXACT_EBS_CSI'):G.validate_pv(claim,pv)
+    def test_automated_application_cannot_be_accepted_as_held(self):
+        G,_,_=self.fixture()
+        obj={'apiVersion':'argoproj.io/v1alpha1','kind':'Application','metadata':{'name':'fixture'},
+             'spec':{'syncPolicy':{'automated':{}}}}
+        with self.assertRaisesRegex(RuntimeError,'AUTOMATIC_APPLICATION'):G.restore_inventory([obj])
+    def test_running_cloud_workload_is_not_silently_scaled_to_zero(self):
+        G,_,_=self.fixture()
+        obj={'apiVersion':'apps/v1','kind':'Deployment','metadata':{'name':'backend','namespace':'seokpan-cloud'},'spec':{'replicas':1}}
+        with self.assertRaisesRegex(RuntimeError,'CLOUD_WORKLOAD_NOT_HELD'):G.restore_inventory([obj])
+    def test_operator_secrets_and_manual_inputs_have_separate_actions(self):
+        G,_,_=self.fixture()
+        rows=G.restore_inventory([
+            {'apiVersion':'v1','kind':'Secret','metadata':{'name':'argocd-secret'}},
+            {'apiVersion':'v1','kind':'Secret','metadata':{'name':'github-client'}}])
+        self.assertEqual(rows[0]['action'],'REGENERATE_OPERATOR_OR_TOKEN')
+        self.assertEqual(rows[1]['action'],'PROTECTED_RESUPPLY_REVIEW')
+        self.assertFalse(any(r['restored'] for r in rows))
+    def test_incomplete_old_oauth_snapshot_stops_before_cluster_reads(self):
+        G,_,_=self.fixture();get=unittest.mock.Mock()
+        with self.assertRaisesRegex(RuntimeError,'ACCEPTED_OAUTH_SNAPSHOT'):
+            G.capture({'contract':{'argo_namespace':'fixture'},'snapshots':[]},get)
+        get.assert_not_called()
+
 if __name__=="__main__":unittest.main()

@@ -62,6 +62,18 @@ Approval template (unaccepted; never auto-fill the booleans):
 
 ## Required preservation decisions
 
+### Missing-input supplement
+
+`python3 scripts/collect-rosa-restoration-gaps.py --archive /protected/config.sops.json --archive-sha256 RECEIVED_SHA --key-file /separate/keys.txt --admin-kubeconfig /existing/admin-kubeconfig --admin-credentials /existing/initial-admin.json --contract /protected/contract.json --output-parent /protected/evidence`
+
+This new task decrypts the accepted archive in memory to select missing inputs and build the restoration inventory. It does not repeat the completed independent verification or recreate the original config/Plan archives. It uses an isolated copy of the existing emergency kubeconfig, refreshing only that existing identity through a hidden PTY password prompt if authentication has expired. It creates no administrator or permission grant. Failures stop without resetting credentials or retrying denied reads.
+
+The encrypted supplement captures the previously inaccessible selected OAuth client Secret, non-token GitOps Secrets and config, OperatorGroup/Subscription/CSV, namespaced roles/bindings/accounts and exact cluster roles referenced by GitOps SA bindings. Original objects already in the accepted archive are reused. It reads only the four previously accepted monitoring PVs to bind CSI EBS IDs to claim UID/name/namespace and records monitoring StatefulSet declarations. No volume bytes or AWS snapshots are captured; the resulting volume plan explicitly retains `data_preserved=false`. Snapshot consistency, retained snapshot IDs, restoration mapping and data-read acceptance remain separate.
+
+The object inventory distinguishes protected manual inputs, operator/token regeneration, pinned bootstrap, fresh metadata, new OAuth callback mapping and held manual Applications. Active Cloud workloads or automated Applications are rejected rather than silently changed. The inventory is not an execution driver and does not set restored=true. The new encrypted supplement also requires its own external copy; the existing two independent decrypt results remain accepted.
+
+The accepted first external copy contains the config archive and Plan/State supplement, with real decryption on a host outside the Controller and ROSA. It establishes that storage/access route, not offsite disaster independence. Another Windows copy is optional additional preservation, not a prerequisite after this accepted external copy. Deletion remains unapproved while manual-input classification, volume-data preservation and the held restoration driver/config are incomplete.
+
 - The GitOps Secret-list denial stays recorded. Operator-generated server signing/TLS/session/cache inputs may need regeneration. Private repo credentials, custom TLS and other manually supplied credentials need an owner export or an explicit, tested re-supply source. Do not classify every inaccessible Secret as disposable. Delete approval remains blocked until that gap is classified.
 - PVC metadata4 is an inventory, not data. For each claim identify owner, data purpose, PV/CSI/EBS, reclaim policy, backup/snapshot and restoration evidence, or justified cache/regeneration disposition. A plaintext YAML export cannot preserve volume bytes.
 - RDS/Valkey/backups/Registry/common IAM/VPC and evidence storage are outside rosa deletion scope. Temporary data-admin use must end and required outputs must be retained. Source writers and the separate migration hold are not automatically changed by rosa cleanup. NAT/EIP cleanup needs a separate dependency/cost review.
