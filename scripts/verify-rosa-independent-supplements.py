@@ -15,6 +15,13 @@ B = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(B)
 need = B.need
 
+def handoff_rows(handoff):
+    rows=handoff.get('archives',[])
+    need(handoff.get('schema')==2 and 1<=len(rows)<=4,'BOUNDED_SUPPLEMENT_HANDOFF_REQUIRED')
+    need({r['kind'] for r in rows}<={'restoration-gaps','monitoring-snapshots','restoration-recipe','delete-review'}
+         and len({r['kind'] for r in rows})==len(rows),'EXACT_SUPPLEMENT_KINDS_REQUIRED')
+    return rows
+
 
 def accepted_path(path, root):
     p, parent = PurePosixPath(path), PurePosixPath(root)
@@ -58,10 +65,7 @@ def main():
             target.chmod(0o600)
         copy(a.source_handoff, out/'handoff.json')
         handoff = json.loads(B.private_file(out/'handoff.json', 262144))
-        rows = handoff.get('archives', [])
-        need(handoff.get('schema') == 2 and 1 <= len(rows) <= 3, 'BOUNDED_SUPPLEMENT_HANDOFF_REQUIRED')
-        need({r['kind'] for r in rows} <= {'restoration-gaps', 'monitoring-snapshots', 'restoration-recipe'}
-             and len({r['kind'] for r in rows}) == len(rows), 'EXACT_SUPPLEMENT_KINDS_REQUIRED')
+        rows = handoff_rows(handoff)
         for row in rows:
             source = accepted_path(row['path'], a.source_root)
             sha = row['sha256']
