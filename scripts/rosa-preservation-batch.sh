@@ -3,17 +3,45 @@
 set +x
 set -euo pipefail
 umask 077
-[[ $# == 9 ]] || { echo 'Usage: batch ROOT CONTRACT PREVIOUS_STOP KUBECONFIG KEY TF_DATA VAR_FILE CLUSTER_ID ROSA_CLI'; exit 2; }
+[[ $# == 9 || ( $# == 11 && ${10} == --resume-plan-from ) ]] || { echo 'Usage: batch ROOT CONTRACT PREVIOUS_STOP KUBECONFIG KEY TF_DATA VAR_FILE CLUSTER_ID ROSA_CLI [--resume-plan-from PREVIOUS_BATCH]'; exit 2; }
 project_root=$1 contract=$2 previous=$3 kubeconfig=$4 key_file=$5 tf_data=$6 var_file=$7 cluster_id=$8 rosa_cli=$9
+resume_batch=${11:-}
 tool_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 work=$(mktemp -d "$project_root/preservation-batch-XXXXXXXX")
 trap 'unset RHCS_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN task_mfa' EXIT
 
 backup_rc=0
+if [[ -n "$resume_batch" ]]; then
+  # RESUME_ARCHIVE_METADATA_ONLY: no decrypt, cluster read or backup repetition.
+  python3 -I - "$resume_batch" "$key_file" "$work" <<'PY'
+import hashlib,json,os,stat,sys
+from pathlib import Path
+def need(ok,code):
+ if not ok: raise SystemExit(code)
+def private(p,maximum):
+ s=p.lstat()
+ need(stat.S_ISREG(s.st_mode) and s.st_size <= maximum and (os.name!='posix' or (s.st_uid==os.getuid() and not s.st_mode & 0o077)),'STOP_PRIVATE_RESUME_INPUT')
+ return p.read_bytes()
+old,key,out=map(Path,sys.argv[1:])
+need(old.is_dir() and not old.is_symlink(),'STOP_PREVIOUS_BATCH_DIRECTORY')
+h=json.loads(private(old/'handoff.json',262144))
+need(h.get('schema')==1 and h.get('deletion_ready') is False and h.get('plan_exit_code')==1 and h.get('plan_phase')=='EXISTING_ROSA_TOKEN_REFRESH','STOP_RESUME_ONLY_PREPLAN_TOKEN_FAILURE')
+need(not list(old.glob('rosa-lifecycle-*')) and not (old/'plan-supplement.log').exists(),'STOP_PLAN_ALREADY_ATTEMPTED_RECONCILE')
+need(len(h.get('archives',[]))==1,'STOP_SINGLE_EXISTING_CONFIG_ARCHIVE_REQUIRED')
+row=json.JSONDecoder().raw_decode(private(old/'config-backup.log',1048576).decode().lstrip())[0]
+a=h['archives'][0];archive=Path(a['path'])
+need(a.get('kind')=='config-backup' and row.get('archive')==str(archive) and row.get('archive_sha256')==a.get('sha256') and row.get('local_decrypt_verified') is True and row.get('archive_written') is True,'STOP_ACCEPTED_BACKUP_RECEIPT_REQUIRED')
+need(hashlib.sha256(private(archive,288*1024*1024)).hexdigest()==a['sha256'],'STOP_EXISTING_ARCHIVE_HASH')
+need(str(key)==h.get('key_source') and hashlib.sha256(private(key,65536)).hexdigest()==h.get('key_sha256'),'STOP_EXISTING_KEY_BINDING')
+(out/'config-backup.log').write_text(json.dumps(row)+'\n')
+print('REUSED_ACCEPTED_CONFIG_ARCHIVE_NO_BACKUP_OR_DECRYPT_REPEATED')
+PY
+else
 python3 "$tool_dir/prepare-rosa-checkpoint.py" backup \
   --contract "$contract" --resume-from "$previous" --kubeconfig "$kubeconfig" \
   --key-file "$key_file" --output-parent "$HOME/.local/share" \
   | tee "$work/config-backup.log" || backup_rc=$?
+fi
 if [[ $backup_rc != 0 ]]; then
   printf 'STOP_BATCH_BACKUP: %s\nPrivate batch directory: %s\n' "$backup_rc" "$work"
   exit "$backup_rc"
@@ -46,8 +74,13 @@ PY
   done < <(compgen -e)
   unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ROLE_ARN AWS_WEB_IDENTITY_TOKEN_FILE TF_CLI_CONFIG_FILE TF_SESSION_SECONDS
   export AWS_REGION=ap-northeast-2 AWS_DEFAULT_REGION=ap-northeast-2 AWS_PAGER='' AWS_MAX_ATTEMPTS=1
-  plan_phase=EXISTING_ROSA_TOKEN_REFRESH
-  RHCS_TOKEN=$("$rosa_cli" token --refresh 2>"$work/rhcs-private.log") || return 1
+  if [[ -n "$resume_batch" ]]; then
+    plan_phase=EXPLICIT_ROSA_DEVICE_LOGIN
+    [[ -r /dev/tty ]] || return 1
+    "$rosa_cli" login --use-device-code </dev/tty >/dev/tty 2>/dev/tty || return 1
+  fi
+  plan_phase=ROSA_ACCESS_TOKEN_PREPARATION
+  RHCS_TOKEN=$("$rosa_cli" token --generate 2>"$work/rhcs-private.log") || return 1
   [[ -n "$RHCS_TOKEN" && "$RHCS_TOKEN" != *[[:space:]]* ]] || return 1
   export RHCS_TOKEN
   [[ -r /dev/tty ]] || return 1
@@ -69,15 +102,19 @@ plan_rc=0
 plan_phase=NOT_STARTED
 prepare_plan || plan_rc=$?
 
-seal_rc=0
+seal_rc=2
+seal_status=NOT_RUN_NO_PLAN_RECEIPT
 mapfile -t plan_dirs < <(find "$work" -mindepth 1 -maxdepth 1 -type d -name 'rosa-lifecycle-*')
 if [[ ${#plan_dirs[@]} == 1 && -f "${plan_dirs[0]}/receipt.json" ]]; then
+  seal_rc=0
+  seal_status=ATTEMPTED
   python3 "$tool_dir/prepare-rosa-checkpoint.py" seal --contract "$contract" \
     --seal-dir "${plan_dirs[0]}" --key-file "$key_file" --output-parent "$HOME/.local/share" \
     | tee "$work/plan-supplement.log" || seal_rc=$?
+  if [[ $seal_rc == 0 ]]; then seal_status=LOCAL_ROUNDTRIP_PASS; else seal_status=STOP; fi
 fi
 
-python3 -I - "$work" "$key_file" "$plan_rc" "$seal_rc" "$plan_phase" <<'PY'
+python3 -I - "$work" "$key_file" "$plan_rc" "$seal_rc" "$plan_phase" "$seal_status" <<'PY'
 import hashlib,json,stat,sys
 from pathlib import Path
 work=Path(sys.argv[1]);key=Path(sys.argv[2])
@@ -94,7 +131,8 @@ if not archives: raise SystemExit('STOP_NO_VERIFIED_ARCHIVE_HANDOFF')
 s=key.lstat()
 if not stat.S_ISREG(s.st_mode) or s.st_mode & 0o077: raise SystemExit('STOP_PRIVATE_KEY_HANDOFF_METADATA')
 result={'schema':1,'archives':archives,'key_source':str(key),'key_sha256':hashlib.sha256(key.read_bytes()).hexdigest(),
- 'plan_exit_code':int(sys.argv[3]),'supplement_exit_code':int(sys.argv[4]),'plan_phase':sys.argv[5],'deletion_ready':False}
+ 'plan_exit_code':int(sys.argv[3]),'supplement_exit_code':int(sys.argv[4]),'plan_phase':sys.argv[5],
+ 'supplement_status':sys.argv[6],'deletion_ready':False}
 (work/'handoff.json').write_text(json.dumps(result),encoding='utf-8')
 print('HANDOFF_JSON_BEGIN');print(json.dumps(result,separators=(',',':')));print('HANDOFF_JSON_END')
 print('PLAN_EXIT: '+sys.argv[3]+'; PLAN_PHASE: '+sys.argv[5]+'; SUPPLEMENT_EXIT: '+sys.argv[4])

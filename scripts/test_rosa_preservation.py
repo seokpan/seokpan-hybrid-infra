@@ -321,4 +321,50 @@ class PlanSupplementBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,"PLAN_RECEIPT_REQUIRED"):B.seal(a,d,"fixture",{})
                 crypt.assert_not_called()
 
+class AcceptedArchivePlanResumeBoundaries(unittest.TestCase):
+    def fixture(self,d):
+        old=d/'batch';old.mkdir();out=d/'out';out.mkdir()
+        archive=d/'checkpoint.sops.json';archive.write_bytes(b'encrypted-fixture-only');archive.chmod(0o600)
+        key=d/'key.txt';key.write_bytes(b'not-a-real-key-fixture');key.chmod(0o600)
+        row={'archive':str(archive),'archive_sha256':hashlib.sha256(archive.read_bytes()).hexdigest(),
+             'local_decrypt_verified':True,'archive_written':True}
+        h={'schema':1,'deletion_ready':False,'plan_exit_code':1,'plan_phase':'EXISTING_ROSA_TOKEN_REFRESH',
+           'archives':[{'path':str(archive),'sha256':row['archive_sha256'],'kind':'config-backup'}],
+           'key_source':str(key),'key_sha256':hashlib.sha256(key.read_bytes()).hexdigest()}
+        for name,v in [('config-backup.log',row),('handoff.json',h)]:
+            p=old/name;p.write_text(json.dumps(v));p.chmod(0o600)
+        return old,key,out,archive,h
+    def invoke(self,old,key,out):
+        import subprocess,sys
+        source=(HERE/'rosa-preservation-batch.sh').read_text()
+        fragment=source.split('# RESUME_ARCHIVE_METADATA_ONLY:',1)[1].split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        return subprocess.run([sys.executable,'-I','-c',fragment,str(old),str(key),str(out)],capture_output=True,text=True)
+    def test_accepted_archive_is_reused_without_encryption_or_decrypt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);old,key,out,archive,h=self.fixture(d);before=archive.read_bytes()
+            p=self.invoke(old,key,out)
+            self.assertEqual(p.returncode,0,p.stderr)
+            self.assertEqual(archive.read_bytes(),before)
+            self.assertEqual(json.loads((out/'config-backup.log').read_text())['archive_sha256'],h['archives'][0]['sha256'])
+            self.assertNotIn('not-a-real-key',p.stdout+p.stderr)
+    def test_corrupt_archive_blocks_resume_before_auth(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old,key,out,archive,h=self.fixture(Path(tmp));archive.write_bytes(b'changed')
+            p=self.invoke(old,key,out)
+            self.assertNotEqual(p.returncode,0)
+            self.assertIn('STOP_EXISTING_ARCHIVE_HASH',p.stderr)
+            self.assertFalse((out/'config-backup.log').exists())
+    def test_existing_plan_requires_reconciliation_instead_of_rerun(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old,key,out,archive,h=self.fixture(Path(tmp));(old/'rosa-lifecycle-existing').mkdir()
+            p=self.invoke(old,key,out)
+            self.assertNotEqual(p.returncode,0)
+            self.assertIn('STOP_PLAN_ALREADY_ATTEMPTED_RECONCILE',p.stderr)
+    def test_changed_operator_key_is_not_implicitly_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old,key,out,archive,h=self.fixture(Path(tmp));key.write_bytes(b'another-fixture')
+            p=self.invoke(old,key,out)
+            self.assertNotEqual(p.returncode,0)
+            self.assertIn('STOP_EXISTING_KEY_BINDING',p.stderr)
+
 if __name__=="__main__":unittest.main()
