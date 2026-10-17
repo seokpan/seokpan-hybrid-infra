@@ -2,8 +2,10 @@
 set +x
 set -euo pipefail
 umask 077
-[[ $# == 5 ]] || { echo 'Usage: ROOT RECONSTRUCTION_RECEIPT CONTRACT AGE_KEY SESSION_HELPER'; exit 2; }
+[[ $# == 5 || $# == 7 && $6 == --resume-permission-from ]] || { echo 'Usage: ROOT RECONSTRUCTION_RECEIPT CONTRACT AGE_KEY SESSION_HELPER [--resume-permission-from RUN]'; exit 2; }
 root=$1; accepted=$2; contract=$3; key=$4; helper=$5
+resume=()
+if [[ $# == 7 ]]; then resume=(--resume-permission-from "$7"); fi
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 work=$(mktemp -d "$root/monitoring-permission-batch-XXXXXXXX")
 python3 -I - "$accepted" "$helper" "$work" <<'PY'
@@ -43,7 +45,7 @@ printf '\n'
 source "$helper" bootstrap <<<"$task_mfa" >"$work/bootstrap-auth.private.log" 2>&1
 unset task_mfa
 python3 -I "$scripts/rosa-monitoring-permission.py" \
-  --reconstruction-receipt "$accepted" --output-parent "$root" --apply-exact-policy
+  --reconstruction-receipt "$accepted" --output-parent "$root" --apply-exact-policy "${resume[@]}"
 
 # The exact policy has been applied and read back under Bootstrap State. Switch
 # back to the existing ROSA role; never run volume writes under Bootstrap.

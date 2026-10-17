@@ -16,6 +16,10 @@ from urllib.parse import unquote
 TARGET='aws_iam_role_policy.tf_rosa_monitoring_preservation[0]'
 ROLE='seokpan-tf-rosa'
 POLICY='seokpan-tf-rosa-monitoring-preservation'
+REVIEWED_SAVED_INPUTS={
+    'saved.tfplan':'4177dcb72545b9a806c9c981ef8630c29273579fa5d2c4d9d40b8a05c549b340',
+    'plan-private.json':'409a969e4c642456e5a92665338be3b22f1616b8fe9b3f911b631c03c3ba395d',
+    'monitoring-scope.tfvars.json':'35bed18b1bc163172ac44434a95917403ad0919342359cbd47237d19c894e555'}
 SOURCE_SHA256={
     'main.tf':'6cea607aef78a5ddf070d0a59198b8013abb9ccfb208d8c7f645fbccc8b3bfaa',
     'iam.tf':'7ebf420f30b694300fad9843cd04549f2fc713b629a04e988ca374a186be9f7c',
@@ -63,10 +67,50 @@ def inline_size(documents):
     need(size<=10240,'ROSA_INLINE_POLICY_AGGREGATE_LIMIT_EXCEEDED_NO_APPLY')
     return size
 
-def review(plan,expected):
+def reviewed_refresh(plan):
+    """Accept only the observed attachment metadata; never attachment writes."""
+    rows=plan.get('resource_drift',[])
+    need(len(rows)==3,'EXACT_THREE_REVIEWED_METADATA_DRIFTS_REQUIRED')
+    planned={r['address']:r for r in plan.get('resource_changes',[]) if r.get('mode')=='managed'}
+    seen=set();kinds=[]
+    for row in rows:
+        address=row.get('address');change=row.get('change',{})
+        b,a=change.get('before'),change.get('after')
+        need(address not in seen and not row.get('module_address') and not row.get('previous_address')
+             and row.get('mode')=='managed' and change.get('actions')==['update']
+             and isinstance(a,dict) and isinstance(b,dict),'REVIEWED_REFRESH_IDENTITY_REQUIRED')
+        seen.add(address)
+        keys={k for k in set(a)|set(b) if a.get(k)!=b.get(k) or (k in a)!=(k in b)}
+        if address in ('aws_iam_policy.tf_foundation_hybrid','aws_iam_policy.tf_foundation_hybrid_ec2'):
+            need(row.get('type')=='aws_iam_policy' and keys=={'attachment_count'}
+                 and type(a.get('attachment_count')) is int and a['attachment_count']>=0
+                 and type(b.get('attachment_count')) is int and b['attachment_count']>=0,
+                 'ONLY_REVIEWED_ATTACHMENT_COUNT_REFRESH_ALLOWED')
+            kinds.append('POLICY_ATTACHMENT_COUNT')
+        else:
+            match=re.fullmatch(r'aws_iam_role\.tf\["(bootstrap|foundation|rosa)"\]',address or '')
+            need(match is not None
+                 and row.get('type')=='aws_iam_role' and keys=={'managed_policy_arns'},
+                 'ONLY_REVIEWED_ROLE_ATTACHMENT_METADATA_ALLOWED')
+            need(a.get('name')=='seokpan-tf-'+match.group(1),'EXACT_EXISTING_ROLE_METADATA_REQUIRED')
+            for values in (b.get('managed_policy_arns'),a.get('managed_policy_arns')):
+                need(isinstance(values,list) and len(values)==len(set(values))
+                     and all(isinstance(v,str) and re.fullmatch(r'arn:aws:iam::(?:[0-9]{12}|aws):policy/.+',v) for v in values),
+                     'POLICY_ARN_METADATA_REQUIRED')
+            kinds.append('ROLE_MANAGED_POLICY_METADATA')
+        current=planned.get(address,{}).get('change',{})
+        need(current.get('actions')==['no-op'] and current.get('before')==a and current.get('after')==a,
+             'REFRESHED_RESOURCE_MUST_REMAIN_IDENTICAL_NOOP')
+    need(kinds.count('POLICY_ATTACHMENT_COUNT')==2 and kinds.count('ROLE_MANAGED_POLICY_METADATA')==1,
+         'EXACT_REVIEWED_REFRESH_SET_REQUIRED')
+    return {'policy_attachment_count_refresh':2,'role_attachment_metadata_refresh':1,'attachment_writes':0}
+
+def review(plan,expected,allow_reviewed_refresh=False):
     need(plan.get('complete') is True and not plan.get('errored') and plan.get('applyable') is True,
          'COMPLETE_APPLYABLE_INCREMENT_PLAN_REQUIRED')
-    need(not plan.get('resource_drift'),'BOOTSTRAP_DRIFT_REQUIRES_OWNER_REVIEW_NO_APPLY')
+    if plan.get('resource_drift'):
+        need(allow_reviewed_refresh,'BOOTSTRAP_DRIFT_REQUIRES_OWNER_REVIEW_NO_APPLY')
+        reviewed_refresh(plan)
     changed=[]
     for row in plan.get('resource_changes',[]):
         if row.get('mode')=='data':continue
@@ -188,6 +232,51 @@ class Run:
         value=self.aws(['iam','get-role-policy','--role-name',ROLE,'--policy-name',POLICY],missing=True)
         return None if value is None else value['PolicyDocument']
 
+def resume_saved(a,out,accepted,manifest,expected,run,aggregate):
+    """Reuse the one inspected plan; keep source, State and exact-policy guards."""
+    old=Path(a.resume_permission_from).resolve()
+    need(old!=out and old.is_dir() and not Path(a.resume_permission_from).is_symlink(),'EXISTING_PERMISSION_RUN_REQUIRED')
+    receipt=read(old/'receipt.json')
+    need(receipt.get('reason')=='BOOTSTRAP_DRIFT_REQUIRES_OWNER_REVIEW_NO_APPLY','REVIEWED_DRIFT_STOP_REQUIRED')
+    for name,value in REVIEWED_SAVED_INPUTS.items():
+        private(old/name);need(sha(old/name)==value,'INSPECTED_PLAN_OR_VARIABLE_HASH_CHANGED')
+    target=source_files(old/'source')
+    before=read(old/'before.tfstate')
+    need(before.get('serial')==17 and isinstance(before.get('lineage'),str),'INSPECTED_PRIOR_STATE_REQUIRED')
+    backend=read(old/'tf-data/terraform.tfstate')['backend']
+    need(backend['type']=='s3' and backend['config']['key']=='phase2/bootstrap/terraform.tfstate'
+         and backend['config']['bucket']=='seokpan-tfstate-'+manifest['account_id']
+         and backend['config']['region']=='ap-northeast-2','BOOTSTRAP_BACKEND_ONLY')
+    run.env['TF_DATA_DIR']=str(old/'tf-data')
+    tf=['terraform','-chdir='+str(target)]
+    need(json.loads(run.command(tf+['version','-json']).stdout).get('terraform_version')=='1.16.4',
+         'ADOPTED_TERRAFORM_1_16_4_REQUIRED')
+    plan=read(old/'plan-private.json');saved=old/'saved.tfplan'
+    rendered=json.loads(run.command(tf+['show','-json',str(saved)]).stdout)
+    need(rendered==plan,'SAVED_BINARY_AND_INSPECTED_JSON_DIFFER')
+    reviewed=review(plan,expected,allow_reviewed_refresh=True)
+    result={'status':'PASS_EXACT_MONITORING_SNAPSHOT_POLICY_PLAN_NOT_APPLIED','review':reviewed,
+        'refresh_review':reviewed_refresh(plan),'plan_sha256':sha(saved),'policy_sha256':accepted['policy_sha256'],
+        'scope':'MONITORING_SNAPSHOTS_ONLY','resumed_from':str(old),'bootstrap_plan_repeated':False,
+        'rosa_plan_repeated':False,'iam_apply_attempted':False,'deletion_started':False,'deletion_ready':False,
+        'rosa_inline_policy_aggregate_candidate_characters':aggregate}
+    save(out/'plan-review.json',result)
+    if not a.apply_exact_policy:return result
+    current=json.loads(run.command(tf+['state','pull']).stdout)
+    need((before['lineage'],before['serial'])==(current.get('lineage'),current.get('serial')),
+         'BOOTSTRAP_STATE_CHANGED_NO_APPLY')
+    need(run.role_policy() is None,'INLINE_POLICY_CREATED_CONCURRENTLY_NO_OVERWRITE')
+    for name,value in REVIEWED_SAVED_INPUTS.items():need(sha(old/name)==value,'INSPECTED_PLAN_OR_VARIABLE_HASH_CHANGED')
+    source_files(old/'source')
+    marker=Path(a.reconstruction_receipt).parent/'snapshot-permission-apply.NO_AUTOMATIC_RETRY.json'
+    with marker.open('x') as f:json.dump({'plan_sha256':sha(saved),'result_directory':str(out)},f)
+    run.command(tf+['apply','-input=false','-no-color','-lock-timeout=60s',str(saved)])
+    need(policy_value(run.role_policy())==policy_value(expected),'APPLIED_POLICY_READBACK_DIFFERS_NO_REAPPLY')
+    result.update(status='PASS_EXACT_MONITORING_SNAPSHOT_POLICY_APPLIED_AND_READBACK',
+                  iam_apply_attempted=True,accepted_policy_reused=False)
+    save(Path(a.reconstruction_receipt).parent/'monitoring-policy-accepted.json',result)
+    return result
+
 def execute(a,out):
     accepted,c,m,source,expected=preflight(a.reconstruction_receipt)
     run=Run(out)
@@ -211,6 +300,8 @@ def execute(a,out):
         value=run.aws(['iam','get-role-policy','--role-name',ROLE,'--policy-name',name])['PolicyDocument']
         policies.append(json.loads(unquote(value)) if isinstance(value,str) else value)
     aggregate=inline_size(policies+[expected])
+    if getattr(a,'resume_permission_from',None):
+        return resume_saved(a,out,accepted,m,expected,run,aggregate)
     # Use an isolated copy of pinned source; no init or edits in another owner's workspace.
     target=out/'source/terraform/bootstrap';target.mkdir(parents=True,mode=0o700)
     for name in SOURCE_SHA256:(target/name).write_bytes((source/name).read_bytes())
@@ -259,6 +350,7 @@ def main():
     p.add_argument('--reconstruction-receipt',required=True)
     p.add_argument('--output-parent',required=True)
     p.add_argument('--apply-exact-policy',action='store_true')
+    p.add_argument('--resume-permission-from')
     a=p.parse_args();os.umask(0o077)
     out=Path(tempfile.mkdtemp(prefix='rosa-monitoring-permission-',dir=a.output_parent))
     try:result=execute(a,out)

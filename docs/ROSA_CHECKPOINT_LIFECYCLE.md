@@ -88,6 +88,15 @@ Approval template (unaccepted; never auto-fill the booleans):
 
 ## Required preservation decisions
 
+### Reuse an inspected Bootstrap permission plan
+
+`rosa-monitoring-permission-resume.sh ROOT RECEIPT CONTRACT AGE_KEY SESSION_HELPER --resume-permission-from EXISTING_RUN`
+reuses the inspected saved Bootstrap plan without another init/Plan. This opt-in path binds the binary plan, JSON and explicit variables to their reviewed SHA256 values, verifies all eleven source/lock files and the original backend/State serial, and compares the binary's rendered JSON before applying. Only the observed two policy `attachment_count` refreshes and one execution-role `managed_policy_arns` refresh are accepted. Each refreshed resource must remain an identical planned `no-op`. Policy documents, role trust, attachment writes, other drift or scope changes stop execution. The default planning path still rejects all drift.
+
+The only planned write is creation of the exact monitoring inline policy on the existing ROSA execution role. A State race or existing policy blocks application. An exclusive attempt marker and exact policy readback protect interrupted execution; the normal accepted-policy cache supports continuing to snapshots without reapplying IAM. No direct State editing or additional administrator identity is used.
+
+OpenShift/OCM administrator access and AWS Terraform-role authorization are separate. Existing successful creation and a saved deletion Plan do not prove every future write permission. Keep the existing management/trust permissions and separately accept new-volume restoration permissions before recreation. An IAM simulator or read/Plan result is not a guarantee of service-side deletion/creation success. The monitoring increment does not grant network, RDS, IAM administration or volume-restore access.
+
 ### Monitoring data and incremental independent supplements
 
 `rosa-monitoring-volume-backup.py capture` consumes the accepted encrypted gap archive and saved ROSA manifest/State, uses only the existing ROSA purpose session, and verifies exact claim UID/cluster/CSI volume ownership, source encryption, AZ/filesystem and the complete four-volume permission dry-run set before creating any snapshot. No broader identity or IAM policy fallback is attempted. Each non-idempotent creation is journaled before its API call; a partial or unknown outcome blocks another capture. `status --resume-journal ...` only reads already-known snapshot IDs. It never creates missing snapshots. The helper does not run a Terraform Plan or Kubernetes/ROSA/network/Data mutation.
