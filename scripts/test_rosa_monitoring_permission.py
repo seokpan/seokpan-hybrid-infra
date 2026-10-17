@@ -25,7 +25,16 @@ def plan():
 class ExactMonitoringPermission(unittest.TestCase):
     @unittest.skipUnless((Path(__file__).parent.parent/'terraform/bootstrap').is_dir(),'Repository-only pinned source check')
     def test_pinned_bootstrap_sources_match_checkout(self):
-        self.assertTrue(M.source_files(Path(__file__).parent.parent).is_dir())
+        root=Path(__file__).parent.parent/'terraform/bootstrap'
+        names={p.name for p in root.glob('*.tf')}|{'.terraform.lock.hcl'}
+        self.assertEqual(names,set(M.SOURCE_SHA256)|{'rosa_monitoring_restore.tf'})
+        for name,expected in M.SOURCE_SHA256.items():
+            if name!='iam.tf':self.assertEqual(M.sha(root/name),expected)
+        spec=importlib.util.spec_from_file_location('extended_restore',Path(__file__).with_name('rosa-monitoring-restore-permission.py'))
+        r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+        text=(root/'iam.tf').read_text();self.assertEqual(text.count(r.NEW_SOURCE),1)
+        self.assertEqual(hashlib.sha256(text.replace(r.NEW_SOURCE,r.OLD_SOURCE).encode()).hexdigest(),M.SOURCE_SHA256['iam.tf'])
+        self.assertEqual(M.sha(root/'rosa_monitoring_restore.tf'),r.NEW_HCL_SHA)
     def test_only_exact_inline_policy_create_passes(self):
         self.assertEqual(M.review(plan(),policy()),{'inline_policy_create':1,'managed_update':0,'managed_delete':0,'other_managed_changes':0})
     def test_other_role_trust_or_network_changes_stop(self):

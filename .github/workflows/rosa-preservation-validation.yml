@@ -22,6 +22,11 @@ on:
       - scripts/test_rosa_monitoring_saved_resume.py
       - scripts/rosa-monitoring-finalize.py
       - scripts/test_rosa_monitoring_finalize.py
+      - scripts/rosa-monitoring-restore-permission.py
+      - scripts/rosa-monitoring-restore-permission.sh
+      - scripts/test_rosa_monitoring_restore_permission.py
+      - terraform/bootstrap/rosa_monitoring_restore.tf
+      - terraform/bootstrap/iam.tf
       - scripts/prepare-rosa-reconstruction.py
       - scripts/rosa-fresh-management.py
       - scripts/rosa-gitops-bootstrap.py
@@ -52,6 +57,11 @@ on:
       - scripts/test_rosa_monitoring_saved_resume.py
       - scripts/rosa-monitoring-finalize.py
       - scripts/test_rosa_monitoring_finalize.py
+      - scripts/rosa-monitoring-restore-permission.py
+      - scripts/rosa-monitoring-restore-permission.sh
+      - scripts/test_rosa_monitoring_restore_permission.py
+      - terraform/bootstrap/rosa_monitoring_restore.tf
+      - terraform/bootstrap/iam.tf
       - scripts/prepare-rosa-reconstruction.py
       - scripts/rosa-fresh-management.py
       - scripts/rosa-gitops-bootstrap.py
@@ -69,10 +79,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: python3 -m unittest discover -s scripts -p 'test_rosa_*.py' -v
       - run: bash -n scripts/rosa-preservation-batch.sh
-      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh scripts/rosa-held-restoration.sh scripts/rosa-restore.sh scripts/rosa-monitoring-permission-resume.sh; do bash -n "$path"; done
+      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh scripts/rosa-held-restoration.sh scripts/rosa-restore.sh scripts/rosa-monitoring-permission-resume.sh scripts/rosa-monitoring-restore-permission.sh; do bash -n "$path"; done
       - name: Validate only the added snapshot permission HCL syntax
         run: |
           curl --fail --silent --show-error --location https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip -o /tmp/rosa-terraform.zip
           echo 'dc94af0eef1147718ad7c8daea792ed199e3e0492eec180d0adafa2a65a879df  /tmp/rosa-terraform.zip' | sha256sum --check
           unzip -q /tmp/rosa-terraform.zip -d /tmp/rosa-terraform
-          /tmp/rosa-terraform/terraform fmt -check terraform/bootstrap/rosa_monitoring_preservation.tf
+          /tmp/rosa-terraform/terraform fmt -check terraform/bootstrap/rosa_monitoring_preservation.tf terraform/bootstrap/rosa_monitoring_restore.tf terraform/bootstrap/iam.tf
