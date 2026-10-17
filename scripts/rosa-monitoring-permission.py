@@ -214,7 +214,7 @@ def execute(a,out):
     # Use an isolated copy of pinned source; no init or edits in another owner's workspace.
     target=out/'source/terraform/bootstrap';target.mkdir(parents=True,mode=0o700)
     for name in SOURCE_SHA256:(target/name).write_bytes((source/name).read_bytes())
-    inputs=out/'monitoring-scope.tfvars.json';inputs.write_bytes(private(accepted['terraform_scope_inputs']))
+    inputs=out/'monitoring-scope.tfvars.json';inputs.write_bytes(private(accepted['terraform_scope_inputs']));inputs.chmod(0o600)
     input_sha=sha(inputs)
     run.env['TF_DATA_DIR']=str(out/'tf-data')
     tf=['terraform','-chdir='+str(target)]
