@@ -25,6 +25,9 @@ on:
       - scripts/rosa-monitoring-restore-permission.py
       - scripts/rosa-monitoring-restore-permission.sh
       - scripts/test_rosa_monitoring_restore_permission.py
+      - scripts/rosa-monitoring-restore-reconcile.py
+      - scripts/rosa-monitoring-restore-reconcile.sh
+      - scripts/test_rosa_monitoring_restore_reconcile.py
       - terraform/bootstrap/rosa_monitoring_restore.tf
       - terraform/bootstrap/iam.tf
       - scripts/prepare-rosa-reconstruction.py
@@ -79,7 +82,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: python3 -m unittest discover -s scripts -p 'test_rosa_*.py' -v
       - run: bash -n scripts/rosa-preservation-batch.sh
-      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh scripts/rosa-held-restoration.sh scripts/rosa-restore.sh scripts/rosa-monitoring-permission-resume.sh scripts/rosa-monitoring-restore-permission.sh; do bash -n "$path"; done
+      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh scripts/rosa-held-restoration.sh scripts/rosa-restore.sh scripts/rosa-monitoring-permission-resume.sh scripts/rosa-monitoring-restore-permission.sh scripts/rosa-monitoring-restore-reconcile.sh; do bash -n "$path"; done
       - name: Validate only the added snapshot permission HCL syntax
         run: |
           curl --fail --silent --show-error --location https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip -o /tmp/rosa-terraform.zip
