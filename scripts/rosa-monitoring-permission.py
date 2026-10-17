@@ -21,7 +21,13 @@ SOURCE_SHA256={
     'iam.tf':'7ebf420f30b694300fad9843cd04549f2fc713b629a04e988ca374a186be9f7c',
     'backend.tf':'74caaf5cb9d2f9065ee73df7ac85e5f6088396f2496ebbc5de01ebb68fe228de',
     '.terraform.lock.hcl':'767d367bcc4c4ab614647735f7f3e074f59e08ba2632bebf061d4fac35cbb155',
-    'rosa_monitoring_preservation.tf':'44e17dfa952c0a6756c913086b75d1d3ad35ea1e5226d77c6dedd494f9b64ee6'}
+    'rosa_monitoring_preservation.tf':'44e17dfa952c0a6756c913086b75d1d3ad35ea1e5226d77c6dedd494f9b64ee6',
+    'hybrid_ec2_iam.tf':'34cf56267d56ae76fcc2067b13ea57d1fc17a7eda078247100bd9dcf03c616b0',
+    'hybrid_iam.tf':'f29837e0799b2746e31eef6f71c0590be7218fda9fd465b9ac5b057f0da57f14',
+    'rosa_cluster_iam_execution.tf':'c5b4ad4af7a047465a5225955424134e61ec80f9e0f5212976bf768350c2e1d7',
+    'rosa_data_connection_permissions.tf':'23c5aa29fb563bd8b7336b2834cdfed9be041290c6eddc4dbd74c9446b955c79',
+    'rosa_iam_execution.tf':'c155f0e4823e339be9f3ab7df4399048e8cc4103670cf3c8eb10bf85f730bb91',
+    'rosa_plan_read_permissions.tf':'6c1ea74aa8e45d109052cc6af8ce236db1f15900d00991c5b2c1016f25821b75'}
 
 def need(ok,why):
     if not ok:raise RuntimeError(why)
@@ -51,6 +57,11 @@ def policy_value(raw):
         rows.append(value)
     need(len({s['Sid'] for s in rows})==len(rows),'UNIQUE_POLICY_STATEMENTS_REQUIRED')
     return {'Version':raw['Version'],'Statement':sorted(rows,key=lambda s:s['Sid'])}
+
+def inline_size(documents):
+    size=sum(len(json.dumps(d,ensure_ascii=True,separators=(',',':'))) for d in documents)
+    need(size<=10240,'ROSA_INLINE_POLICY_AGGREGATE_LIMIT_EXCEEDED_NO_APPLY')
+    return size
 
 def review(plan,expected):
     need(plan.get('complete') is True and not plan.get('errored') and plan.get('applyable') is True,
@@ -110,6 +121,49 @@ def preflight(receipt_path):
          'PREVIOUS_UNKNOWN_PERMISSION_APPLY_REQUIRES_RECONCILIATION')
     return accepted,config,manifest,source,expected
 
+
+def previous_settings(state,rosa_inputs,account):
+    """Preserve applied flags from this State; never disable existing IAM by default."""
+    resources={(r['type'],r['name']):r for r in state.get('resources',[]) if r.get('mode')=='managed' and not r.get('module')}
+    def attributes(kind,name):
+        instances=resources.get((kind,name),{}).get('instances',[])
+        need(len(instances)<=1,'AMBIGUOUS_EXISTING_BOOTSTRAP_PERMISSION')
+        return instances[0]['attributes'] if instances else None
+    def document(name):
+        a=attributes('aws_iam_role_policy',name)
+        return None if a is None else json.loads(a['policy'])
+    result={}
+    a=attributes('aws_iam_policy','tf_foundation_rosa_iam')
+    attachment=attributes('aws_iam_role_policy_attachment','tf_foundation_rosa_iam')
+    need((a is not None)==(attachment is not None),'PARTIAL_EXISTING_ACCOUNT_PERMISSION_REQUIRES_REVIEW')
+    result['enable_rosa_account_iam_permissions']=a is not None
+    cluster=document('tf_rosa_cluster_iam')
+    result['enable_rosa_cluster_iam_permissions']=cluster is not None
+    if cluster:
+        prefix='arn:aws:iam::'+account+':policy/seokpan-fnd-rosa-openshift-'
+        arns=set()
+        for s in cluster['Statement']:
+            for values in s.get('Condition',{}).values():
+                value=values.get('iam:PolicyARN',[])
+                arns.update(x for x in (value if isinstance(value,list) else [value]) if x.startswith(prefix))
+        need(len(arns)==6,'EXACT_EXISTING_SIX_OPERATOR_POLICIES_REQUIRED')
+        result['rosa_cluster_operator_policy_arns']={x.split(':policy/',1)[1]:x for x in sorted(arns)}
+    reader=document('tf_rosa_first_plan_read')
+    result['enable_rosa_plan_read_permissions']=reader is not None
+    if reader:
+        vpcs=re.findall(r'arn:aws:ec2:ap-northeast-2:'+account+r':vpc/(vpc-[a-f0-9]+)',json.dumps(reader))
+        need(len(set(vpcs))==1 and vpcs[0]==rosa_inputs['foundation']['vpc_id'],'EXISTING_VPC_READ_SCOPE_DIFFERS')
+        result['rosa_plan_foundation_vpc_id']=vpcs[0]
+    data=document('tf_rosa_data_connection')
+    result['enable_rosa_data_connection_permissions']=data is not None
+    if data:
+        ids=set(re.findall(r'arn:aws:ec2:ap-northeast-2:'+account+r':security-group/(sg-[a-f0-9]+)',json.dumps(data)))
+        supplied=rosa_inputs['foundation']['data_security_groups']
+        need(set(supplied)=={'mariadb','redis'} and ids==set(supplied.values()) and len(ids)==2,
+             'EXISTING_DATA_PERMISSION_SCOPE_DIFFERS')
+        result['rosa_data_security_group_ids']={'rds':supplied['mariadb'],'redis':supplied['redis']}
+    return result
+
 class Run:
     def __init__(self,out):
         self.out=out;self.count=0
@@ -150,6 +204,13 @@ def execute(a,out):
     marker=Path(a.reconstruction_receipt).parent/'snapshot-permission-apply.NO_AUTOMATIC_RETRY.json'
     need(not marker.exists(),'PREVIOUS_PERMISSION_APPLY_REQUIRES_RECONCILIATION')
     need(run.role_policy() is None,'EXISTING_UNMANAGED_INLINE_POLICY_NO_TAKEOVER')
+    names=run.aws(['iam','list-role-policies','--role-name',ROLE]).get('PolicyNames')
+    need(isinstance(names,list) and len(names)<=32 and len(set(names))==len(names),'BOUNDED_INLINE_POLICY_INVENTORY_REQUIRED')
+    policies=[]
+    for name in names:
+        value=run.aws(['iam','get-role-policy','--role-name',ROLE,'--policy-name',name])['PolicyDocument']
+        policies.append(json.loads(unquote(value)) if isinstance(value,str) else value)
+    aggregate=inline_size(policies+[expected])
     # Use an isolated copy of pinned source; no init or edits in another owner's workspace.
     target=out/'source/terraform/bootstrap';target.mkdir(parents=True,mode=0o700)
     for name in SOURCE_SHA256:(target/name).write_bytes((source/name).read_bytes())
@@ -165,6 +226,9 @@ def execute(a,out):
          and backend['config']['bucket']=='seokpan-tfstate-'+m['account_id']
          and backend['config']['region']=='ap-northeast-2','BOOTSTRAP_BACKEND_ONLY')
     before=json.loads(run.command(tf+['state','pull']).stdout);save(out/'before.tfstate',before)
+    legacy=previous_settings(before,read(c['create']['var_file']),m['account_id'])
+    settings=read(inputs);need(not (set(settings)&set(legacy)),'NEW_SCOPE_MUST_NOT_OVERRIDE_EXISTING_FLAGS')
+    settings.update(legacy);save(inputs,settings);input_sha=sha(inputs)
     saved=out/'saved.tfplan'
     run.command(tf+['plan','-input=false','-no-color','-lock-timeout=60s','-detailed-exitcode',
         '-var-file='+str(inputs),'-out='+str(saved)],codes=(0,2))
@@ -173,6 +237,8 @@ def execute(a,out):
     result={'status':'PASS_EXACT_MONITORING_SNAPSHOT_POLICY_PLAN_NOT_APPLIED','review':reviewed,
             'plan_sha256':sha(saved),'policy_sha256':accepted['policy_sha256'],'scope':'MONITORING_SNAPSHOTS_ONLY',
             'rosa_plan_repeated':False,'iam_apply_attempted':False,'deletion_started':False,'deletion_ready':False}
+    result['existing_permission_flags_preserved']={k:v for k,v in legacy.items() if k.startswith('enable_')}
+    result['rosa_inline_policy_aggregate_candidate_characters']=aggregate
     save(out/'plan-review.json',result)
     if not a.apply_exact_policy:return result
     need(sha(saved)==result['plan_sha256'] and sha(inputs)==input_sha

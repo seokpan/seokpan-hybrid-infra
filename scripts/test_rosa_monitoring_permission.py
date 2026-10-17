@@ -58,17 +58,40 @@ class ExactMonitoringPermission(unittest.TestCase):
             with patch.object(M.subprocess,'run') as calls:
                 with self.assertRaisesRegex(RuntimeError,'ACCEPTED_RECONSTRUCTION'):M.preflight(p)
                 calls.assert_not_called()
+    def test_existing_vpc_and_data_permissions_remain_enabled_with_same_scope(self):
+        account='123456789012'
+        rows=[]
+        for name,resources in [('tf_rosa_first_plan_read',['arn:aws:ec2:ap-northeast-2:'+account+':vpc/vpc-abc']),
+              ('tf_rosa_data_connection',['arn:aws:ec2:ap-northeast-2:'+account+':security-group/sg-abc',
+                                          'arn:aws:ec2:ap-northeast-2:'+account+':security-group/sg-def'])]:
+            rows.append({'mode':'managed','type':'aws_iam_role_policy','name':name,
+                         'instances':[{'attributes':{'policy':json.dumps({'Statement':[{'Resource':resources}]})}}]})
+        inputs={'foundation':{'vpc_id':'vpc-abc','data_security_groups':{'mariadb':'sg-abc','redis':'sg-def'}}}
+        flags=M.previous_settings({'resources':rows},inputs,account)
+        self.assertTrue(flags['enable_rosa_plan_read_permissions']);self.assertTrue(flags['enable_rosa_data_connection_permissions'])
+        self.assertEqual(flags['rosa_data_security_group_ids'],{'rds':'sg-abc','redis':'sg-def'})
+        inputs['foundation']['data_security_groups']['redis']='sg-999'
+        with self.assertRaisesRegex(RuntimeError,'EXISTING_DATA_PERMISSION_SCOPE_DIFFERS'):M.previous_settings({'resources':rows},inputs,account)
+    def test_absent_existing_permissions_are_not_enabled_by_guess(self):
+        flags=M.previous_settings({'resources':[]},{},'123456789012')
+        self.assertTrue(flags and all(v is False for v in flags.values()))
+    def test_partial_existing_account_attachment_requires_reconciliation(self):
+        state={'resources':[{'mode':'managed','type':'aws_iam_policy','name':'tf_foundation_rosa_iam','instances':[{'attributes':{}}]}]}
+        with self.assertRaisesRegex(RuntimeError,'PARTIAL_EXISTING_ACCOUNT_PERMISSION'):M.previous_settings(state,{},'123456789012')
 
     def execute_fixture(self,root,apply,race=False):
         source=root/'source-original';source.mkdir();(source/'main.tf').write_text('fixture-only')
         out=root/'out';out.mkdir();scope=root/'scope.json';M.save(scope,{'fixture':'scope'})
         receipt=root/'reconstruction/receipt.json';receipt.parent.mkdir();M.save(receipt,{})
         accepted={'terraform_scope_inputs':str(scope),'policy_sha256':'f'*64}
+        inputs=root/'inputs.json';M.save(inputs,{'foundation':{}})
         state={'lineage':'fixture-lineage','serial':1}
         class FakeRun:
             instance=None
             def __init__(self,folder):self.env={};self.out=folder;self.applies=0;self.pulls=0;self.policy_reads=0;FakeRun.instance=self
-            def aws(self,args):return {'Account':'123456789012','Arn':'arn:aws:sts::123456789012:assumed-role/seokpan-tf-bootstrap/test'}
+            def aws(self,args):
+                if args[:2]==['iam','list-role-policies']:return {'PolicyNames':[]}
+                return {'Account':'123456789012','Arn':'arn:aws:sts::123456789012:assumed-role/seokpan-tf-bootstrap/test'}
             def role_policy(self):
                 self.policy_reads+=1
                 return policy() if self.policy_reads>=3 else None
@@ -86,7 +109,7 @@ class ExactMonitoringPermission(unittest.TestCase):
                 else:raise AssertionError(args)
                 return subprocess.CompletedProcess(args,0,json.dumps(data).encode(),b'')
         a=argparse.Namespace(reconstruction_receipt=str(receipt),apply_exact_policy=apply)
-        patches=(patch.object(M,'preflight',return_value=(accepted,{}, {'account_id':'123456789012'},source,policy())),
+        patches=(patch.object(M,'preflight',return_value=(accepted,{'create':{'var_file':str(inputs)}}, {'account_id':'123456789012'},source,policy())),
                  patch.object(M,'Run',FakeRun),patch.object(M,'SOURCE_SHA256',{'main.tf':M.sha(source/'main.tf')}))
         with patches[0],patches[1],patches[2]:
             if race:
@@ -104,5 +127,8 @@ class ExactMonitoringPermission(unittest.TestCase):
             self.assertEqual(run.applies,1);self.assertEqual(result['status'],'PASS_EXACT_MONITORING_SNAPSHOT_POLICY_APPLIED_AND_READBACK')
     def test_state_race_stops_before_apply(self):
         with tempfile.TemporaryDirectory() as tmp:self.assertEqual(self.execute_fixture(Path(tmp),True,race=True).applies,0)
+    def test_existing_inline_policies_count_toward_role_aggregate_limit(self):
+        self.assertLess(M.inline_size([policy(),policy()]),10240)
+        with self.assertRaisesRegex(RuntimeError,'AGGREGATE_LIMIT_EXCEEDED'):M.inline_size([{'fixture':'x'*10240},policy()])
 
 if __name__=='__main__':unittest.main()
