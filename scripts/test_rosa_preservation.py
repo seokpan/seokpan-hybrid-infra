@@ -536,5 +536,12 @@ class MonitoringSnapshotBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'DIFFERENT_READY_NEW_ROSA'):
                     M.restore_volumes(args,{'cluster_id':'sameoriginal','account_id':'123456789012'},d,'fixture',{})
                 calls.assert_not_called()
+    def test_restore_review_does_not_print_secret_payload(self):
+        M,_,_=self.fixture()
+        gap={'restoration_inventory':[{'id':'v1|Secret|fixture|client','action':'PROTECTED_RESUPPLY_REVIEW'}],
+             'snapshots':[{'kind':'Secret','metadata':{'name':'client'},'data':{'clientSecret':'fixture-sensitive'}}]}
+        value=M.restoration_review(gap)
+        self.assertEqual(value['protected_secret_ids'],['v1|Secret|fixture|client'])
+        self.assertNotIn('fixture-sensitive',json.dumps(value));self.assertNotIn('clientSecret',json.dumps(value))
 
 if __name__=="__main__":unittest.main()

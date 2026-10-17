@@ -35,6 +35,17 @@ def exclusive(path, value):
         f.write(B.canonical(value))
 
 
+def restoration_review(gap):
+    """Object identities/pinned versions only, never Secret data or client IDs."""
+    inventory = gap.get('restoration_inventory', [])
+    need(len(inventory) <= 200, 'BOUNDED_RESTORATION_INVENTORY_REQUIRED')
+    return {
+        'unclassified_object_ids': [r['id'] for r in inventory if r['action'] == 'REVIEW_BEFORE_REPLAY'],
+        'protected_secret_ids': [r['id'] for r in inventory if r['action'] == 'PROTECTED_RESUPPLY_REVIEW'],
+        'operator_versions': [{'name': o['metadata']['name'], 'version': o.get('spec', {}).get('version')}
+                              for o in gap.get('snapshots', []) if o.get('kind') == 'ClusterServiceVersion']}
+
+
 def aws(argv, out, allow_dry_run=False):
     env = os.environ.copy()
     for key in ('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_ROLE_ARN', 'AWS_WEB_IDENTITY_TOKEN_FILE'):
@@ -313,10 +324,16 @@ def main():
         manifest = json.loads(B.private_file(a.delete_manifest, 1048576))
         need(manifest.get('action') == 'delete' and re.fullmatch(r'[0-9]{12}', manifest.get('account_id', '')),
              'ACCEPTED_ROSA_MANIFEST_REQUIRED')
+        binary = B.sops_binary(a, out)
+        if a.mode == 'capture':
+            archive = B.private_file(a.gap_archive, B.MAX_BYTES*3)
+            need(hashlib.sha256(archive).hexdigest() == a.gap_sha256, 'ACCEPTED_GAP_ARCHIVE_HASH_REQUIRED')
+            gap = json.loads(B.crypt(binary, archive, decrypt=True, key_file=a.key_file))
+            need(gap.get('purpose') == 'RESTORATION_MISSING_INPUTS_NOT_OLD_BACKUP_REPEAT', 'ACCEPTED_GAP_SOURCE_REQUIRED')
+            r['restoration_review'] = restoration_review(gap)
         caller = aws(['sts', 'get-caller-identity'], out)
         need(caller.get('Account') == manifest['account_id']
              and ':assumed-role/seokpan-tf-rosa/' in caller.get('Arn', ''), 'EXISTING_ROSA_PURPOSE_ROLE_REQUIRED')
-        binary = B.sops_binary(a, out)
         if a.mode == 'restore':
             r.update(restore_volumes(a, manifest, out, binary, r))
         elif a.mode == 'status':
@@ -325,10 +342,6 @@ def main():
             need(journal['account_id'] == manifest['account_id'] and journal['cluster_id'] == manifest['cluster_id']
                  and journal['gap_sha256'] == a.gap_sha256, 'JOURNAL_SCOPE_REQUIRED')
         else:
-            archive = B.private_file(a.gap_archive, B.MAX_BYTES*3)
-            need(hashlib.sha256(archive).hexdigest() == a.gap_sha256, 'ACCEPTED_GAP_ARCHIVE_HASH_REQUIRED')
-            gap = json.loads(B.crypt(binary, archive, decrypt=True, key_file=a.key_file))
-            need(gap.get('purpose') == 'RESTORATION_MISSING_INPUTS_NOT_OLD_BACKUP_REPEAT', 'ACCEPTED_GAP_SOURCE_REQUIRED')
             state = json.loads(B.private_file(Path(a.delete_manifest).parent/'before.tfstate'))
             handoff = state.get('outputs', {}).get('platform_handoff', {}).get('value', {})
             need(handoff.get('cluster_id') == manifest['cluster_id'] and handoff.get('infra_id'), 'SAVED_INFRA_OWNERSHIP_REQUIRED')
