@@ -113,6 +113,12 @@ def prepare(a, out):
     return {"status":"PASS_ROSA_ONLY_SAVED_PLAN_PREPARED_NOT_APPLIED", "action":a.action, "plan_sha256":manifest["plan_sha256"], "counts":counts,
             "approval_required":True, "apply_started":False, "protected_files_require_encrypted_independent_copy":True}
 
+def approval_gates(action):
+    if action == 'create':
+        return ('recreation_inputs_accepted', 'network_ready', 'budget_accepted')
+    need(action == 'delete', 'KNOWN_PLAN_ACTION_REQUIRED')
+    return ('encrypted_backup_accepted', 'independent_decrypt_access_accepted', 'pvc_data_disposition_accepted', 'state_owner_accepted', 'data_operations_released', 'recreation_inputs_accepted')
+
 def apply(a, out):
     need(a.approval_file and a.manifest, "EXPLICIT_APPROVAL_FILE_AND_MANIFEST_REQUIRED")
     m, approved = read_json(a.manifest), read_json(a.approval_file)
@@ -122,7 +128,7 @@ def apply(a, out):
     need(approved.get("action") == m["action"] and approved.get("cluster_id") == m["cluster_id"]
          and approved.get("plan_sha256") == m["plan_sha256"] and approved.get("approved_by_user") is True
          and isinstance(approved.get("approval_reference"), str) and len(approved["approval_reference"]) >= 8, "EXPLICIT_PLAN_BOUND_USER_APPROVAL_REQUIRED")
-    required = ("encrypted_backup_accepted", "independent_decrypt_access_accepted", "pvc_data_disposition_accepted", "state_owner_accepted", "data_operations_released", "recreation_inputs_accepted")
+    required = approval_gates(m['action'])
     need(all(approved.get(k) is True for k in required), "PRESERVATION_AND_OWNER_GATES_REQUIRED")
     need(sha(m["plan"]) == m["plan_sha256"] and sha(m["var_file"]) == m["var_sha256"] and source_hash(Path(m["tf_root"])) == m["source_hash"], "PLAN_INPUT_SOURCE_CHANGED")
     need(sys.stdin.isatty(), "INTERACTIVE_HUMAN_CONFIRMATION_REQUIRED")
