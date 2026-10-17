@@ -82,7 +82,7 @@ class RestorePermissions(unittest.TestCase):
         p['resource_drift'][0]['change']['after']['inline_policy'][0]['name']='unmanaged'
         with self.assertRaises(RuntimeError):R.review(p,e,ACCOUNT,snapshot)
 
-    def apply_fixture(self,tmp,race=False,unknown=False):
+    def apply_fixture(self,tmp,race=False,unknown=False,collision=False,state_existing=False,already_attached=False):
         root=Path(tmp);old=root/'old';old.mkdir();out=root/'out';out.mkdir();recon=root/'recon';recon.mkdir()
         source=old/'source/terraform/bootstrap';source.mkdir(parents=True)
         (source/'iam.tf').write_text(R.OLD_SOURCE);(source/'.terraform.lock.hcl').write_text('fixture')
@@ -96,11 +96,14 @@ class RestorePermissions(unittest.TestCase):
         if not Path(a.restore_hcl).is_file():a.restore_hcl=str(Path(__file__).parent.parent/'terraform/bootstrap/rosa_monitoring_restore.tf')
         class FakeRun:
             instance=None
-            def __init__(self,folder):self.env={};self.out=folder;self.applies=0;self.pulls=0;FakeRun.instance=self
+            def __init__(self,folder):self.env={};self.out=folder;self.applies=0;self.pulls=0;self.pregrant_reads=0;FakeRun.instance=self
             def aws(self,args,missing=False):
                 if args[:2]==['sts','get-caller-identity']:return {'Account':ACCOUNT,'Arn':'arn:aws:sts::'+ACCOUNT+':assumed-role/seokpan-tf-bootstrap/test'}
-                if args[:2]==['iam','get-policy']:return {'Policy':{'DefaultVersionId':'v1'}} if self.applies else None
-                if args[:2]==['iam','list-attached-role-policies']:return {'AttachedPolicies':[{'PolicyArn':'arn:aws:iam::'+ACCOUNT+':policy/'+R.NAME}] if self.applies else []}
+                if args[:2]==['iam','get-policy']:
+                    if not self.applies:
+                        self.pregrant_reads+=1;raise RuntimeError('IAM_READ_FAILED_NO_FALLBACK')
+                    return {'Policy':{'DefaultVersionId':'v1'}}
+                if args[:2]==['iam','list-attached-role-policies']:return {'AttachedPolicies':[{'PolicyArn':'arn:aws:iam::'+ACCOUNT+':policy/'+R.NAME}] if self.applies or already_attached else []}
                 if args[:2]==['iam','list-role-policies']:return {'PolicyNames':['seokpan-tf-bootstrap']}
                 if args[:2]==['iam','get-role-policy']:return {'PolicyDocument':R.augment(before,ACCOUNT) if self.applies else before}
                 if args[:2]==['iam','get-policy-version']:return {'PolicyVersion':{'Document':expected}}
@@ -112,12 +115,14 @@ class RestorePermissions(unittest.TestCase):
                         'key':'phase2/bootstrap/terraform.tfstate','bucket':'seokpan-tfstate-'+ACCOUNT,'region':'ap-northeast-2'}}});d={}
                 elif 'state' in args:
                     self.pulls+=1;d={'lineage':'fixture','serial':2 if race and self.pulls>1 else 1}
+                    if state_existing:d['resources']=[{'mode':'managed','type':'aws_iam_policy','name':'tf_rosa_monitoring_restore','instances':[{'attributes':{'name':R.NAME}}]}]
                 elif 'plan' in args:
                     Path(next(x.split('=',1)[1] for x in args if x.startswith('-out='))).write_bytes(b'fixture');d={}
                 elif 'show' in args:d=p
                 elif 'apply' in args:
                     self.applies+=1
                     if unknown:raise RuntimeError('COMMAND_OUTCOME_UNKNOWN_NO_RETRY')
+                    if collision:raise RuntimeError('AWS_ENTITY_ALREADY_EXISTS_NO_TAKEOVER')
                     d={}
                 else:raise AssertionError(args)
                 return subprocess.CompletedProcess(args,0,json.dumps(d).encode(),b'')
@@ -140,5 +145,42 @@ class RestorePermissions(unittest.TestCase):
             r,run,recon=self.apply_fixture(tmp,unknown=True)
             self.assertEqual(r,'COMMAND_OUTCOME_UNKNOWN_NO_RETRY');self.assertEqual(run.applies,1)
             self.assertTrue((recon/'restore-policy-apply.NO_AUTOMATIC_RETRY.json').is_file())
+
+class ReadGrantOrdering(unittest.TestCase):
+    def fixture(self,*args,**kwargs):
+        return RestorePermissions().apply_fixture(*args,**kwargs)
+    def test_missing_pregrant_read_is_not_called_and_postapply_readback_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result,run,_=self.fixture(tmp)
+            self.assertEqual(result['status'],'PASS_EXACT_RESTORE_POLICY_APPLIED_AND_ATTACHED')
+            self.assertEqual(run.pregrant_reads,0);self.assertEqual(run.applies,1)
+            self.assertFalse(result['read_denial_treated_as_absence'])
+    def test_state_owned_policy_stops_before_plan_and_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result,run,_=self.fixture(tmp,state_existing=True)
+            self.assertEqual(result,'RESTORE_POLICY_ALREADY_IN_STATE_REQUIRES_RECONCILIATION')
+            self.assertEqual(run.applies,0);self.assertFalse((run.out/'saved.tfplan').exists())
+    def test_existing_attachment_stops_without_denied_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result,run,_=self.fixture(tmp,already_attached=True)
+            self.assertEqual(result,'RESTORE_POLICY_ALREADY_ATTACHED_REQUIRES_RECONCILIATION')
+            self.assertEqual(run.applies,0);self.assertEqual(run.pregrant_reads,0)
+    def test_unmanaged_name_collision_preserves_marker_no_acceptance_or_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result,run,recon=self.fixture(tmp,collision=True)
+            self.assertEqual(result,'AWS_ENTITY_ALREADY_EXISTS_NO_TAKEOVER');self.assertEqual(run.applies,1)
+            self.assertTrue((recon/'restore-policy-apply.NO_AUTOMATIC_RETRY.json').is_file())
+            self.assertFalse((recon/'restore-policy-accepted.json').exists())
+    def test_same_arn_under_other_state_address_is_not_adopted(self):
+        arn='arn:aws:iam::'+ACCOUNT+':policy/'+R.NAME
+        for kind,attrs in [('aws_iam_policy',{'arn':arn}),('aws_iam_role_policy_attachment',{'policy_arn':arn})]:
+            state={'resources':[{'mode':'managed','type':kind,'name':'other','instances':[{'attributes':attrs}]}]}
+            with self.assertRaisesRegex(RuntimeError,'ALREADY_IN_STATE'):
+                R.require_create_only_state(state,arn)
+    def test_source_requires_bootstrap_grant_before_managed_policy_creation(self):
+        path=Path(__file__).with_name('rosa_monitoring_restore.tf')
+        if not path.is_file():path=Path(__file__).parent.parent/'terraform/bootstrap/rosa_monitoring_restore.tf'
+        policy=path.read_text().split('resource "aws_iam_policy" "tf_rosa_monitoring_restore"',1)[1]
+        self.assertIn('depends_on = [aws_iam_role_policy.tf_bootstrap]',policy)
 
 if __name__=='__main__':unittest.main()

@@ -146,6 +146,27 @@ def inputs(a):
          and scope['source_cluster_id']==manifest['cluster_id']==journal['cluster_id'],'SCOPE_AND_ACCEPTED_JOURNAL_BINDING_REQUIRED')
     expected=build_policy(scope);return accepted,c,manifest,scope,expected
 
+def require_create_only_state(state,arn):
+    """Do not refresh/adopt a policy whose read grant is part of this new Plan."""
+    for row in state.get('resources',[]):
+        if row.get('mode')!='managed':continue
+        kind=row.get('type');instances=row.get('instances',[])
+        need(not (instances and kind in ('aws_iam_policy','aws_iam_role_policy_attachment')
+                  and row.get('name')=='tf_rosa_monitoring_restore'),
+             'RESTORE_POLICY_ALREADY_IN_STATE_REQUIRES_RECONCILIATION')
+        for instance in instances:
+            value=instance.get('attributes') or {}
+            need(not (kind=='aws_iam_policy' and
+                      (value.get('name')==NAME or value.get('arn')==arn or value.get('id')==arn)),
+                 'RESTORE_POLICY_ALREADY_IN_STATE_REQUIRES_RECONCILIATION')
+            need(not (kind=='aws_iam_role_policy_attachment' and value.get('policy_arn')==arn),
+                 'RESTORE_ATTACHMENT_ALREADY_IN_STATE_REQUIRES_RECONCILIATION')
+
+def require_unattached(rows,arn):
+    need(not any(row.get('PolicyArn')==arn for row in rows),
+         'RESTORE_POLICY_ALREADY_ATTACHED_REQUIRES_RECONCILIATION')
+    need(len(rows)<10,'RESTORE_ROLE_ATTACHMENT_QUOTA_REVIEW_REQUIRED')
+
 def apply_policy(a,out):
     accepted,c,manifest,scope,expected=inputs(a);run=M.Run(out);account=manifest['account_id']
     caller=run.aws(['sts','get-caller-identity'])
@@ -159,9 +180,8 @@ def apply_policy(a,out):
         need(doc(observed)==doc(expected) and sum(r['PolicyArn']==arn for r in attached)==1,'ACCEPTED_RESTORE_POLICY_CHANGED')
         return {**old,'accepted_policy_reused':True}
     marker=cache.with_name('restore-policy-apply.NO_AUTOMATIC_RETRY.json');need(not marker.exists(),'PREVIOUS_RESTORE_PERMISSION_APPLY_REQUIRES_RECONCILIATION')
-    probe=run.aws(['iam','get-policy','--policy-arn',arn],missing=True);need(probe is None,'EXISTING_UNMANAGED_RESTORE_POLICY_NO_TAKEOVER')
     attached=run.aws(['iam','list-attached-role-policies','--role-name','seokpan-tf-rosa'])['AttachedPolicies']
-    need(len(attached)<10,'RESTORE_ROLE_ATTACHMENT_QUOTA_REVIEW_REQUIRED')
+    require_unattached(attached,arn)
     old=Path(a.snapshot_permission_run);original=M.source_files(old/'source')
     need(M.sha(old/'monitoring-scope.tfvars.json')==M.REVIEWED_SAVED_INPUTS['monitoring-scope.tfvars.json'],'ACCEPTED_EXISTING_FLAGS_REQUIRED')
     need(M.sha(a.restore_hcl)==NEW_HCL_SHA,'PINNED_RESTORE_HCL_REQUIRED')
@@ -178,6 +198,7 @@ def apply_policy(a,out):
     need(backend['type']=='s3' and backend['config']['key']=='phase2/bootstrap/terraform.tfstate'
          and backend['config']['bucket']=='seokpan-tfstate-'+account and backend['config']['region']=='ap-northeast-2','BOOTSTRAP_BACKEND_ONLY')
     before=json.loads(run.command(tf+['state','pull']).stdout);M.save(out/'before.tfstate',before)
+    require_create_only_state(before,arn)
     values=M.read(old/'monitoring-scope.tfvars.json')
     values.update(M.previous_settings(before,M.read(c['create']['var_file']),account))
     values.update(enable_rosa_monitoring_restore=True,rosa_monitoring_restore_policy_json=M.canonical(expected).decode())
@@ -193,7 +214,9 @@ def apply_policy(a,out):
     result={'status':'PASS_EXACT_RESTORE_PERMISSION_PLAN_NOT_APPLIED','managed_policy_create':1,'role_attachment_create':1,
         'bootstrap_inline_update':1,'other_resource_changes':0,'policy_sha256':hashlib.sha256(M.canonical(expected)).hexdigest(),
         'plan_sha256':M.sha(saved),'bootstrap_inline_candidate_characters':size,'scope_snapshot_count':4,'scope_kms_keys':len(scope['kms_keys']),
-        'rosa_inline_increase':0,'deletion_ready':False,'new_volumes_created':0}
+        'rosa_inline_increase':0,'deletion_ready':False,'new_volumes_created':0,
+        'pregrant_get_policy_calls':0,'read_denial_treated_as_absence':False,
+        'unmanaged_name_conflict_handling':'CREATE_POLICY_MUST_FAIL_NO_IMPORT_OR_OVERWRITE'}
     result['monitoring_volume_cutoffs_utc']=sorted(str(r.get('snapshot_start_time','NOT_REPORTED')) for r in scope['volumes'])
     result['monitoring_writes_after_cutoff']='NOT_IN_SAVED_SNAPSHOTS'
     M.save(out/'plan-review.json',result)
@@ -201,7 +224,11 @@ def apply_policy(a,out):
     current=json.loads(run.command(tf+['state','pull']).stdout)
     need((current['lineage'],current['serial'])==(before['lineage'],before['serial']) and M.sha(varfile)==varsha
          and M.sha(saved)==result['plan_sha256'] and all(M.sha(target/n)==v for n,v in pinned.items()),'STATE_SOURCE_OR_INPUT_CHANGED_NO_APPLY')
-    need(run.aws(['iam','get-policy','--policy-arn',arn],missing=True) is None,'RESTORE_POLICY_CREATED_CONCURRENTLY')
+    require_create_only_state(current,arn)
+    require_unattached(run.aws(['iam','list-attached-role-policies','--role-name','seokpan-tf-rosa'])['AttachedPolicies'],arn)
+    # The exact GetPolicy grant is installed by BOOT in this same reviewed Plan.
+    # TARGET is strictly create-only and depends on BOOT. An unmanaged same-name
+    # policy must fail AWS CreatePolicy; never import it or treat a denial as absence.
     with marker.open('x') as f:json.dump({'plan_sha256':result['plan_sha256'],'result_directory':str(out)},f)
     run.command(tf+['apply','-input=false','-no-color','-lock-timeout=60s',str(saved)])
     observed=run.aws(['iam','get-policy','--policy-arn',arn])['Policy']
