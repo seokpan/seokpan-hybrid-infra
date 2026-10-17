@@ -399,6 +399,10 @@ def main():
             archives.append({'path': r['archive'], 'sha256': r['archive_sha256'], 'kind': 'monitoring-snapshots'})
         handoff = Path(a.output_parent)/'rosa-preservation-handoff-latest.json'
         need(not handoff.is_symlink(), 'HANDOFF_SYMLINK_REJECTED')
+        if handoff.is_file():
+            previous=json.loads(B.private_file(handoff,262144))
+            need(previous.get('schema')==2,'EXISTING_HANDOFF_SCHEMA_REQUIRED')
+            archives += [row for row in previous['archives'] if row['kind']=='restoration-recipe']
         temporary = out/'handoff.json'
         save(temporary, {'schema': 2, 'archives': archives, 'snapshots_status': r['status'], 'deletion_ready': False})
         os.replace(temporary, handoff)

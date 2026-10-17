@@ -20,9 +20,14 @@ raw=helper.read_bytes()
 if hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()!='608a765e2ba40b472b2cb431223b48c396c00866': raise SystemExit('STOP_AUTH_HELPER_HASH')
 target=root/'rosa-preservation-handoff-latest.json'
 if target.is_symlink(): raise SystemExit('STOP_HANDOFF_SYMLINK')
+archives=[{'path':str(gap.resolve()),'sha256':expected,'kind':'restoration-gaps'}]
+if target.is_file():
+    old=json.loads(target.read_text())
+    if old.get('schema')!=2:raise SystemExit('STOP_HANDOFF_SCHEMA')
+    archives += [row for row in old['archives'] if row['kind']=='restoration-recipe']
 fd,path=tempfile.mkstemp(prefix='.preservation-handoff-',dir=root)
 with os.fdopen(fd,'w') as f:
-    json.dump({'schema':2,'archives':[{'path':str(gap.resolve()),'sha256':expected,'kind':'restoration-gaps'}],
+    json.dump({'schema':2,'archives':archives,
         'snapshots_status':'NOT_RUN','deletion_ready':False},f)
 os.replace(path,target)
 print('PASS_ACCEPTED_GAP_HANDOFF_READY_NO_REDECRYPT')

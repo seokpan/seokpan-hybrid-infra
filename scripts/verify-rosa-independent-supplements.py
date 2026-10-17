@@ -59,8 +59,8 @@ def main():
         copy(a.source_handoff, out/'handoff.json')
         handoff = json.loads(B.private_file(out/'handoff.json', 262144))
         rows = handoff.get('archives', [])
-        need(handoff.get('schema') == 2 and 1 <= len(rows) <= 2, 'BOUNDED_SUPPLEMENT_HANDOFF_REQUIRED')
-        need({r['kind'] for r in rows} <= {'restoration-gaps', 'monitoring-snapshots'}
+        need(handoff.get('schema') == 2 and 1 <= len(rows) <= 3, 'BOUNDED_SUPPLEMENT_HANDOFF_REQUIRED')
+        need({r['kind'] for r in rows} <= {'restoration-gaps', 'monitoring-snapshots', 'restoration-recipe'}
              and len({r['kind'] for r in rows}) == len(rows), 'EXACT_SUPPLEMENT_KINDS_REQUIRED')
         for row in rows:
             source = accepted_path(row['path'], a.source_root)

@@ -374,15 +374,18 @@ class CloneableLifecycleEntryBoundaries(unittest.TestCase):
         E.AUTH_HELPER_BLOB=hashlib.sha1(b'blob '+str(helper.stat().st_size).encode()+b'\0'+helper.read_bytes()).hexdigest()
         cli=d/'rosa';cli.write_bytes(b'fixture-not-executed\n');cli.chmod(0o700)
         (d/'terraform/rosa').mkdir(parents=True)
+        (d/'terraform/rosa/main.tf').write_text('terraform {}')
+        (d/'terraform/rosa/.terraform.lock.hcl').write_text('fixture-only')
         approval={'action':'delete','cluster_id':'TEST_CLUSTER','plan_sha256':'f'*64,'approval_reference':'fixture-only','approved_by_user':False}
         manifest={'action':'delete','cluster_id':'TEST_CLUSTER','plan_sha256':'f'*64}
         variables={'cluster_enabled':True,'cluster_name':'fixture','worker_sg_binding':None}
         for name,value in [('approval.json',approval),('manifest.json',manifest),('vars.json',variables)]:
             p=d/name;p.write_text(json.dumps(value));p.chmod(0o600)
-        c={'schema':1,'scope':'ROSA_ONLY','current_cluster_id':'TEST_CLUSTER',
+        c={'schema':1,'scope':'ROSA_ONLY','current_cluster_id':'TEST_CLUSTER','source_cluster_id':'TEST_CLUSTER',
+           'adopted_tf_source_hash':E.L.source_hash(d/'terraform/rosa'),
            'auth':{'rosa_cli':str(cli),'tf_session_helper':str(helper)},
            'delete':{'manifest':str(d/'manifest.json'),'approval_file':str(d/'approval.json')},
-           'create':{'var_file':str(d/'vars.json'),'cluster_name':'fixture','inputs_accepted':True,'network_ready':True,'budget_accepted':True}}
+           'create':{'var_file':str(d/'vars.json'),'tf_root':str(d/'terraform/rosa'),'cluster_name':'fixture','inputs_accepted':True,'network_ready':True,'budget_accepted':True}}
         p=d/'config.json';p.write_text(json.dumps(c));p.chmod(0o600)
         return E,p,c
     def test_delete_without_user_approval_stops_before_cloud_call(self):
@@ -405,12 +408,13 @@ class CloneableLifecycleEntryBoundaries(unittest.TestCase):
             with patch.object(E.subprocess,'run') as calls:
                 with self.assertRaisesRegex(RuntimeError,'REGULAR_PINNED_TOOL'):E.settings(p,'create',d)
                 calls.assert_not_called()
-    def test_reviewed_driver_and_network_acceptance_prepare_create(self):
+    def test_reviewed_driver_and_network_do_not_bypass_snapshot_permissions(self):
         with tempfile.TemporaryDirectory() as tmp:
             d=Path(tmp);E,p,c=self.fixture(d,'create');driver=d/'restore.sh';driver.write_text('fixture-not-executed\n')
             c['create'].update(restore_driver=str(driver),restore_driver_sha256=E.L.sha(driver),held_restoration_contract_accepted=True);p.write_text(json.dumps(c))
-            value,paths=E.settings(p,'create',d)
-            self.assertEqual(value['scope'],'ROSA_ONLY');self.assertEqual(paths['rosa_cli'],c['auth']['rosa_cli'])
+            with patch.object(E.subprocess,'run') as calls:
+                with self.assertRaisesRegex(RuntimeError,'NEW_VOLUME_RESTORE_PERMISSIONS_REQUIRED'):E.settings(p,'create',d)
+                calls.assert_not_called()
     def test_creation_and_deletion_have_distinct_required_conditions(self):
         self.assertEqual(set(L.approval_gates('create')),{'recreation_inputs_accepted','network_ready','budget_accepted'})
         self.assertIn('independent_decrypt_access_accepted',L.approval_gates('delete'))

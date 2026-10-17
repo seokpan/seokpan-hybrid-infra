@@ -2,9 +2,9 @@
 set +x
 set -euo pipefail
 umask 077
-[[ $# == 1 || $# == 3 ]] || { echo 'Usage: rosa-{delete,create}.sh [--config PRIVATE_JSON]'; exit 2; }
+[[ $# == 1 || $# == 3 ]] || { echo 'Usage: rosa-{delete,create,restore}.sh [--config PRIVATE_JSON]'; exit 2; }
 action=$1
-[[ $action == delete || $action == create ]] || exit 2
+[[ $action == delete || $action == create || $action == restore ]] || exit 2
 config=${ROSA_LIFECYCLE_CONFIG:-$HOME/.config/seokpan/rosa-lifecycle.json}
 if [[ $# == 3 ]]; then [[ $2 == --config ]] || exit 2; config=$3; fi
 scripts=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
