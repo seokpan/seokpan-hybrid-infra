@@ -456,4 +456,85 @@ class RestorationGapBoundaries(unittest.TestCase):
             G.capture({'contract':{'argo_namespace':'fixture'},'snapshots':[]},get)
         get.assert_not_called()
 
+class MonitoringSnapshotBoundaries(unittest.TestCase):
+    def fixture(self):
+        M=load('rosa-monitoring-volume-backup')
+        rows=[];volumes=[]
+        for i in range(4):
+            rows.append({'namespace':'openshift-monitoring','claim':'claim-'+str(i),
+                'claim_uid':'uid-'+str(i),'volume_id':'vol-000'+str(i),
+                'capacity':{'storage':'10Gi'},
+                'node_affinity':{'required':{'nodeSelectorTerms':[{'matchExpressions':[
+                    {'key':'topology.ebs.csi.aws.com/zone','operator':'In','values':['ap-northeast-2a']}]}]}},
+                'filesystem':'ext4','access_modes':['ReadWriteOnce'],'volume_mode':'Filesystem','storage_class':'gp3'})
+            volumes.append({'VolumeId':'vol-000'+str(i),'Encrypted':True,'KmsKeyId':'fixture-key',
+                'AvailabilityZone':'ap-northeast-2a','Size':10,'State':'in-use','Tags':[
+                    {'Key':'kubernetes.io/cluster/fixture-infra','Value':'owned'},
+                    {'Key':'CSIVolumeName','Value':'pvc-uid-'+str(i)}]})
+        return M,rows,{'Volumes':volumes}
+    def test_only_exact_encrypted_claim_volumes_are_accepted(self):
+        M,rows,observed=self.fixture()
+        self.assertEqual(len(M.validate_sources(rows,observed,'fixture-infra')),4)
+        observed['Volumes'][0]['Encrypted']=False
+        with self.assertRaisesRegex(RuntimeError,'ENCRYPTED_SOURCE'):M.validate_sources(rows,observed,'fixture-infra')
+    def test_foreign_volume_or_wrong_cluster_stops_before_writes(self):
+        M,rows,observed=self.fixture()
+        with self.assertRaisesRegex(RuntimeError,'VOLUME_CLUSTER_OWNERSHIP'):M.validate_sources(rows,observed,'other')
+        observed['Volumes'].pop()
+        with self.assertRaisesRegex(RuntimeError,'VOLUME_SET_CHANGED'):M.validate_sources(rows,observed,'fixture-infra')
+    def test_dry_run_failure_never_reaches_non_dry_run_create(self):
+        M,rows,_=self.fixture()
+        def fail_third(args,out,allow_dry_run=False):
+            self.assertTrue(allow_dry_run);self.assertIn('--dry-run',args)
+            if args[args.index('--volume-id')+1]==rows[2]['volume_id']:raise RuntimeError('fixture-denied')
+        with patch.object(M,'aws',side_effect=fail_third) as calls:
+            with self.assertRaisesRegex(RuntimeError,'fixture-denied'):M.preflight_snapshot_writes(rows,'fixture',Path('.'))
+            self.assertEqual(calls.call_count,3)
+    def test_completed_snapshot_needs_owner_kms_and_original_volume(self):
+        M,rows,observed=self.fixture();rows=M.validate_sources(rows,observed,'fixture-infra')
+        snapshots=[]
+        for i,row in enumerate(rows):
+            row['snapshot_id']='snap-000'+str(i)
+            snapshots.append({'SnapshotId':row['snapshot_id'],'OwnerId':'123456789012',
+                'VolumeId':row['volume_id'],'Encrypted':True,'KmsKeyId':'fixture-key','VolumeSize':10,
+                'State':'completed','Tags':[{'Key':'seokpan-preservation-run','Value':'fixture'},
+                    {'Key':'seokpan-source-pvc-uid','Value':row['claim_uid']}]})
+        self.assertTrue(M.validate_snapshots(rows,{'Snapshots':snapshots},'123456789012','fixture'))
+        snapshots[0]['OwnerId']='999999999999'
+        with self.assertRaisesRegex(RuntimeError,'SNAPSHOT_IDENTITY'):M.validate_snapshots(rows,{'Snapshots':snapshots},'123456789012','fixture')
+    def test_restore_uses_new_volume_and_fresh_claim_uid(self):
+        M,rows,_=self.fixture();row=dict(rows[0],size_gib=10)
+        pv,pvc=M.restore_declarations(row,'vol-123abc','restored-monitoring')
+        self.assertEqual(pv['spec']['csi']['fsType'],'ext4')
+        self.assertEqual(pv['spec']['persistentVolumeReclaimPolicy'],'Retain')
+        self.assertNotIn('uid',pv['spec']['claimRef']);self.assertNotIn('uid',pvc['metadata'])
+        with self.assertRaisesRegex(RuntimeError,'OLD_ROSA_VOLUME_REPLAY'):M.restore_declarations(row,row['volume_id'],'restored-monitoring')
+    def test_snapshot_unknown_attempt_marker_cannot_be_overwritten(self):
+        M,_,_=self.fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'attempt.json';M.exclusive(path,{'attempt':'fixture'})
+            with self.assertRaises(FileExistsError):M.exclusive(path,{'attempt':'another'})
+    def test_supplement_transfer_rejects_traversal_and_key_paths(self):
+        V=load('verify-rosa-independent-supplements');root='/home/fixture/protected'
+        self.assertEqual(V.accepted_path(root+'/accepted/file.sops.json',root),root+'/accepted/file.sops.json')
+        for path in (root+'/../secret.sops.json','/etc/shadow',root+'/keys.txt',root+'/x;touch.sops.json'):
+            with self.assertRaises(RuntimeError):V.accepted_path(path,root)
+    def test_old_node_identity_is_not_carried_into_new_volume(self):
+        M,rows,_=self.fixture();row=dict(rows[0],size_gib=10)
+        row['node_affinity']['required']['nodeSelectorTerms'][0]['matchExpressions'][0]['key']='kubernetes.io/hostname'
+        with self.assertRaisesRegex(RuntimeError,'STABLE_ZONE_AFFINITY'):M.restore_declarations(row,'vol-123abc','restored-monitoring')
+    def test_restore_cannot_write_back_to_original_cluster(self):
+        M,_,_=self.fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            d=Path(tmp);snapshot=d/'map.json';snapshot.write_bytes(b'cipher-fixture');snapshot.chmod(0o600)
+            handoff=d/'handoff.json';handoff.write_text(json.dumps({'cluster_id':'sameoriginal','state':'ready'}));handoff.chmod(0o600)
+            args=argparse.Namespace(snapshot_map=str(snapshot),snapshot_map_sha256=hashlib.sha256(b'cipher-fixture').hexdigest(),
+                new_handoff=str(handoff),kubeconfig='fixture',key_file='fixture')
+            bundle={'purpose':'ROSA_MONITORING_SNAPSHOT_MAP','volume_data_backed_up':True,
+                'volume_preservation':{'cluster_id':'sameoriginal','account_id':'123456789012'}}
+            with patch.object(M.B,'crypt',return_value=json.dumps(bundle).encode()),patch.object(M,'aws') as calls:
+                with self.assertRaisesRegex(RuntimeError,'DIFFERENT_READY_NEW_ROSA'):
+                    M.restore_volumes(args,{'cluster_id':'sameoriginal','account_id':'123456789012'},d,'fixture',{})
+                calls.assert_not_called()
+
 if __name__=="__main__":unittest.main()

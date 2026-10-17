@@ -11,6 +11,9 @@ on:
       - scripts/rosa-lifecycle-entry.sh
       - scripts/rosa-lifecycle-entry.py
       - scripts/collect-rosa-restoration-gaps.py
+      - scripts/rosa-monitoring-volume-backup.py
+      - scripts/verify-rosa-independent-supplements.py
+      - scripts/rosa-monitoring-preservation.sh
       - docs/ROSA_CHECKPOINT_LIFECYCLE.md
       - .github/workflows/rosa-preservation-validation.yml
   push:
@@ -25,6 +28,9 @@ on:
       - scripts/rosa-lifecycle-entry.sh
       - scripts/rosa-lifecycle-entry.py
       - scripts/collect-rosa-restoration-gaps.py
+      - scripts/rosa-monitoring-volume-backup.py
+      - scripts/verify-rosa-independent-supplements.py
+      - scripts/rosa-monitoring-preservation.sh
       - .github/workflows/rosa-preservation-validation.yml
 permissions:
   contents: read
@@ -35,4 +41,4 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: python3 -m unittest discover -s scripts -p test_rosa_preservation.py -v
       - run: bash -n scripts/rosa-preservation-batch.sh
-      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh; do bash -n "$path"; done
+      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh; do bash -n "$path"; done
