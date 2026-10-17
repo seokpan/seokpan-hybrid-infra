@@ -64,10 +64,9 @@ resource "aws_iam_role" "tf" {
 # 객체 접근 범위(자기 접두사), State/Version/버킷 삭제 금지는 버킷 정책(main.tf)에서 제한
 # ---------------------------------------------------------------------------
 data "aws_iam_policy_document" "tf_bootstrap" {
-  source_policy_documents = (
-    var.enable_rosa_account_iam_permissions
-    ? [data.aws_iam_policy_document.tf_bootstrap_rosa_iam.json]
-    : []
+  source_policy_documents = concat(
+    var.enable_rosa_account_iam_permissions ? [data.aws_iam_policy_document.tf_bootstrap_rosa_iam.json] : [],
+    var.enable_rosa_monitoring_restore ? [data.aws_iam_policy_document.tf_bootstrap_monitoring_restore[0].json] : []
   )
 
   statement {
