@@ -20,6 +20,8 @@ on:
       - scripts/rosa-monitoring-permission-resume.sh
       - scripts/test_rosa_monitoring_permission.py
       - scripts/test_rosa_monitoring_saved_resume.py
+      - scripts/rosa-monitoring-finalize.py
+      - scripts/test_rosa_monitoring_finalize.py
       - scripts/prepare-rosa-reconstruction.py
       - scripts/rosa-fresh-management.py
       - scripts/rosa-gitops-bootstrap.py
@@ -48,6 +50,8 @@ on:
       - scripts/rosa-monitoring-permission-resume.sh
       - scripts/test_rosa_monitoring_permission.py
       - scripts/test_rosa_monitoring_saved_resume.py
+      - scripts/rosa-monitoring-finalize.py
+      - scripts/test_rosa_monitoring_finalize.py
       - scripts/prepare-rosa-reconstruction.py
       - scripts/rosa-fresh-management.py
       - scripts/rosa-gitops-bootstrap.py
