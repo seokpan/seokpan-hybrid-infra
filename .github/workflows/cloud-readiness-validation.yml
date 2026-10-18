@@ -1,0 +1,20 @@
+name: Cloud activation preparation boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-readiness/**'
+      - '.github/workflows/cloud-readiness-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/cloud-readiness/**'
+      - '.github/workflows/cloud-readiness-validation.yml'
+permissions:
+  contents: read
+jobs:
+  new-source-boundaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: New activation and recreated SQL boundaries only
+        run: python3 -m unittest discover -s tools/cloud-readiness -p test_offline_new_boundaries.py -v
