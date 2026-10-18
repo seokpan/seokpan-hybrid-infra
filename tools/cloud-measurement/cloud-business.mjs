@@ -273,8 +273,17 @@ export async function runCloud(plan,{launchBrowser,roomFactory,clock=realClock,s
   }
   const bundle=await meter.finish(),summary=summarize(bundle),duration=normalStart===null?0:Math.max(0,(normalEnd-normalStart)/1000);
   const vote=summary.business_ws;
+  const correlated=bundle.rows.filter(r=>r.kind==='business_ws'&&r.phase==='normal'
+    &&r.retry_of===null&&!r.expected_negative&&r.outcome==='success'&&r.accepted_http===true
+    &&Number.isFinite(r.command_to_ws_receive_ms)&&r.command_to_ws_receive_ms>=0
+    &&Number.isFinite(r.duration_ms)&&r.duration_ms>=r.command_to_ws_receive_ms);
+  const p95=values=>values.length?[...values].sort((a,b)=>a-b)[Math.ceil(values.length*0.95)-1]:null;
+  summary.cloud_vote_latency={correlated_first_successes:correlated.length,
+    ui_action_to_peer_ws_p95_ms:p95(correlated.map(r=>r.command_to_ws_receive_ms)),
+    ui_action_to_peer_ui_p95_ms:p95(correlated.map(r=>r.duration_ms)),
+    boundary:'UI action start -> matching committed game version on independent peer WSS/UI; not server commit timestamp'};
   const complete=!failure&&bundle.status!=='INVALID'&&duration>=plan.profile.measurement_seconds
-    &&vote.first_attempts>0&&contextsClosed;
+    &&vote.first_attempts>0&&correlated.length>0&&contextsClosed;
   return {receipt:{status:complete?'COMPLETED_SCOPED_CLOUD_OBSERVATION_NOT_FULL_ACCEPTANCE':'INCOMPLETE_CLOUD_OBSERVATION',
     failure,run_id:plan.run_id,requested_clients:plan.profile.clients,created_contexts:contexts.length,
     rooms_setup_complete:rooms.filter(r=>r.setupComplete).length,observed_sockets:sockets,
@@ -284,6 +293,8 @@ export async function runCloud(plan,{launchBrowser,roomFactory,clock=realClock,s
     app_source_sha:plan.release.app_source_sha,reported_deployment:plan.runtime,
     deployment_independently_queried:false,normal_duration_seconds:duration,
     requested_normal_seconds:plan.profile.measurement_seconds,normal_vote_first_attempts:vote.first_attempts,
+    normal_vote_correlated_successes:correlated.length,
+    correlated_latency_missing:correlated.length===0,
     successful_vote_intents_per_second:duration>0?(vote.first_attempts-vote.first_errors)/duration:null,
     synthetic_data:counters,own_room_leave_results:cleanup,browser_closed:contextsClosed,
     member_rows_deleted:false,harness_vote_retries:0,ui_cleanup_stale_retry_source_behavior:'POSSIBLE_ONCE',fault_injection:false,

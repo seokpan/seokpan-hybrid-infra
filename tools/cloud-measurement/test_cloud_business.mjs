@@ -31,7 +31,7 @@ class FakeBrowser {
   }
   async close(){this.closed=true;await Promise.all(this.contexts.map(c=>c.close()));}
 }
-function fixture({failSetup=false,failNormal=false,missingSocket=false,missingFrame=false,clients=6}={}) {
+function fixture({failSetup=false,failNormal=false,missingSocket=false,missingFrame=false,unknownVotes=false,missingLatency=false,clients=6}={}) {
   const p=plan();p.profile.clients=clients;let tick=0,cleanup=0,normalSteps=0,launches=0;
   const browser=new FakeBrowser(),clock={now:()=>tick,sleep:async ms=>{tick+=ms;}};
   const roomFactory=(pages,ids,meter,counters)=>({setupComplete:false,emitted:false,
@@ -46,7 +46,10 @@ function fixture({failSetup=false,failNormal=false,missingSocket=false,missingFr
     async step(){if(meter.phase!=='normal')return false;normalSteps++;
       if(failNormal&&ids[0]==='client-1')throw Object.assign(Error('NORMAL_FAILED'),{name:'CloudCheck'});
       if(!this.emitted){this.emitted=true;meter.emit({kind:'business_ws',action_id:'action-'+ids[0],retry_of:null,
-        outcome:'success',duration_ms:5,client_id:ids[0],peer_id:ids[1],expected_negative:false});
+        outcome:unknownVotes?'unknown':'success',accepted_http:true,
+        command_to_ws_receive_ms:unknownVotes||missingLatency?null:3,
+        duration_ms:unknownVotes||missingLatency?null:5,
+        client_id:ids[0],peer_id:ids[1],expected_negative:false});
         meter.emit({kind:'http',method:'PUT',route:'/api/v1/games/{game_id}/turns/{turn_no}/vote',status:200,outcome:'success',duration_ms:3});}
       return true;
     },
@@ -132,12 +135,26 @@ test('six-context fixture connects the new adapter to reused measurements and sc
   assert.equal(result.receipt.status,'COMPLETED_SCOPED_CLOUD_OBSERVATION_NOT_FULL_ACCEPTANCE');
   assert.equal(result.receipt.room_socket_connections_at_barrier,6);assert.equal(result.receipt.created_contexts,6);
   assert.equal(result.summary.business_ws.first_attempts,2);assert.equal(result.summary.status,'NOT_RUNTIME_ACCEPTANCE');
+  assert.equal(result.receipt.normal_vote_correlated_successes,2);
+  assert.deepEqual([result.summary.cloud_vote_latency.ui_action_to_peer_ws_p95_ms,
+    result.summary.cloud_vote_latency.ui_action_to_peer_ui_p95_ms],[3,5]);
   assert.equal(result.receipt.harness_vote_retries,0);assert.equal(result.receipt.member_rows_deleted,false);
   assert.equal(f.counts().cleanup,2);assert(f.browser.closed);
 });
 test('twelve-context fixture creates four rooms rather than shared-cookie tabs',async()=>{
   const f=fixture({clients:12}),r=await runCloud(f.plan,f);assert.equal(r.receipt.room_socket_connections_at_barrier,12);
   assert.equal(r.receipt.rooms_setup_complete,4);assert.equal(f.browser.contexts.length,12);
+});
+test('all unknown votes cannot become a completed latency observation',async()=>{
+  const f=fixture({unknownVotes:true}),r=await runCloud(f.plan,f);
+  assert.equal(r.receipt.status,'INCOMPLETE_CLOUD_OBSERVATION');assert.equal(r.receipt.normal_vote_first_attempts,2);
+  assert.equal(r.receipt.normal_vote_correlated_successes,0);assert.equal(r.receipt.correlated_latency_missing,true);
+  assert.equal(r.summary.cloud_vote_latency.ui_action_to_peer_ws_p95_ms,null);assert(f.browser.closed);
+});
+test('success labels without correlated timings cannot satisfy observation completion',async()=>{
+  const f=fixture({missingLatency:true}),r=await runCloud(f.plan,f);
+  assert.equal(r.receipt.status,'INCOMPLETE_CLOUD_OBSERVATION');assert.equal(r.receipt.normal_vote_correlated_successes,0);
+  assert.equal(r.summary.cloud_vote_latency.ui_action_to_peer_ui_p95_ms,null);assert(f.browser.closed);
 });
 test('missing room sockets cannot become claimed six-client observation',async()=>{
   const f=fixture({missingSocket:true}),r=await runCloud(f.plan,f);assert.equal(r.receipt.status,'INCOMPLETE_CLOUD_OBSERVATION');

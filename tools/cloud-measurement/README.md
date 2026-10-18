@@ -40,10 +40,10 @@ The adapter observes an actual UI vote click, the accepted HTTP commit with its 
 Report only observed values with sample counts and duration:
 
 1. Per-route HTTP p95 and errors within the measured phase, plus first vote-intent error rate.
-2. Committed vote to peer WSS and peer UI p95 for valid correlated samples.
+2. UI vote action start to peer WSS and peer UI p95 for valid samples correlated to the same committed game version. This does not measure from a server commit timestamp.
 3. Successful vote intents per observed normal second, connected-client cohort and generator CPU/memory/RSS context.
 
-If the full room-socket cohort or a peer frame is absent, a room ends early, the window expires, a normal business step fails or correlated samples are missing, the receipt remains incomplete. Generator sampling does not prove available service capacity. Do not present these results as all-user latency, maximum throughput, TH-17 completion, fault tolerance, RTO or RPO.
+If the full room-socket cohort or an initial peer frame is absent, a room ends early, the window expires, a normal business step fails or there are no successful correlated normal samples, the receipt remains incomplete. Individual unknown/error samples stay in the error denominator. `summary.cloud_vote_latency` reports the correlated sample count and the two action-start latency percentiles. Generator sampling does not prove available service capacity. Do not present these results as all-user latency, maximum throughput, TH-17 completion, fault tolerance, RTO or RPO.
 
 ## Stop, cleanup and output
 
@@ -53,4 +53,4 @@ The output directory contains `observations.json`, `summary.json`, `run-receipt.
 
 ## Preparation evidence
 
-The 27 new mocked/synthetic boundary tests passed locally. They cover plan gates, Origin/WSS paths, observed turns/cells, pinned panels, per-client contexts, peer-frame cohort, stop/settle/cleanup, CLI default non-execution and sanitized output. Playwright dependencies were installed locally. Actual Chrome launch, Cloud UI compatibility, HTTP/WSS traffic, account/room creation and measured numbers are `NOT_RUN`. The existing measurement module was reused unchanged and its completed tests were not repeated.
+The 29 new mocked/synthetic boundary tests passed locally. They cover plan gates, Origin/WSS paths, observed turns/cells, pinned panels, per-client contexts, peer-frame cohort, successful correlated timing gates, stop/settle/cleanup, CLI default non-execution and sanitized output. Playwright dependencies were installed locally. Actual Chrome launch, Cloud UI compatibility, HTTP/WSS traffic, account/room creation and measured numbers are `NOT_RUN`. The existing measurement module was reused unchanged and its completed tests were not repeated.
