@@ -7,6 +7,7 @@
 | 파일 | 처리 |
 |---|---|
 | finish_prestart.py | 기존 원본 탐색, 보호 입력 추출 재사용, 입력 변환 및 미충족 목록 |
+| read_sources.py | 실패 하위 영수증·설정 해시·별도 인계 폴더의 원본 후보만 읽기. 등록·해독·자동 채택 없음 |
 | materialize_inputs.py | 수락한 보존본의 공급 객체와 현재 계정 암호문의 선택 추출·해시 캐시 |
 | readonly_handoff.py / d_generator.py | 별도 운영자에게 코드·config·plan·상태 읽기 ACL, 발생 결과의 제한 반환 |
 | metadata_transport.py | 기존 강제 명령 키에 정해진 상태/외부 결과 명령만 추가 |
@@ -35,6 +36,8 @@ python3 -I finish_prestart.py --settings /absolute/private/settings.json
 Windows의 상태/외부 확인 경로도 windows-settings.TEMPLATE.NOT_ACCEPTED.json을 실제 기존 경로로 채운 보호 설정을 사용한다. `python windows_handoff.py report --settings <실제 설정>`은 상태만 조회한다. `external --stage <단계> --execute`, `baseline --execute`, `rolling --execute`도 같은 --settings가 필요하며 자동 실행하지 않는다. Node/Playwright 설치는 기존 것을 사용한다.
 
 ## 실행 경계와 실패 재개
+
+이미 성공한 준비를 반복하지 않고 P05~P09 원본 위치만 읽으려면 기존 settings.json으로 `read_sources.py --settings <실제 설정> --search-root <기존 인계 폴더>`를 사용한다. 검색은 파일 수·깊이·크기를 제한하고 후보의 경로/해시만 반환한다. 값·자격·State·암호문을 내보내지 않으며 수정시각만으로 현재값을 수락하지 않는다. 다른 호스트의 원본은 이 로컬 조회로 없다고 판단하지 않는다.
 
 - 입력이 없거나 서로 다른 원본이 둘 이상이면 PENDING으로 남긴다. 과거 한도·기본 Replica 10·과거 비용을 현재값으로 자동 수락하지 않는다.
 - DB 자격은 공유 ACL/메타데이터 전송 대상이 아니다. 기본 관측 경로는 기존 Backend에 private stdin으로 자격을 공급하며 Pod UID가 바뀐 표본은 실패다.

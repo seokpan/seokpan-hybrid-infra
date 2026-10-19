@@ -19,7 +19,7 @@ jobs:
           python-version: '3.9'
       - name: New helper boundaries only
         working-directory: tools/prestart-closeout
-        run: python -m unittest test_closeout -v
+        run: python -m unittest test_closeout test_read_sources -v
       - name: Bash syntax and Python 3.9 syntax
         run: |
           bash -n tools/prestart-closeout/run.sh tools/prestart-closeout/stages.sh
