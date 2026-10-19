@@ -1,0 +1,8 @@
+{
+  "scope": "ONE_BACKEND_ROLL",
+  "binding": {
+    "namespace_uid": null,
+    "application_uid": null
+  },
+  "argv": []
+}

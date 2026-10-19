@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "input_kind": "candidate",
+  "rds_max_connections": null,
+  "reserved_connections": null,
+  "pod_groups": {
+    "steady": {
+      "pods": null,
+      "processes_per_pod": null,
+      "engines": {
+        "identity": {
+          "pool_size": null,
+          "max_overflow": null
+        },
+        "game": {
+          "pool_size": null,
+          "max_overflow": null
+        }
+      }
+    },
+    "surge": {
+      "pods": null,
+      "processes_per_pod": null,
+      "engines": {
+        "identity": {
+          "pool_size": null,
+          "max_overflow": null
+        },
+        "game": {
+          "pool_size": null,
+          "max_overflow": null
+        }
+      }
+    },
+    "terminating": {
+      "pods": null,
+      "processes_per_pod": null,
+      "engines": {
+        "identity": {
+          "pool_size": null,
+          "max_overflow": null
+        },
+        "game": {
+          "pool_size": null,
+          "max_overflow": null
+        }
+      }
+    }
+  }
+}

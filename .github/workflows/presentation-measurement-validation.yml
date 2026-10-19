@@ -1,0 +1,40 @@
+name: Presentation measurement integration boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/presentation-measurement/**'
+      - 'tools/cloud-launch/cloud_launch.py'
+      - 'docs/PRESENTATION_MEASUREMENT_RUN.md'
+      - '.github/workflows/presentation-measurement-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/presentation-measurement/**'
+      - 'tools/cloud-launch/cloud_launch.py'
+      - 'docs/PRESENTATION_MEASUREMENT_RUN.md'
+      - '.github/workflows/presentation-measurement-validation.yml'
+permissions:
+  contents: read
+jobs:
+  offline-measurement:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Source manifest and unchanged upstream adapter
+        run: python3 -I tools/presentation-measurement/verify_source.py
+      - name: Local Controller and input-binding boundaries only
+        run: python3 -m unittest discover -s tools/presentation-measurement -p 'test_*.py' -v
+      - name: Separate observer synthetic boundaries only
+        run: node --test tools/presentation-measurement/test_fault.mjs
+      - name: Verify CLI syntax without browser or credentials
+        run: node --check tools/presentation-measurement/run-observer.mjs
+      - name: No source changes or runtime output
+        run: |
+          git diff --exit-code
+          test -z "$(git status --porcelain)"

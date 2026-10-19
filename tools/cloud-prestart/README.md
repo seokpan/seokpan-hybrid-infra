@@ -132,3 +132,8 @@ node "$B_INFRA_REPO/tools/cloud-measurement/run-cloud-measurement.mjs" \
 ```
 
 D에게 전달할 것은 run/Cluster/Source·Release·단계·실제 Replica·앱 Origin과 ready receipt/시각이다. 알림/관측 결과와 같은 Run에 연결한다. 결과 파일에는 내부 경로가 있으므로 GitHub에는 sanitized 기술 결과만 게시한다. 실패 보고는 마지막 status/reason·work 위치·해당 실패 receipt만 전달하며 보호값/Token/원문 SQL 오류를 보내지 않는다. 명령 준비와 합성 시험은 실제 앱 기동 성공이 아니다.
+
+
+## 발표 계측을 선택한 실행
+
+발표에서 stage별 전환시간과 정상/Backend rolling 비교를 확보할 경우 [PRESENTATION_MEASUREMENT_RUN](../../docs/PRESENTATION_MEASUREMENT_RUN.md)을 따른다. 최초 stage --execute는 stage_clock.py entry로 감싼 명령 하나로 대체한다. 기존 명령을 실행한 뒤 시각을 만들기 위해 다시 실행하지 않는다. stage별 Ready/정상 업무 근거가 생기면 bind_inputs.py가 같은 package·UID·Source/Image/Replica를 정상/롤링·DB 관측 입력으로 결합한다. 실제 생성 지시는 별도이며 이 연결은 재생성을 호출하지 않는다.

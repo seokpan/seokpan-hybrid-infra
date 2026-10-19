@@ -1,0 +1,14 @@
+{
+  "infra_merged_base": "df71963f975cae2925f8783472a8c143b5f264af",
+  "normal_adapter_source": "tools/cloud-measurement/cloud-business.mjs",
+  "normal_measurement_source": "tools/cloud-measurement/measurement.mjs",
+  "copies_change_normal_failure_policy": false,
+  "app_ui_contract_source": "c2dad254cc407431092691f9ea5892f8324f1520",
+  "docs_repository": "seokpan/seokpan-hybrid-docs",
+  "docs_revision": "276818cc2468af99716f770dad4b9e353011f486",
+  "docs_directory": "tools/b_preflight",
+  "docs_blobs": {
+    "db_connection_budget.py": "dcf263d571bef449f142b360428e859e5a3efb95",
+    "offline_review.py": "0b354e2bf25326fc4295e0512175b8402c2c126e"
+  }
+}

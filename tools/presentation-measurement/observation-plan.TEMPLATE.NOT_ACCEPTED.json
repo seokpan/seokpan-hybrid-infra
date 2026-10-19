@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "run_id": "cloud-normal-input-required",
+  "target_origin": "https://cloud-origin-input-required.invalid",
+  "profile": {
+    "clients": 6,
+    "warmup_seconds": 60,
+    "measurement_seconds": 180
+  },
+  "release": {
+    "app_source_sha": "c2dad254cc407431092691f9ea5892f8324f1520",
+    "backend_digest": "sha256:733f52a6f5a53c31e792cbe1d254221ff8ff86828e8c3afdc65d207e2e5fb18d",
+    "frontend_digest": "sha256:7068a36f55427639b7b7bf8a9c5795689b891e7ec334bfd306d8cd03c5f049ff"
+  },
+  "runtime": {
+    "replicas": {
+      "backend": null,
+      "frontend": null
+    },
+    "pool_size": null,
+    "max_overflow": null,
+    "pool_timeout_seconds": null,
+    "config_revision": null,
+    "schema_revision": null
+  },
+  "evidence": {
+    "normal_business_ref": null,
+    "release_binding_ref": null,
+    "run_window_ref": null
+  },
+  "window": {
+    "not_before": null,
+    "not_after": null
+  },
+  "scenario": "baseline",
+  "extra_recovery_seconds": 0,
+  "binding": {
+    "cluster_id": null,
+    "namespace_uid": null,
+    "application_uid": null,
+    "source_sha256": null,
+    "normalized_source_sha256": null
+  }
+}
