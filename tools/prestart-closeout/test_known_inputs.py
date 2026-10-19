@@ -15,11 +15,17 @@ HERE=Path(__file__).resolve().parent
 def load(name):
     s=importlib.util.spec_from_file_location('known_'+name,HERE/(name+'.py'))
     m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-F=load('finish_known_inputs');D=load('restricted_delegate')
+F=load('finish_known_inputs');D=load('restricted_delegate');P=load('finish_prestart')
 def private(path,value):
     path.write_text(json.dumps(value),encoding='utf-8');path.chmod(0o600)
 
 class KnownInputs(unittest.TestCase):
+    def test_future_hpa_capacity_is_not_a_precreate_gate_and_real_gates_remain(self):
+        before,later=P.requirement_phases(['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED',
+            'CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'])
+        self.assertEqual(before,['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED'])
+        self.assertEqual(later,['ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA'])
+
     def test_delegate_does_not_accept_shell_or_other_paths(self):
         c={'python':'/usr/bin/python3','run':'/private/current'}
         for command in ('sh -c id','cat /private/current/secret','b-prestart-report-v1'):

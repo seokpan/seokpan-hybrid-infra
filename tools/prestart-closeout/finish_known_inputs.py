@@ -40,7 +40,7 @@ def payload():
     for line in lines:
         wanted,name=line.split();need(re.fullmatch(r'[a-f0-9]{64}',wanted) and '/' not in name and '\\' not in name,'EXACT_REPAIR_MANIFEST_REQUIRED')
         rows[name]=wanted
-    need(set(rows)=={'finish_known_inputs.py','metadata_transport.py','restricted_delegate.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
+    need(set(rows)=={'finish_known_inputs.py','finish_prestart.py','metadata_transport.py','restricted_delegate.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
     for name,wanted in rows.items():need(hashlib.sha256(raw(HERE/name)).hexdigest()==wanted,'REPAIR_PAYLOAD_HASH_MISMATCH')
     return rows
 
@@ -57,6 +57,8 @@ def reconcile(c,a):
     need(digest(old)==a.observed_dispatch_sha256,'OBSERVED_DISPATCH_CHANGED_NO_RETRY')
     old_module=raw(base/'metadata_transport.py')
     need(digest(old_module)==a.old_transport_sha256,'INSTALLED_TRANSPORT_CHANGED_NO_RETRY')
+    old_prepare=raw(base/'finish_prestart.py')
+    need(digest(old_prepare)==a.old_preparation_sha256,'INSTALLED_PREPARATION_CHANGED_NO_RETRY')
     settings=Path(c['transport_settings']);before=raw(settings);transport=json.loads(before)
     keyfile=Path.home()/'.ssh/authorized_keys';keys=raw(keyfile).decode('utf-8')
     matching=[line for line in keys.splitlines() if transport['public_key'] in line]
@@ -70,12 +72,14 @@ def reconcile(c,a):
     new['original_dispatch_sha256_variants']=[rows['restricted_delegate.py']]
     new['reviewed_delegate']={'argv':[transport['python'],'-I',str(delegate)],'sha256':rows['restricted_delegate.py']}
     exact(work/'transport-settings.before.json',before);exact(work/'metadata_transport.before.py',old_module)
+    exact(work/'finish_prestart.before.py',old_prepare)
     exact(work/'observed-dispatch.before.py',old)
     marker={'phase':'BEFORE_LOCAL_FILE_CHANGE','old_dispatch_sha256':a.observed_dispatch_sha256,
         'old_module_sha256':a.old_transport_sha256,'new_module_sha256':rows['metadata_transport.py'],
         'new_delegate_sha256':rows['restricted_delegate.py'],'automatic_retry':False}
     exact(work/'STARTED.NO_AUTOMATIC_RETRY.json',encoded(marker))
     exact(delegate,raw(HERE/'restricted_delegate.py'));replace(base/'metadata_transport.py',raw(HERE/'metadata_transport.py'))
+    replace(base/'finish_prestart.py',raw(HERE/'finish_prestart.py'))
     replace(settings,encoded(new))
     spec=importlib.util.spec_from_file_location('known_transport',base/'metadata_transport.py')
     T=importlib.util.module_from_spec(spec);spec.loader.exec_module(T)
@@ -139,8 +143,12 @@ def bind_references(c,a):
     main_path=out/'receipt.json'
     if main_path.exists():
         main=read(main_path)
+        later='CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'
         main['remaining_before_create']=[x for x in main.get('remaining_before_create',[])
-            if x!='FOUNDATION_HANDOFF_EXISTING_SOURCE_REQUIRED']
+            if x not in {'FOUNDATION_HANDOFF_EXISTING_SOURCE_REQUIRED',later}]
+        selected=main.setdefault('remaining_selected_test_inputs',[])
+        if 'ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA' not in selected:
+            selected.append('ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA')
         main['known_reference_binding']=str(work)
         main['current_network_or_cost_auto_accepted']=False
         replace(main_path,encoded(main))
@@ -153,6 +161,7 @@ def bind_references(c,a):
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--settings',type=Path,required=True)
     p.add_argument('--observed-dispatch-sha256',required=True);p.add_argument('--old-transport-sha256',required=True)
+    p.add_argument('--old-preparation-sha256',required=True)
     p.add_argument('--foundation-file',required=True);p.add_argument('--foundation-sha256',required=True)
     p.add_argument('--db-limit',required=True,type=int);p.add_argument('--db-user-limit',required=True,type=int)
     p.add_argument('--reserved',required=True,type=int);p.add_argument('--db-reference',required=True)

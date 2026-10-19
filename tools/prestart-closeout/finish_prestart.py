@@ -27,6 +27,13 @@ def read(path,maximum=16777216):
 
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
+def requirement_phases(issues):
+    # Actual new-node capacity cannot be a pre-create input. Existing HPA bind/
+    # activation guards still require current DB/account/node evidence at execution.
+    later='CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'
+    return ([x for x in issues if x!=later],
+            ['ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA'] if later in issues else [])
+
 def write(path,value):
     path=Path(path);raw=(json.dumps(value,sort_keys=True,indent=2,allow_nan=False)+'\n').encode()
     if path.exists():
@@ -272,6 +279,7 @@ def prepare(c):
         fd=os.open(shell_path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
         with os.fdopen(fd,'w') as f:f.write(shell)
     # Windows observer paths remain host-specific. Never run them on the Controller.
+    issues,capacity_pending=requirement_phases(issues)
     result={'status':'PASS_PRECREATE_LINKS_PREPARED_NOT_RECREATED' if not issues else 'PENDING_EXACT_PRECREATE_INPUTS',
         'remaining_before_create':sorted(set(issues)),
         'after_create_only':['NEW_CLUSTER_ID_API_INGRESS_WORKER_BINDING','NEW_NAMESPACE_APPLICATION_AND_PROTECTED_UIDS',
@@ -281,7 +289,7 @@ def prepare(c):
         'primary_db_transport':'EXISTING_BACKEND_EXEC_PRIVATE_STDIN_NO_NEW_INSTALL',
         'primary_db_runtime_verified':False,'handoff_setup':share['status'],
         'metadata_transport_setup':transport['status'],
-        'remaining_selected_test_inputs':[k for k,row in slots.items() if row['stage']=='BEFORE_SELECTED_MAIL_TEST' and not row['path']],
+        'remaining_selected_test_inputs':capacity_pending+[k for k,row in slots.items() if row['stage']=='BEFORE_SELECTED_MAIL_TEST' and not row['path']],
         'source_registry':c['input_registry'],'output_directory':str(out),
         'cloud_calls':0,'sql_calls':0,'recreation_started':False,'completed_tests_repeated':False,
         'remote_db_credentials_copied':False,'unknown_values_accepted':False}
