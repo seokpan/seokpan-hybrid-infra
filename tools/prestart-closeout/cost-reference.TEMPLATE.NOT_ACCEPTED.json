@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "source": null,
+  "source_as_of": null,
+  "budget_accepted": false,
+  "budget": {
+    "reported_spend_usd": null,
+    "unreported_and_retained_allowance_usd": null,
+    "hourly_upper_usd": null,
+    "shutdown_reserve_hours": null,
+    "variable_allowance_usd": null,
+    "estimate_ref": null
+  }
+}

@@ -53,17 +53,23 @@ class KnownInputs(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);out=root/'inputs';out.mkdir();foundation=root/'foundation.json'
             private(foundation,{'old':'accepted'});registry=root/'registry.json';private(registry,{})
-            private(out/'launch-inputs.NOT_ACCEPTED.json',{'budget':{'reported_spend_usd':352.31,'variable_allowance_usd':0},'window':{}})
+            private(out/'launch-inputs.NOT_ACCEPTED.json',{'budget':{'reported_spend_usd':100,'variable_allowance_usd':0},'window':{}})
+            cost=root/'cost-reference.json'
+            private(cost,{'source':'synthetic-existing-budget-evidence','budget_accepted':True,
+                'budget':{'reported_spend_usd':100,'unreported_and_retained_allowance_usd':20,
+                    'hourly_upper_usd':5,'shutdown_reserve_hours':1,'variable_allowance_usd':10,'estimate_ref':'synthetic-policy'}})
             a=types.SimpleNamespace(foundation_file=str(foundation),foundation_sha256=hashlib.sha256(foundation.read_bytes()).hexdigest(),
                 db_limit=68,db_user_limit=0,reserved=10,db_reference='existing-data-result',source_host='source-host',
-                source_contract='/source/old-contract.json',source_read_directory='/source/read')
+                source_contract='/source/old-contract.json',source_read_directory='/source/read',cost_reference=cost)
             x=F.bind_references({'out':str(out),'input_registry':str(registry)},a);r=F.read(registry)
             self.assertEqual(r['foundation_handoff_candidates'],[str(foundation)])
             self.assertNotIn('capacity_file',r);self.assertNotIn('source_contract_candidates',r)
             self.assertFalse(F.read(out/'known-inputs/foundation-reference.json')['current_network_asserted'])
             self.assertFalse(F.read(out/'known-inputs/db-reference.NOT_ACCEPTED.json')['current_values_asserted'])
             self.assertNotIn('budget.variable_allowance_usd',x['cost_missing_fields'])
-            self.assertIn('budget.hourly_upper_usd',x['cost_missing_fields'])
+            self.assertNotIn('budget.hourly_upper_usd',x['cost_missing_fields'])
+            self.assertIn('window.not_before',x['cost_missing_fields'])
+            self.assertFalse(F.read(out/'known-inputs/cost-fields.json')['budget_accepted'])
 
     def test_changed_observed_dispatch_stops_before_any_authorization_change(self):
         with tempfile.TemporaryDirectory() as tmp:

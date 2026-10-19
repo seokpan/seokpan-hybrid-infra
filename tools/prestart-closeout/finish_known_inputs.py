@@ -40,7 +40,8 @@ def payload():
     for line in lines:
         wanted,name=line.split();need(re.fullmatch(r'[a-f0-9]{64}',wanted) and '/' not in name and '\\' not in name,'EXACT_REPAIR_MANIFEST_REQUIRED')
         rows[name]=wanted
-    need(set(rows)=={'finish_known_inputs.py','finish_prestart.py','metadata_transport.py','restricted_delegate.py','observer_access_plan.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
+    need(set(rows)=={'finish_known_inputs.py','finish_prestart.py','metadata_transport.py','restricted_delegate.py',
+        'observer_access_plan.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
     for name,wanted in rows.items():need(hashlib.sha256(raw(HERE/name)).hexdigest()==wanted,'REPAIR_PAYLOAD_HASH_MISMATCH')
     return rows
 
@@ -129,14 +130,27 @@ def bind_references(c,a):
     reference_meta={'path':a.foundation_file,'sha256':a.foundation_sha256,'current_network_asserted':False,
         'historical_accepted_reference_only':True}
     exact(work/'foundation-reference.json',encoded(reference_meta));r['foundation_reference_review']=str(work/'foundation-reference.json')
-    launch=read(out/'launch-inputs.NOT_ACCEPTED.json')
+    launch_path=out/'launch-inputs.NOT_ACCEPTED.json';launch_before=raw(launch_path);launch=json.loads(launch_before)
+    basis=read(a.cost_reference)
+    fields={'reported_spend_usd','unreported_and_retained_allowance_usd','hourly_upper_usd',
+            'shutdown_reserve_hours','variable_allowance_usd','estimate_ref'}
+    need(set(basis.get('budget',{}))==fields and basis.get('source'),'EXISTING_PROTECTED_COST_BASIS_REQUIRED')
+    need(all(basis['budget'][k] is not None for k in fields),'COST_BASIS_VALUES_REQUIRED_NO_ZERO_FILL')
+    exact(work/'cost-planning-reference.NOT_ACCEPTED.json',encoded(basis))
+    exact(work/'launch-inputs.before.json',launch_before)
+    filled=[]
+    for key,value in basis['budget'].items():
+        if launch.setdefault('budget',{}).get(key) in (None,''):
+            launch['budget'][key]=value;filled.append('budget.'+key)
+    replace(launch_path,encoded(launch));r['cost_planning_reference_file']=str(work/'cost-planning-reference.NOT_ACCEPTED.json')
     required=('reported_spend_usd','unreported_and_retained_allowance_usd','hourly_upper_usd',
               'shutdown_reserve_hours','variable_allowance_usd','estimate_ref')
     missing=['budget.'+k for k in required if launch.get('budget',{}).get(k) in (None,'')]
     missing+=['window.'+k for k in ('not_before','not_after') if launch.get('window',{}).get(k) in (None,'')]
     cost={'existing_launch_file':str(out/'launch-inputs.NOT_ACCEPTED.json'),'missing_fields':missing,
           'existing_spend_currentness':'NOT_ASSERTED','time_window_prepared_by':'B_AT_ACTUAL_START',
-          'unknown_values_filled_with_zero':False}
+          'unknown_values_filled_with_zero':False,'planning_fields_filled':filled,
+          'basis_ref':basis['source'],'budget_accepted':False}
     exact(work/'cost-fields.json',encoded(cost));replace(registry,encoded(r))
     source_map=out/'input-source-map.json'
     if source_map.exists():
@@ -150,7 +164,10 @@ def bind_references(c,a):
         main=read(main_path)
         later='CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'
         main['remaining_before_create']=[x for x in main.get('remaining_before_create',[])
-            if x not in {'FOUNDATION_HANDOFF_EXISTING_SOURCE_REQUIRED',later}]
+            if x not in {'FOUNDATION_HANDOFF_EXISTING_SOURCE_REQUIRED',later,
+                         'CURRENT_COST_ALLOWANCES_AND_START_END_SOURCE_REQUIRED'}]
+        for label in ('B_EXECUTION_WINDOW_NOT_ASSIGNED','B_BUDGET_BASIS_REVIEW_AT_START'):
+            if label not in main['remaining_before_create']:main['remaining_before_create'].append(label)
         selected=main.setdefault('remaining_selected_test_inputs',[])
         if 'ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA' not in selected:
             selected.append('ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA')
@@ -160,7 +177,7 @@ def bind_references(c,a):
     return {'P06':'PASS_EXISTING_REFERENCE_PATH_BOUND_CURRENT_NETWORK_PENDING',
         'P07':'PASS_DB_REFERENCE_AND_EXISTING_OBSERVER_BOUND_NOT_CURRENT_LIMIT_ACCEPTANCE',
         'P08':'PASS_SOURCE_HOST_LOCATION_BOUND_WRITER_CONTROL_FACTS_PENDING',
-        'P09':'PASS_EXACT_COST_FIELDS_IDENTIFIED_CURRENT_BASIS_PENDING',
+        'P09':'PASS_EXISTING_LEDGER_AND_B_PLANNING_FIELDS_BOUND_START_WINDOW_HELD',
         'cost_missing_fields':missing,'reference_directory':str(work)}
 
 def main():
@@ -171,13 +188,15 @@ def main():
     p.add_argument('--db-limit',required=True,type=int);p.add_argument('--db-user-limit',required=True,type=int)
     p.add_argument('--reserved',required=True,type=int);p.add_argument('--db-reference',required=True)
     p.add_argument('--source-host',required=True);p.add_argument('--source-contract',required=True);p.add_argument('--source-read-directory',required=True)
+    p.add_argument('--cost-reference',type=Path,required=True)
     p.add_argument('--execute-local-repair',action='store_true');a=p.parse_args();os.umask(0o077)
     try:
         need(a.execute_local_repair,'EXPLICIT_LOCAL_REPAIR_REQUIRED');need(os.name=='posix','CONTROLLER_LINUX_REQUIRED')
         c=read(a.settings);result={'P05':reconcile(c,a),**bind_references(c,a),
             'status':'P05_RECONCILED_AND_KNOWN_REFERENCES_BOUND_NOT_CREATE_READY',
-            'remaining_original_facts':['CURRENT_FOUNDATION_NETWORK_STATE','CURRENT_COST_BASIS',
+            'remaining_original_facts':['CURRENT_FOUNDATION_NETWORK_STATE','EXISTING_ADMIN_EXECUTION_PATH_OR_PROCESS_PROOF',
                 'EXTERNAL_WRITER_CONTROL_FACTS','SMTP_SOURCE_ONLY_IF_MAIL_SELECTED'],
+            'b_owned_before_actual_start':['SOURCE_HOST_METADATA_BINDING','EXECUTION_WINDOW_AND_UPDATED_COST_RECONCILIATION'],
             'cloud_calls':0,'sql_calls':0,'decrypt_invocations':0,'acl_repeated':False,'recreation_started':False}
         replace(Path(c['out'])/'known-inputs-receipt.json',encoded(result));print(json.dumps(result,indent=2));return 0
     except Exception as e:
