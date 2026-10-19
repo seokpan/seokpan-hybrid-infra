@@ -1,0 +1,73 @@
+{
+  "schema": 1,
+  "run_id": "hpa-run-input-required",
+  "actor": "tjung03",
+  "namespace": "seokpan-cloud",
+  "oc": null,
+  "personal_kubeconfig": null,
+  "api": null,
+  "origin": null,
+  "binding": {
+    "cluster_id": null,
+    "namespace_uid": null,
+    "application_uid": null,
+    "normalized_source_sha256": null
+  },
+  "window": {
+    "not_before": null,
+    "not_after": null
+  },
+  "min_replicas": 2,
+  "max_replicas": 10,
+  "expected_images": {
+    "backend": null,
+    "frontend": null
+  },
+  "normal_business_ref": null,
+  "prior_comparison_finished_ref": null,
+  "capacity": {
+    "evidence_ref": null,
+    "node_capacity_ref": null,
+    "global_limit": null,
+    "reserved": null,
+    "processes": null,
+    "pool_size": null,
+    "overflow": null,
+    "surge_allowance": null,
+    "terminating_allowance": null,
+    "node_backend_capacity": null,
+    "accounts": {
+      "identity_svc": {
+        "max_user_connections": null,
+        "global_max_user_connections": null,
+        "evidence_ref": null
+      },
+      "game_svc": {
+        "max_user_connections": null,
+        "global_max_user_connections": null,
+        "evidence_ref": null
+      }
+    }
+  },
+  "db_probe_argv": null,
+  "generator_guard_argv": null,
+  "db_local_paths": {
+    "mariadb": null,
+    "credential_file": null,
+    "ca_file": null,
+    "database_host": null
+  },
+  "prometheus": {
+    "origin": null,
+    "ca_file": null,
+    "labels_reference": null,
+    "queries": {
+      "cpu": "sum(rate(container_cpu_usage_seconds_total{namespace=\"seokpan-cloud\",container!=\"\",container!=\"POD\"}[1m])) by (pod)",
+      "memory": "sum(container_memory_working_set_bytes{namespace=\"seokpan-cloud\",container!=\"\",container!=\"POD\"}) by (pod)",
+      "network_rx": "sum(rate(container_network_receive_bytes_total{namespace=\"seokpan-cloud\",interface!=\"lo\"}[1m])) by (pod)",
+      "network_tx": "sum(rate(container_network_transmit_bytes_total{namespace=\"seokpan-cloud\",interface!=\"lo\"}[1m])) by (pod)",
+      "hpa": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"seokpan-cloud\"}",
+      "backend_http_responses_actual_labels_required": null
+    }
+  }
+}

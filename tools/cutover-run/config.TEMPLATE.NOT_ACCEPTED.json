@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "run_id": "c02-run-input-required",
+  "source_api": null,
+  "source_contract": null,
+  "source_read": null,
+  "github_api_argv": null,
+  "external_hold": null,
+  "rotation_receipt": null,
+  "platform_handoff": null,
+  "cloud_cluster_id": null,
+  "deployment_review_ref": null,
+  "cloud_connection_preparation_ref": null,
+  "A_preflight_ref": null,
+  "stop_budget_minutes": 75,
+  "joint_budget_minutes": 120,
+  "window": {
+    "not_before": null,
+    "not_after": null
+  }
+}

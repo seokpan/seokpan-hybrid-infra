@@ -1,0 +1,39 @@
+name: Separate HPA load and source cutover boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/hpa-load/**'
+      - 'tools/cutover-run/**'
+      - 'docs/HPA_AND_CUTOVER_RUN.md'
+      - '.github/workflows/hpa-cutover-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/hpa-load/**'
+      - 'tools/cutover-run/**'
+      - 'docs/HPA_AND_CUTOVER_RUN.md'
+      - '.github/workflows/hpa-cutover-validation.yml'
+permissions:
+  contents: read
+jobs:
+  new-hpa-cutover-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: New temporary HPA lifecycle and observation boundaries
+        run: python3 -m unittest discover -s tools/hpa-load -p 'test_hpa*.py' -v
+      - name: New source writer hold and GO chain boundaries
+        run: python3 -m unittest discover -s tools/cutover-run -p test_cutover.py -v
+      - name: New bounded HTTP load and abort/cleanup boundaries
+        run: node --test tools/hpa-load/test_load.mjs
+      - name: Syntax and no modifications or runtime output
+        run: |
+          node --check tools/hpa-load/load.mjs
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
