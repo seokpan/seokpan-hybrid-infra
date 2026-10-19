@@ -1,0 +1,14 @@
+{
+  "final_data_handoff": null,
+  "purpose_sql_receipt": null,
+  "purpose_sql_target": null,
+  "migration_current": null,
+  "migration_current_ref": null,
+  "captured_transition_accepted": false,
+  "captured_transition_ref": null,
+  "pool_candidate_accepted": false,
+  "prior_readback": null,
+  "prior_normal_business_ref": null,
+  "shared_state_accepted": false,
+  "shared_state_ref": null
+}

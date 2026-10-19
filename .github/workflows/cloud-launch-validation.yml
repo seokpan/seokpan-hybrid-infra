@@ -1,0 +1,36 @@
+name: Cloud launch bridge boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-launch/**'
+      - '.github/workflows/cloud-launch-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/cloud-launch/**'
+      - '.github/workflows/cloud-launch-validation.yml'
+permissions:
+  contents: read
+jobs:
+  launch-bridge:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Prepare only the new inline-render fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install -r tools/cloud-launch/requirements.txt
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
+          git init -q "$RUNNER_TEMP/launch-gitops"
+          git -C "$RUNNER_TEMP/launch-gitops" remote add origin https://github.com/seokpan/seokpan-hybrid-gitops.git
+          git -C "$RUNNER_TEMP/launch-gitops" fetch -q --depth 1 origin c75a4b5e3b3b9bae4ea7d8a431962cb9ca7308d7
+          git -C "$RUNNER_TEMP/launch-gitops" checkout -q --detach FETCH_HEAD
+          echo "LAUNCH_PINNED_SOURCE=$RUNNER_TEMP/launch-gitops" >> "$GITHUB_ENV"
+          echo "LAUNCH_KUSTOMIZE=$(go env GOPATH)/bin/kustomize" >> "$GITHUB_ENV"
+          echo "LAUNCH_WRITE_FIXTURE=$RUNNER_TEMP/launch-package" >> "$GITHUB_ENV"
+          echo "LAUNCH_ACCEPTED_PACKAGE=$RUNNER_TEMP/launch-package" >> "$GITHUB_ENV"
+      - name: New launch bridge Python boundaries only
+        run: python3 -m unittest discover -s tools/cloud-launch -p 'test_launch_*.py' -v
+      - name: New generated console request boundaries only
+        run: node --test tools/cloud-launch/test_launch_console.mjs
