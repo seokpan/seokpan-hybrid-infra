@@ -8,6 +8,7 @@
 |---|---|
 | finish_prestart.py | 기존 원본 탐색, 보호 입력 추출 재사용, 입력 변환 및 미충족 목록 |
 | read_sources.py | 실패 하위 영수증·설정 해시·별도 인계 폴더의 원본 후보만 읽기. 등록·해독·자동 채택 없음 |
+| finish_known_inputs.py / restricted_delegate.py | 관측한 전용 키의 실패만 대조·보존하고 검토된 두 명령 제한기로 연결. 기존 참조 입력은 현재값과 구분해 등록 |
 | materialize_inputs.py | 수락한 보존본의 공급 객체와 현재 계정 암호문의 선택 추출·해시 캐시 |
 | readonly_handoff.py / d_generator.py | 별도 운영자에게 코드·config·plan·상태 읽기 ACL, 발생 결과의 제한 반환 |
 | metadata_transport.py | 기존 강제 명령 키에 정해진 상태/외부 결과 명령만 추가 |
@@ -43,6 +44,7 @@ Windows의 상태/외부 확인 경로도 windows-settings.TEMPLATE.NOT_ACCEPTED
 - DB 자격은 공유 ACL/메타데이터 전송 대상이 아니다. 기본 관측 경로는 기존 Backend에 private stdin으로 자격을 공급하며 Pod UID가 바뀐 표본은 실패다.
 - 메타데이터 전송은 임의 경로 읽기·일반 셸·포트 전달을 제공하지 않는다. 원래 rolling/guard 명령은 기존 제한기에 위임한다. 기존 제한기 해시는 최대 두 개의 명시된 값만 허용하며 공백을 일반적으로 제거해 허용하지 않는다.
 - 설치가 중간에 멈추면 original-dispatch.json과 현재 강제 명령을 대조한다. 파일을 삭제하거나 등록을 반복해 표식을 피하지 않는다.
+- 관측한 기존 코드의 해시가 소비 도구와 다르더라도 그 해시를 추가해 알 수 없는 원문을 실행하지 않는다. 명시한 원본/기존 모듈 해시와 현재 강제 명령을 대조한 뒤, 원본 파일을 보존하고 검토된 restricted_delegate.py로 기존 probe·두 정확한 명령만 연결한다. 다른 키·셸 접근·ACL은 바꾸지 않는다. STARTED 표식 뒤 실패하면 자동 반복하지 않는다. 기본 prepare나 완료한 probe·해독은 호출하지 않는다.
 - PENDING 영수증의 reason과 남은 키를 먼저 수집한다. 보호 파일 본문·authorized_keys·토큰·원문 로그는 공유하지 않는다.
 - 새 실제 Run이 시작된 뒤에는 전체 prepare 대신 stages.sh의 해당 단계와 기존 work를 사용한다. trigger 결과가 불명이면 재실행보다 reconcile을 먼저 한다.
 

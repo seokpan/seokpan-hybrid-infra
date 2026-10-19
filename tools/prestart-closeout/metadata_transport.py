@@ -45,8 +45,18 @@ def install(settings):
         need(len(original)==3 and original[:2]==[c['python'],'-I']
             and sha(original[2]) in accepted_dispatch_hashes(c),'EXACT_ORIGINAL_RESTRICTED_DISPATCH_REQUIRED')
         receipt=HERE/'original-dispatch.json';need(not receipt.exists(),'PARTIAL_TRANSPORT_INSTALL_REQUIRES_RECONCILIATION')
+        delegation={'argv':original}
+        if c.get('reviewed_delegate'):
+            reviewed=c['reviewed_delegate'];target=HERE/'restricted_delegate.py'
+            wanted=[c['python'],'-I',str(target)]
+            need(reviewed.get('argv')==wanted and target.is_file() and not target.is_symlink()
+                and target.stat().st_uid==os.getuid() and sha(target)==reviewed.get('sha256')
+                and sha(target) in accepted_dispatch_hashes(c),'EXACT_REVIEWED_DELEGATE_REQUIRED')
+            # Keep the observed old file unchanged; do not execute unknown old code.
+            delegation={'argv':wanted,'prior_argv':original,'prior_dispatch_sha256':sha(original[2]),
+                        'delegation':'REVIEWED_PROBE_AND_TWO_EXACT_COMMANDS'}
         handle=os.open(receipt,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
-        with os.fdopen(handle,'w') as f:json.dump({'argv':original},f)
+        with os.fdopen(handle,'w') as f:json.dump(delegation,f)
         lines[i]=lines[i][:match.start(1)]+forced+lines[i][match.end(1):]
         handle,tmp=tempfile.mkstemp(prefix='.task-key-',dir=p.parent)
         with os.fdopen(handle,'w') as f:f.writelines(lines);f.flush();os.fsync(f.fileno())
