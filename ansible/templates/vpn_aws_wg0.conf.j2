@@ -7,6 +7,7 @@ Address = {{ vpn_wireguard_aws_tunnel_address }}
 ListenPort = {{ vpn_wireguard_listen_port }}
 MTU = {{ vpn_wireguard_mtu }}
 SaveConfig = false
+# 확인한 1.0.20210914 설치본은 PreUp이 장치 생성 전이므로 PostUp에서 개인키를 주입합니다.
 PostUp = /usr/bin/wg set %i private-key /etc/wireguard/keys/%i.key
 
 [Peer]

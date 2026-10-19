@@ -53,6 +53,44 @@ environment = Environment(
     keep_trailing_newline=True,
 )
 
+
+# 키 주입 시점이 되돌아가거나 개인키가 본문에 추가되면 중단합니다.
+def valid_key_hook(text):
+    entries = [
+        (line.split("=", 1)[0].strip().casefold(), line.split("=", 1)[1].strip())
+        for line in text.splitlines()
+        if "=" in line and not line.lstrip().startswith(("#", ";"))
+    ]
+    hooks = [value for key, value in entries if key == "postup"]
+    return (
+        hooks == ["/usr/bin/wg set %i private-key /etc/wireguard/keys/%i.key"]
+        and not any(key in ("preup", "privatekey") for key, value in entries)
+    )
+
+
+for template_name in ("vpn_aws_wg0.conf.j2", "vpn_onprem_wg0.conf.j2"):
+    rendered = environment.get_template(template_name).render(values)
+    if not valid_key_hook(rendered):
+        raise SystemExit("중단: 키 주입은 지정 PostUp 한 개만 허용하며 PreUp·PrivateKey는 없어야 합니다.")
+
+    bad_samples = [
+        rendered.replace("PostUp =", "PreUp =", 1),
+        rendered + "\nPrivateKey = 검사전용가짜값\n",
+        rendered + "\nPostUp = 중복검사명령\n",
+    ]
+    if any(valid_key_hook(text) for text in bad_samples):
+        raise SystemExit("중단: 잘못된 키 설정을 재발 방지 검사가 놓쳤습니다.")
+
+print("통과: 양쪽 설정의 PostUp 명령·PreUp 없음·개인키 본문 없음")
+print("통과: PreUp 되돌림·개인키 본문 추가·PostUp 중복의 차단 사례 6개")
+
+if sys.argv[1:] == ["--key-hook-only"]:
+    print("검사 범위: 키 주입 관련 검사만 실행. 기존 전달·원복 시험과 실제 서버 실행 없음")
+    raise SystemExit(0)
+
+if sys.argv[1:]:
+    raise SystemExit("중단: 지원하지 않는 검사 실행 인자입니다.")
+
 names = [
     "vpn_onprem_zone.xml.j2",
     "vpn_onprem_to_tunnel.xml.j2",
