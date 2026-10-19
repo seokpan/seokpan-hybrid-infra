@@ -1,0 +1,26 @@
+name: Prestart closeout validation
+on:
+  pull_request:
+    paths:
+      - 'tools/prestart-closeout/**'
+      - 'docs/PRESTART_CLOSEOUT_RUN.md'
+      - '.github/workflows/prestart-closeout-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  closeout-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: New helper boundaries only
+        working-directory: tools/prestart-closeout
+        run: python -m unittest test_closeout -v
+      - name: Bash syntax and Python 3.9 syntax
+        run: |
+          bash -n tools/prestart-closeout/run.sh tools/prestart-closeout/stages.sh
+          python -m compileall -q tools/prestart-closeout
