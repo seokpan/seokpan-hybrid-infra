@@ -18,7 +18,7 @@ def module(name,expected):
     if hashlib.sha256(path.read_bytes()).hexdigest()!=expected:raise RuntimeError('PINNED_REVIEW_DEPENDENCY_REQUIRED')
     spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 B=module('prepare-rosa-checkpoint','11463a8fb7f2b7e3b136dc543de86df7c51cabfce44cbe4cd2e08dfa74ddbbfd')
-R=module('rosa-monitoring-restore-permission','3832069c18963eabd3941853269ec561b6b9a381f4ca6468c43498ccd42e1cb8')
+R=module('rosa-monitoring-restore-permission','26e18086c3c5e654fe76e7d71a29659dcec274f0509775e1b4befbc59410b9ba')
 M=R.M;need=M.need
 POLICY='d72defef84f0c620afbaa673ba485e467337f21c97def1e51e3392e24e916935'
 DELETE_PLAN='a495369eeb2a66e0603bbaf1fa903944067f2e5cb4435645c9dd2190f669daed'
