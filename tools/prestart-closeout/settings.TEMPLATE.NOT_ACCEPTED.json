@@ -54,13 +54,13 @@
       "stage": "BEFORE_CREATE"
     },
     "source_contract": {
-      "stage": "BEFORE_CREATE"
+      "stage": "BEFORE_SELECTED_MIGRATION"
     },
     "source_read": {
-      "stage": "BEFORE_CREATE"
+      "stage": "BEFORE_SELECTED_MIGRATION"
     },
     "writer_plan": {
-      "stage": "BEFORE_CREATE"
+      "stage": "BEFORE_SELECTED_MIGRATION"
     },
     "smtp_protected_source": {
       "stage": "BEFORE_SELECTED_MAIL_TEST"

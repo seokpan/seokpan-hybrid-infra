@@ -15,6 +15,10 @@ import sys
 import tempfile
 
 HERE=Path(__file__).resolve().parent
+MIGRATION_REQUIREMENTS={
+    'source_contract':'SOURCE_CONTRACT_ON_SOURCE_HOST_BEFORE_MIGRATION',
+    'source_read':'SOURCE_READ_ON_SOURCE_HOST_BEFORE_MIGRATION',
+    'writer_plan':'WRITER_PLAN_BEFORE_MIGRATION'}
 
 def need(ok,code):
     if not ok:raise RuntimeError(code)
@@ -28,11 +32,20 @@ def read(path,maximum=16777216):
 def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 def requirement_phases(issues):
-    # Actual new-node capacity cannot be a pre-create input. Existing HPA bind/
-    # activation guards still require current DB/account/node evidence at execution.
+    # 실제 이관 자료와 새 노드 용량을 생성 전 필수값으로 요구하지 않습니다.
+    # 각 실행 단계의 원본 중지·용량 검증은 기존 도구에서 그대로 유지합니다.
     later='CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'
-    return ([x for x in issues if x!=later],
-            ['ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA'] if later in issues else [])
+    move={name.upper()+'_EXISTING_SOURCE_REQUIRED':value
+          for name,value in MIGRATION_REQUIREMENTS.items()}
+    move[later]='ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA'
+    return ([x for x in issues if x not in move],
+            list(dict.fromkeys(move[x] for x in issues if x in move)))
+
+def selected_slot_requirements(slots):
+    # 이전 설정의 BEFORE_CREATE 표기도 단계 분류만 바로잡습니다.
+    # 다른 호스트의 자료를 Controller 로컬에 복사했다고 가정하지 않습니다.
+    return [requirement for name,requirement in MIGRATION_REQUIREMENTS.items()
+            if name in slots and not slots[name].get('path')]
 
 def write(path,value):
     path=Path(path);raw=(json.dumps(value,sort_keys=True,indent=2,allow_nan=False)+'\n').encode()
@@ -289,7 +302,8 @@ def prepare(c):
         'primary_db_transport':'EXISTING_BACKEND_EXEC_PRIVATE_STDIN_NO_NEW_INSTALL',
         'primary_db_runtime_verified':False,'handoff_setup':share['status'],
         'metadata_transport_setup':transport['status'],
-        'remaining_selected_test_inputs':capacity_pending+[k for k,row in slots.items() if row['stage']=='BEFORE_SELECTED_MAIL_TEST' and not row['path']],
+        'remaining_selected_test_inputs':sorted(set(capacity_pending+selected_slot_requirements(slots)
+            +[k for k,row in slots.items() if row['stage']=='BEFORE_SELECTED_MAIL_TEST' and not row['path']])),
         'source_registry':c['input_registry'],'output_directory':str(out),
         'cloud_calls':0,'sql_calls':0,'recreation_started':False,'completed_tests_repeated':False,
         'remote_db_credentials_copied':False,'unknown_values_accepted':False}

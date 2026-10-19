@@ -38,6 +38,26 @@ class KnownInputs(unittest.TestCase):
         self.assertEqual(before,['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED'])
         self.assertEqual(later,['ACTUAL_DB_ACCOUNT_LIMITS_AND_NEW_NODE_CAPACITY_BEFORE_HPA'])
 
+    def test_migration_requirements_move_stage_without_accepting_them(self):
+        issues=['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED',
+            'SOURCE_CONTRACT_EXISTING_SOURCE_REQUIRED','SOURCE_READ_EXISTING_SOURCE_REQUIRED',
+            'WRITER_PLAN_EXISTING_SOURCE_REQUIRED','UNRECOGNIZED_REQUIRED_INPUT']
+        before,later=P.requirement_phases(issues)
+        self.assertEqual(before,['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED',
+            'UNRECOGNIZED_REQUIRED_INPUT'])
+        self.assertEqual(later,['SOURCE_CONTRACT_ON_SOURCE_HOST_BEFORE_MIGRATION',
+            'SOURCE_READ_ON_SOURCE_HOST_BEFORE_MIGRATION','WRITER_PLAN_BEFORE_MIGRATION'])
+        self.assertEqual(P.requirement_phases(before),(before,[]))
+
+    def test_new_and_legacy_slot_labels_keep_missing_migration_requirements(self):
+        for stage in ('BEFORE_CREATE','BEFORE_SELECTED_MIGRATION'):
+            slots={name:{'stage':stage,'path':None} for name in P.MIGRATION_REQUIREMENTS}
+            self.assertEqual(P.selected_slot_requirements(slots),list(P.MIGRATION_REQUIREMENTS.values()))
+            slots['source_contract']['path']='/source-host/actual-receipt.json'
+            self.assertEqual(P.selected_slot_requirements(slots),[
+                'SOURCE_READ_ON_SOURCE_HOST_BEFORE_MIGRATION','WRITER_PLAN_BEFORE_MIGRATION'])
+        self.assertEqual(P.selected_slot_requirements({}),[])
+
     def test_delegate_does_not_accept_shell_or_other_paths(self):
         c={'python':'/usr/bin/python3','run':'/private/current'}
         for command in ('sh -c id','cat /private/current/secret','b-prestart-report-v1'):
