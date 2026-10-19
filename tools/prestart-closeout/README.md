@@ -10,6 +10,7 @@
 | materialize_inputs.py | 수락한 보존본의 공급 객체와 현재 계정 암호문의 선택 추출·해시 캐시 |
 | readonly_handoff.py / d_generator.py | 별도 운영자에게 코드·config·plan·상태 읽기 ACL, 발생 결과의 제한 반환 |
 | metadata_transport.py | 기존 강제 명령 키에 정해진 상태/외부 결과 명령만 추가 |
+| windows_handoff.py | 설정으로 지정한 기존 발생기 경로에서 상태 조회·외부 확인·정상/롤링 결과를 수신 |
 | pod_db_observer.py | 승인 Ready Backend의 기존 asyncmy와 CA로 읽기 전용 DB 관측 |
 | db_bridge.py | 기존 MariaDB 호스트의 선택적 대체 경로. 기본 경로의 필수 조건이 아님 |
 | bind_runtime.py | 새 플랫폼·정상 업무 근거를 기존 binder에 결합, Pool/계정·용량 상한 연결 |
@@ -30,6 +31,8 @@ python3 -I finish_prestart.py --settings /absolute/private/settings.json
 ```
 
 최초 준비는 필요한 로컬 해독, 기존 DB 호스트 메타데이터 SSH 조회, named ACL 및 해당 전용 키 강제 명령 등록을 수행할 수 있다. Cloud API를 호출하지 않는다고 로컬 파일 변경도 없는 것은 아니다. 성공한 추출·ACL·등록을 확인할 목적으로 전체 명령을 재실행하지 않는다. 추출 캐시는 입력 해시가 같은 경우에만 재사용한다.
+
+Windows의 상태/외부 확인 경로도 windows-settings.TEMPLATE.NOT_ACCEPTED.json을 실제 기존 경로로 채운 보호 설정을 사용한다. `python windows_handoff.py report --settings <실제 설정>`은 상태만 조회한다. `external --stage <단계> --execute`, `baseline --execute`, `rolling --execute`도 같은 --settings가 필요하며 자동 실행하지 않는다. Node/Playwright 설치는 기존 것을 사용한다.
 
 ## 실행 경계와 실패 재개
 

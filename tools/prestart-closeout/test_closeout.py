@@ -20,7 +20,7 @@ def load(name):
     spec=importlib.util.spec_from_file_location('closing_'+name,HERE/(name+'.py'))
     m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
-DB=load('db_bridge');M=load('materialize_inputs');P=load('finish_prestart');POD=load('pod_db_observer');BIND=load('bind_runtime')
+DB=load('db_bridge');M=load('materialize_inputs');P=load('finish_prestart');POD=load('pod_db_observer');BIND=load('bind_runtime');W=load('windows_handoff')
 if os.name=='posix':
     H=load('readonly_handoff');T=load('metadata_transport');D=load('d_generator')
 else:
@@ -29,6 +29,24 @@ else:
     with patch.dict(sys.modules,{'pwd':types.SimpleNamespace()}):D=load('d_generator')
 
 class Boundaries(unittest.TestCase):
+    def test_windows_handoff_paths_come_from_explicit_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=root/'execution.json';settings=root/'settings.json'
+            paths.write_text(json.dumps({'controller_trigger_prefix':['ssh','-F','existing.conf','test-controller']}),encoding='utf-8')
+            settings.write_text(json.dumps({'schema':1,'execution_paths_file':str(paths),'measurement_source':str(root/'measurement'),
+                'result_root':str(root/'results'),'controller_alias':'test-controller'}),encoding='utf-8')
+            c,prefix,source,out=W.configuration(settings)
+            self.assertEqual(prefix[-1],'test-controller');self.assertEqual(source,root/'measurement')
+            self.assertEqual(out,root/'results');self.assertFalse(out.exists())
+
+    def test_windows_handoff_rejects_different_route_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);paths=root/'execution.json';settings=root/'settings.json'
+            paths.write_text(json.dumps({'controller_trigger_prefix':['ssh','unexpected-controller']}),encoding='utf-8')
+            settings.write_text(json.dumps({'schema':1,'execution_paths_file':str(paths),'measurement_source':str(root/'measurement'),
+                'result_root':str(root/'results'),'controller_alias':'expected-controller'}),encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeError,'EXISTING_ACCEPTED_SSH_ROUTE_REQUIRED'):W.configuration(settings)
+
     def test_metadata_never_transfers_sources_or_credentials(self):
         p=DB.packet({'paths':{'credential_file':'/private/a.cnf','ca_file':'/public/a.pem'}},'metadata')
         self.assertEqual(p['files'],{});self.assertIsNone(p['config'])
