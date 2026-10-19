@@ -6,6 +6,24 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from common import *
 
+def nonzero_phase_acceptance(phases):
+    checks=[]
+    for index,(vus,_) in enumerate(PHASES):
+        if vus==0:continue
+        matches=[row for row in phases if row.get('phase')==index]
+        row=matches[0] if len(matches)==1 else {}
+        n,rate=row.get('N'),row.get('http_5xx_fraction')
+        if not matches:status='MISSING_PHASE'
+        elif len(matches)!=1:status='DUPLICATE_PHASE'
+        elif row.get('vus')!=vus:status='PHASE_VU_MISMATCH'
+        elif type(n) is not int or n<=0:status='NO_VALID_SAMPLES'
+        elif type(rate) not in (int,float) or not math.isfinite(rate) or not 0<=rate<=1:status='NO_VALID_ERROR_RATE'
+        elif rate>=.01:status='HTTP_5XX_THRESHOLD_NOT_MET'
+        else:status='PASS'
+        checks.append({'phase':index,'vus':vus,'N':n,'http_5xx_fraction':rate,'status':status})
+    return checks
+
+
 def summarize(c,before,load,counts,rows,restored):
     need(load['binding']==c['binding'] and load['control_sha256']==digest(c) and before['config_sha256']==digest(c),'SAME_HPA_RUN_REQUIRED')
     need(counts['binding']==c['binding'] and counts['run_id']==c['run_id'] and counts['control_sha256']==digest(c),'COUNTS_FROM_OTHER_RUN')
@@ -16,12 +34,13 @@ def summarize(c,before,load,counts,rows,restored):
     replicas=[x['hpa'].get('status',{}).get('currentReplicas') for x in good];replicas=[x for x in replicas if type(x) is int]
     base=before['deployments']['backend']['spec']['replicas'];scaleout=bool(replicas) and max(replicas)>base
     scalein=bool(replicas) and replicas[-1]==c['min_replicas']
-    fixed={x['phase']:x for x in counts['phases']}
-    threshold=all(i in fixed and fixed[i]['N']>0 and fixed[i]['http_5xx_fraction']<.01 for i in (1,2,3,4))
+    phase_checks=nonzero_phase_acceptance(counts['phases'])
+    threshold=all(x['status']=='PASS' for x in phase_checks)
     ok=load['status']=='COMPLETED_HPA_LOAD' and scaleout and scalein and threshold
     return {'status':'OBSERVED_HPA_SCALE_OUT_IN_SCOPED_HTTP_RESULT' if ok else 'PARTIAL_OR_THRESHOLD_NOT_MET_HPA_RESULT',
             'binding':c['binding'],'baseline_replicas':base,'max_replicas_observed':max(replicas,default=None),'scale_out_observed':scaleout,
-            'last_observed_min_replica':scalein,'phase_1_to_4_http_5xx_below_1_percent':threshold,'counts':counts,
+            'last_observed_min_replica':scalein,'all_nonzero_phases_http_5xx_below_1_percent':threshold,
+            'phase_acceptance':phase_checks,'counts':counts,
             'max_connections_observed':max(x['db']['connections_total'] for x in good),
             'min_global_headroom_observed':min(x['db']['global_limit']-x['db']['connections_total'] for x in good),
             'failed_or_waiting_observer_samples':sum(x['status']!='PASS_HPA_GUARD' for x in rows),

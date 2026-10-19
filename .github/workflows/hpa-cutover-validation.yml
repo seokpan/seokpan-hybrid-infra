@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
       - name: New temporary HPA lifecycle and observation boundaries
-        run: python3 -m unittest discover -s tools/hpa-load -p test_hpa.py -v
+        run: python3 -m unittest discover -s tools/hpa-load -p 'test_hpa*.py' -v
       - name: New source writer hold and GO chain boundaries
         run: python3 -m unittest discover -s tools/cutover-run -p test_cutover.py -v
       - name: New bounded HTTP load and abort/cleanup boundaries
