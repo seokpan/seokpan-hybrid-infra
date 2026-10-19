@@ -41,6 +41,7 @@ class Fake:
         if kind=='application':r=self.app
         elif kind=='deployment':r=self.deps[name]
         elif kind=='hpa':r={'items':self.hpas}
+        elif kind=='machineautoscalers.autoscaling.openshift.io':r={'items':[]}
         elif kind=='pods':r={'items':[{'metadata':{'uid':n+str(i),'labels':{'app.kubernetes.io/name':n}},'spec':{'nodeName':'worker'},
                     'status':{'phase':'Running','conditions':[{'type':'Ready','status':'True'}]}} for n,d in self.deps.items() for i in range(d['spec']['replicas'])]}
         else:raise AssertionError(kind)
@@ -129,6 +130,9 @@ class Tests(unittest.TestCase):
     def test_result_join_requires_actual_restore_and_same_run(self):
         with self.assertRaises(RuntimeError):results.summarize(self.c,{'config_sha256':C.digest(self.c)},
             {'binding':self.c['binding'],'control_sha256':C.digest(self.c)}, {'binding':{},'run_id':'wrong','control_sha256':'x'},[],{})
+    def test_dynamic_node_autoscaler_is_not_silently_enabled_by_load(self):
+        client=type('C',(),{'get':lambda *a,**k:{'items':[{'spec':{'minReplicas':3,'maxReplicas':9}}]}})()
+        with self.assertRaisesRegex(RuntimeError,'DYNAMIC_MACHINE'):control.no_node_growth(client)
 
 
 if __name__=='__main__':unittest.main()

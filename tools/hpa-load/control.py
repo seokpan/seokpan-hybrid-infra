@@ -10,10 +10,15 @@ from common import *
 
 LOCK='seokpan.io/hpa-measurement'
 
+def no_node_growth(client):
+    values=client.get('machineautoscalers.autoscaling.openshift.io',ns='openshift-machine-api')['items']
+    need(not any(x['spec']['minReplicas']!=x['spec']['maxReplicas'] for x in values),'DYNAMIC_MACHINE_AUTOSCALING_MUST_BE_DISABLED_FOR_FIXED_BUDGET_TEST')
+
 def pod_rows(client):
     return [p for p in client.get('pods')['items'] if p['metadata'].get('labels',{}).get('app.kubernetes.io/name') in {'backend','frontend'}]
 
 def baseline(client,c):
+    no_node_growth(client)
     app=client.get('application',APP,ARGO);d={n:client.get('deployment',n) for n in ('backend','frontend')}
     need(app['metadata']['uid']==c['binding']['application_uid'] and not app.get('operation')
          and not app['spec'].get('syncPolicy',{}).get('automated') and not app['metadata'].get('annotations',{}).get(LOCK)
@@ -55,7 +60,8 @@ def own_hpa(client,c,work,allow_missing=False):
     if receipt.exists():need(x['metadata']['uid']==read(receipt)['uid'],'HPA_UID_CHANGED')
     return x
 
-def current(client,c,before,leased):
+def current(client,c,before,leased,check_node_growth=True):
+    if check_node_growth:no_node_growth(client)
     app=client.get('application',APP,ARGO)
     need(app['metadata']['uid']==c['binding']['application_uid'] and app['spec']==leased
          and app['metadata'].get('annotations',{}).get(LOCK)==c['run_id'] and not app.get('operation')
@@ -129,7 +135,7 @@ def main():
                 r=read(a.load_receipt);need(r['binding']==c['binding'] and r['control_sha256']==digest(c) and r['status'] in {'COMPLETED_HPA_LOAD','ABORTED_HPA_LOAD'}
                     and r['in_flight_at_end']==0,'MATCHING_STOPPED_GENERATOR_RECEIPT_REQUIRED')
             attempt(a.work,'restore',bound,a.resume_reviewed)
-            app,deps,_=current(client,c,b,leased);x=own_hpa(client,c,a.work,True)
+            app,deps,_=current(client,c,b,leased,check_node_growth=False);x=own_hpa(client,c,a.work,True)
             if x:
                 # UID is checked atomically by the API, including when status updates race.
                 opts=a.work/('delete-options-'+str(time.time_ns())+'.json');save(opts,{'apiVersion':'v1','kind':'DeleteOptions','preconditions':{'uid':x['metadata']['uid']}})
