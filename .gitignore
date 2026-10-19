@@ -48,3 +48,7 @@ terraform.rc
 tfplan
 *.tfplan.*
 plan.out
+
+# Python이 자동 생성하는 임시 파일
+__pycache__/
+*.pyc

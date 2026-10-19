@@ -2,6 +2,9 @@
 # Controller에서 실행할 키 복원·공급 후보.
 # 기본 실행은 안내만 출력한다.
 
+import sys
+sys.dont_write_bytecode = True
+
 import argparse
 import hashlib
 import json
@@ -84,6 +87,8 @@ def main():
         )
         return 0
 
+    ssh_started = False
+    stage = "실행 입력 확인"
     try:
         if (
             os.name != "posix"
@@ -94,6 +99,7 @@ def main():
             raise ValueError("실행 환경 또는 기준 커밋 입력이 다릅니다.")
 
         home = Path.home()
+        stage = "실행 저장소 확인"
         repo, env = verify_source(__file__, args.expected_source)
         from vpn_key_install_remote import validate_payload
 
@@ -103,6 +109,7 @@ def main():
         )
         identity = home / ".config/sops/age/keys.txt"
 
+        stage = "보호 파일·암호문 확인"
         protected_file(archive)
         protected_file(identity)
 
@@ -113,6 +120,7 @@ def main():
         env.pop("SOPS_AGE_KEY_CMD", None)
         env["SOPS_AGE_KEY_FILE"] = str(identity)
 
+        stage = "기존 암호문 복호화"
         result = subprocess.run(
             [
                 "/usr/local/bin/sops", "--decrypt",
@@ -126,6 +134,7 @@ def main():
         if result.returncode != 0:
             raise ValueError("기존 암호문 복호화 실패")
 
+        stage = "복호화 자료 확인"
         payload = json.loads(result.stdout)
         private, public = validate_payload(payload)
 
@@ -136,6 +145,7 @@ def main():
             "wireguard_public_key": public,
         }).encode()
 
+        stage = "서버 공급 프로그램 확인"
         helper = (repo / "scripts/vpn_key_install_remote.py").read_text(
             encoding="utf-8"
         )
@@ -145,6 +155,8 @@ def main():
             " 키 값은 출력하지 않습니다.",
             flush=True
         )
+        stage = "서버 접속·공급"
+        ssh_started = True
         result = subprocess.run(
             [
                 "ssh", "-T",
@@ -168,6 +180,7 @@ def main():
                 "서버 공급 또는 결과 수신 실패. 부분 공급 여부 확인 필요"
             )
 
+        stage = "공급 결과 확인"
         report = json.loads(result.stdout)
         if report.get("결과") != "기존 키 복원·공급 완료":
             raise ValueError("공급 완료 응답을 확인하지 못했습니다.")
@@ -177,14 +190,18 @@ def main():
         return 0
 
     except Exception:
-        print(
-            "중단: 실행 조건·복호화·공급 또는 결과 확인 실패."
-            " 비밀값과 원본 오류는 출력하지 않습니다."
-        )
-        print(
-            "부분 공급됐을 수 있으므로 자동 재실행·기존 키 삭제 없이"
-            " 상태를 확인하세요."
-        )
+        print("중단 단계:", stage)
+        print("비밀값과 원본 오류는 출력하지 않습니다.")
+        if ssh_started:
+            print(
+                "SSH 실행을 시도했습니다. 부분 공급 여부를 확인하기 전에는"
+                " 자동 재실행·기존 키 삭제를 하지 마세요."
+            )
+        else:
+            print(
+                "이 실행에서는 SSH를 시도하지 않아 서버 변경이 없습니다."
+                " 중단 조건을 해결한 뒤 다시 실행할 수 있습니다."
+            )
         return 2
 
 
