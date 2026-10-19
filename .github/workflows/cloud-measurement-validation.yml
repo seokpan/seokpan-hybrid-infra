@@ -1,0 +1,22 @@
+name: Cloud measurement preparation boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-measurement/**'
+      - '.github/workflows/cloud-measurement-validation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/cloud-measurement/**'
+      - '.github/workflows/cloud-measurement-validation.yml'
+permissions:
+  contents: read
+jobs:
+  mocked-browser-boundaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: New mocked browser boundaries only
+        run: node --test tools/cloud-measurement/test_cloud_business.mjs

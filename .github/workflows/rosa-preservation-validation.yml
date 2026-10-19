@@ -1,0 +1,114 @@
+name: ROSA preservation and lifecycle source boundaries
+on:
+  pull_request:
+    paths:
+      - scripts/prepare-rosa-checkpoint.py
+      - scripts/rosa-lifecycle-plan.py
+      - scripts/test_rosa_preservation.py
+      - scripts/rosa-preservation-batch.sh
+      - scripts/rosa-delete.sh
+      - scripts/rosa-approved-delete.py
+      - scripts/rosa-approved-delete.sh
+      - scripts/test_rosa_approved_delete.py
+      - scripts/rosa-create.sh
+      - scripts/rosa-recreate-readiness.py
+      - scripts/rosa-recreate-resume.sh
+      - scripts/test_rosa_recreate_readiness.py
+      - scripts/rosa-lifecycle-entry.sh
+      - scripts/rosa-lifecycle-entry.py
+      - scripts/collect-rosa-restoration-gaps.py
+      - scripts/rosa-monitoring-volume-backup.py
+      - scripts/verify-rosa-independent-supplements.py
+      - scripts/rosa-monitoring-preservation.sh
+      - docs/ROSA_CHECKPOINT_LIFECYCLE.md
+      - .github/workflows/rosa-preservation-validation.yml
+      - scripts/rosa-monitoring-permission.py
+      - scripts/rosa-monitoring-permission-resume.sh
+      - scripts/test_rosa_monitoring_permission.py
+      - scripts/test_rosa_monitoring_saved_resume.py
+      - scripts/rosa-monitoring-finalize.py
+      - scripts/test_rosa_monitoring_finalize.py
+      - scripts/rosa-monitoring-restore-permission.py
+      - scripts/rosa-monitoring-restore-permission.sh
+      - scripts/test_rosa_monitoring_restore_permission.py
+      - scripts/rosa-monitoring-restore-reconcile.py
+      - scripts/rosa-monitoring-restore-reconcile.sh
+      - scripts/test_rosa_monitoring_restore_reconcile.py
+      - scripts/prepare-rosa-delete-review.py
+      - scripts/rosa-delete-review.sh
+      - scripts/test_rosa_delete_review.py
+      - terraform/bootstrap/rosa_monitoring_restore.tf
+      - scripts/test_rosa_restore_terraform_scope.py
+      - scripts/test_rosa_restore_structured_inputs.py
+      - terraform/bootstrap/iam.tf
+      - scripts/prepare-rosa-reconstruction.py
+      - scripts/rosa-fresh-management.py
+      - scripts/rosa-gitops-bootstrap.py
+      - scripts/rosa-held-restoration.py
+      - scripts/rosa-held-restoration.sh
+      - scripts/rosa-restore.sh
+      - scripts/test_rosa_reconstruction.py
+      - terraform/bootstrap/rosa_monitoring_preservation.tf
+  push:
+    branches: [main]
+    paths:
+      - scripts/prepare-rosa-checkpoint.py
+      - scripts/rosa-lifecycle-plan.py
+      - scripts/test_rosa_preservation.py
+      - scripts/rosa-preservation-batch.sh
+      - scripts/rosa-delete.sh
+      - scripts/rosa-approved-delete.py
+      - scripts/rosa-approved-delete.sh
+      - scripts/test_rosa_approved_delete.py
+      - scripts/rosa-create.sh
+      - scripts/rosa-recreate-readiness.py
+      - scripts/rosa-recreate-resume.sh
+      - scripts/test_rosa_recreate_readiness.py
+      - scripts/rosa-lifecycle-entry.sh
+      - scripts/rosa-lifecycle-entry.py
+      - scripts/collect-rosa-restoration-gaps.py
+      - scripts/rosa-monitoring-volume-backup.py
+      - scripts/verify-rosa-independent-supplements.py
+      - scripts/rosa-monitoring-preservation.sh
+      - .github/workflows/rosa-preservation-validation.yml
+      - scripts/rosa-monitoring-permission.py
+      - scripts/rosa-monitoring-permission-resume.sh
+      - scripts/test_rosa_monitoring_permission.py
+      - scripts/test_rosa_monitoring_saved_resume.py
+      - scripts/rosa-monitoring-finalize.py
+      - scripts/test_rosa_monitoring_finalize.py
+      - scripts/rosa-monitoring-restore-permission.py
+      - scripts/rosa-monitoring-restore-permission.sh
+      - scripts/test_rosa_monitoring_restore_permission.py
+      - terraform/bootstrap/rosa_monitoring_restore.tf
+      - scripts/test_rosa_restore_terraform_scope.py
+      - scripts/test_rosa_restore_structured_inputs.py
+      - terraform/bootstrap/iam.tf
+      - scripts/prepare-rosa-reconstruction.py
+      - scripts/rosa-fresh-management.py
+      - scripts/rosa-gitops-bootstrap.py
+      - scripts/rosa-held-restoration.py
+      - scripts/rosa-held-restoration.sh
+      - scripts/rosa-restore.sh
+      - scripts/test_rosa_reconstruction.py
+      - terraform/bootstrap/rosa_monitoring_preservation.tf
+permissions:
+  contents: read
+jobs:
+  source-boundaries:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s scripts -p 'test_rosa_*.py' -v
+      - run: bash -n scripts/rosa-preservation-batch.sh
+      - run: for path in scripts/rosa-delete.sh scripts/rosa-create.sh scripts/rosa-lifecycle-entry.sh scripts/rosa-monitoring-preservation.sh scripts/rosa-held-restoration.sh scripts/rosa-restore.sh scripts/rosa-monitoring-permission-resume.sh scripts/rosa-monitoring-restore-permission.sh scripts/rosa-monitoring-restore-reconcile.sh scripts/rosa-delete-review.sh scripts/rosa-approved-delete.sh scripts/rosa-recreate-resume.sh; do bash -n "$path"; done
+      - name: Validate only the added snapshot permission HCL syntax
+        run: |
+          curl --fail --silent --show-error --location https://releases.hashicorp.com/terraform/1.16.4/terraform_1.16.4_linux_amd64.zip -o /tmp/rosa-terraform.zip
+          echo 'dc94af0eef1147718ad7c8daea792ed199e3e0492eec180d0adafa2a65a879df  /tmp/rosa-terraform.zip' | sha256sum --check
+          unzip -q /tmp/rosa-terraform.zip -d /tmp/rosa-terraform
+          /tmp/rosa-terraform/terraform fmt -check terraform/bootstrap/rosa_monitoring_preservation.tf terraform/bootstrap/rosa_monitoring_restore.tf terraform/bootstrap/iam.tf
+      - name: Reject direct Terraform restoration scope widening without AWS access
+        run: python3 scripts/test_rosa_restore_terraform_scope.py --terraform /tmp/rosa-terraform/terraform --work-parent "$RUNNER_TEMP"

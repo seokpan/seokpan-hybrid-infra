@@ -1,0 +1,10 @@
+{
+  "status": "NOT_ACCEPTED",
+  "accepted_by": null,
+  "cluster_id": null,
+  "stage": null,
+  "source_sha256": null,
+  "normal_business_ref": null,
+  "shared_state_accepted": false,
+  "shared_state_ref": null
+}

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "lifecycle_config": null,
+  "launch_inputs": null,
+  "final_data_handoff": null,
+  "schema_credentials_file": null,
+  "runtime_inputs_file": null,
+  "gitops_source": null,
+  "kustomize": null,
+  "oc": null,
+  "personal_kubeconfig": null
+}

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "cluster_id": null,
+  "namespace": "seokpan-cloud",
+  "namespace_uid": null,
+  "readonly_pod_scope_accepted": false,
+  "pod_name": null,
+  "pod_uid": null,
+  "container": "db-admin",
+  "secret_uid": null,
+  "ca_uid": null,
+  "oc": null,
+  "personal_kubeconfig": null,
+  "held_bundle": null,
+  "held_bundle_sha256": null
+}

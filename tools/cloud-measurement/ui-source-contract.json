@@ -1,0 +1,23 @@
+{
+  "repository": "seokpan/seokpan-hybrid-app",
+  "revision": "c2dad254cc407431092691f9ea5892f8324f1520",
+  "files": {
+    "frontend/src/App.tsx": "b3c8acaaa24613ad292fdd8a47d3088e93b5f66d",
+    "frontend/src/lobby/LobbyPage.tsx": "734385214ab70f0c463b4134a1a8db7a2ea5e19f",
+    "frontend/src/room/RoomPage.tsx": "b23d6c47fdb7181b39c9ad01f2e4adc4d59b9874",
+    "frontend/src/game/GamePanel.tsx": "087ddb46204961a198593cbd36a71054fe9168c2",
+    "frontend/src/api/client.ts": "2adfbec19fe7daf4df90feaae1efa6698f23f324",
+    "frontend/src/session/recovery.ts": "ba7d767a17704c7b91f375b1aa6033e77731bb2c"
+  },
+  "ui_navigation": [
+    "/",
+    "/login",
+    "/lobby",
+    "/rankings"
+  ],
+  "room_navigation": "Session room_id/participant_id select RoomPage; no /rooms/{id} page route",
+  "vote_boundary": "real UI click -> committed vote response -> independent peer room WSS event with same game version -> peer UI tally",
+  "setup": "2 synthetic Member accounts and 1 Guest per private room; no A/D account fixture needed",
+  "credential_storage": "memory only; no storageState/HAR/trace/video; no raw error export",
+  "measurement_module_sha256": "ac3e28fea3340d54a6ff911322dd72a62e344081caf8a47a1cb0ae9eca62ed21"
+}

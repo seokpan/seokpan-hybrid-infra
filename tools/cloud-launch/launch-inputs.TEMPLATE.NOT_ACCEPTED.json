@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "run_id": null,
+  "cluster_id": null,
+  "api_url": null,
+  "namespace_uid": null,
+  "ingress_domain": null,
+  "database_host": null,
+  "redis_host": null,
+  "infra_sha": null,
+  "secret_revision": null,
+  "release_review_ref": null,
+  "protected_uids": {
+    "secret/backend-db-runtime": null,
+    "secret/backend-redis-runtime": null,
+    "configmap/backend-database-ca": null,
+    "configmap/backend-redis-ca": null
+  },
+  "window": {"not_before": null, "not_after": null},
+  "budget": {
+    "reported_spend_usd": 352.31,
+    "unreported_and_retained_allowance_usd": null,
+    "hourly_upper_usd": null,
+    "shutdown_reserve_hours": null,
+    "variable_allowance_usd": null,
+    "estimate_ref": null
+  }
+}

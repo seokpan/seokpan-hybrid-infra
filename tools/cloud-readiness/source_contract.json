@@ -1,0 +1,16 @@
+{
+  "repository": "seokpan/seokpan-hybrid-gitops",
+  "revision": "c75a4b5e3b3b9bae4ea7d8a431962cb9ca7308d7",
+  "files": {
+    "apps/base/kustomization.yaml": "bd9b8f9d48ffeb0e0c371cbfec912a1305a92116",
+    "apps/base/frontend.yaml": "8df77bc2bc6296778e8b45f31bc9fdc83d254a8b",
+    "apps/base/services.yaml": "1700e00269cb337f37ff03ce4525cc45424507d1",
+    "apps/base/backend.yaml": "a643d9a58ada595a94fc138946b35bda284d218b",
+    "apps/base/runtime.env": "cc0ad0a14b01c1ca0333a51c08efd7c7f17908df",
+    "apps/overlays/cloud/runtime/kustomization.yaml": "e4af16ad38259b6b8e8c740e37f1086b1866e401",
+    "apps/overlays/cloud/runtime/routes.yaml": "2b38d35bf77bbc056be81c2dd0da6d56537c9276",
+    "apps/overlays/cloud/runtime/runtime.env": "681d72859faab3aee061c5ea369f623a7e439c12",
+    "apps/overlays/cloud/runtime/release-source.yaml": "51a5371fd9640c29880dcd01a56e712675c22b1e",
+    "apps/overlays/cloud/activation-target/topology.yaml": "b12115de94c88f5d297b77b2fd52ee655ddcbbaf"
+  }
+}
