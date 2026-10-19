@@ -56,7 +56,7 @@ class KnownInputs(unittest.TestCase):
     def test_changed_observed_dispatch_stops_before_any_authorization_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);base=root/'prestart-closeout';out=base/'inputs';out.mkdir(parents=True)
-            (root/'generator-link').mkdir();p=root/'generator-link/restricted_dispatch.py';p.write_bytes(b'unknown changed code')
+            (root/'generator-link').mkdir();p=root/'generator-link/restricted_dispatch.py';p.write_bytes(b'unknown changed code');p.chmod(0o600)
             private(out/'metadata-transport-receipt.json',{'reason':'EXACT_ORIGINAL_RESTRICTED_DISPATCH_REQUIRED'})
             a=types.SimpleNamespace(observed_dispatch_sha256='0'*64)
             with self.assertRaisesRegex(RuntimeError,'OBSERVED_DISPATCH_CHANGED'):
@@ -85,3 +85,4 @@ class KnownInputs(unittest.TestCase):
             self.assertFalse(result['other_keys_changed'])
 
 if __name__=='__main__':unittest.main()
+
