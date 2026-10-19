@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "run_id": "c02-run-input-required",
+  "source_api": null,
+  "source_contract": null,
+  "source_read": null,
+  "github_api_argv": null,
+  "external_hold": null,
+  "rotation_receipt": null,
+  "stop_budget_minutes": 75,
+  "joint_budget_minutes": 120,
+  "window": {
+    "not_before": null,
+    "not_after": null
+  }
+}

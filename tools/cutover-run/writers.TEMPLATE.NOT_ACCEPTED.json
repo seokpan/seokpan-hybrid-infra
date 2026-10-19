@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "run_id": null,
+  "source_api_sha256": null,
+  "operator": null,
+  "inventory_complete_confirmed_by_operator": false,
+  "hold_until": null,
+  "categories": {
+    "external_ingress": {
+      "mode": null,
+      "stop_argv": null,
+      "verify_argv": null,
+      "command_review_ref": null,
+      "state": null,
+      "evidence_ref": null,
+      "checked_at": null
+    },
+    "ci": {
+      "mode": null,
+      "stop_argv": null,
+      "verify_argv": null,
+      "command_review_ref": null,
+      "state": null,
+      "evidence_ref": null,
+      "checked_at": null
+    },
+    "manual_direct_db": {
+      "mode": null,
+      "stop_argv": null,
+      "verify_argv": null,
+      "command_review_ref": null,
+      "state": null,
+      "evidence_ref": null,
+      "checked_at": null
+    },
+    "scheduled_and_other_services": {
+      "mode": null,
+      "stop_argv": null,
+      "verify_argv": null,
+      "command_review_ref": null,
+      "state": null,
+      "evidence_ref": null,
+      "checked_at": null
+    }
+  }
+}

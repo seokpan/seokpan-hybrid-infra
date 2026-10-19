@@ -1,0 +1,11 @@
+{
+  "run_id": null,
+  "operator": null,
+  "data_compare_reference": null,
+  "data_compare_result": null,
+  "purpose_sql_ref": null,
+  "current_schema_ref": null,
+  "normal_business_ref": null,
+  "cloud_new_writes_confirmed": null,
+  "source_reopen_approved": false
+}
