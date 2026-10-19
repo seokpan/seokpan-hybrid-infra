@@ -21,7 +21,7 @@ NAME='seokpan-tf-rosa-monitoring-restore'
 TARGET='aws_iam_policy.tf_rosa_monitoring_restore[0]'
 ATTACH='aws_iam_role_policy_attachment.tf_rosa_monitoring_restore[0]'
 BOOT='aws_iam_role_policy.tf_bootstrap'
-NEW_HCL_SHA='59bf0d2250beb038ed644653f4703597e04822d63f9953f40d0a608fc4cc7f43'
+NEW_HCL_SHA='b87bc4dc3d3c52ff791b254d1f09f6b9e712a4a840b6329309603ffc76d128ab'
 MAP_SHA='8b6d36243ba7223e0b3c78281c65b5bbb704097fa1ad728105699bc21e6f189e'
 MANAGE=['iam:CreatePolicy','iam:DeletePolicy','iam:GetPolicy','iam:GetPolicyVersion','iam:ListPolicyVersions',
         'iam:CreatePolicyVersion','iam:DeletePolicyVersion','iam:TagPolicy','iam:UntagPolicy','iam:ListPolicyTags']
@@ -64,7 +64,7 @@ def build_policy(scope):
          and len(rows)==4 and len({r['snapshot_id'] for r in rows})==4
          and set(keys)=={r['source_kms_key'] for r in rows},'EXACT_PROTECTED_RESTORE_SCOPE_REQUIRED')
     need(all(r.get('snapshot_state')=='completed' and r.get('namespace')=='openshift-monitoring'
-             and re.fullmatch(r'snap-[0-9a-f]+',r['snapshot_id']) for r in rows),'COMPLETED_MONITORING_SNAPSHOTS_ONLY')
+             and re.fullmatch(r'snap-(?:[0-9a-f]{8}|[0-9a-f]{17})',r['snapshot_id']) for r in rows),'COMPLETED_MONITORING_SNAPSHOTS_ONLY')
     need(keys and all(re.fullmatch(r'arn:aws:kms:ap-northeast-2:'+account+r':key/[a-zA-Z0-9-]+',k) for k in keys),
          'SAME_ACCOUNT_EXACT_KMS_KEYS_REQUIRED')
     snapshots=sorted('arn:aws:ec2:ap-northeast-2::snapshot/'+r['snapshot_id'] for r in rows)
@@ -84,6 +84,18 @@ def build_policy(scope):
          'Condition':{**service,'Bool':{'kms:GrantIsForAWSResource':'true'}}}]}
     need(len(M.canonical(policy))<=6144,'MANAGED_RESTORE_POLICY_SIZE_LIMIT')
     return policy
+
+def terraform_sources(scope):
+    """Bind the Terraform generator to the same validated protected map."""
+    build_policy(scope)
+    return dict(sorted((row['snapshot_id'],row['source_kms_key']) for row in scope['volumes']))
+
+def bind_terraform_sources(values,scope):
+    expected=terraform_sources(scope)
+    need('rosa_monitoring_restore_sources' not in values
+         or values['rosa_monitoring_restore_sources']==expected,'STRUCTURED_RESTORE_SCOPE_CHANGED')
+    values['rosa_monitoring_restore_sources']=expected
+    return values
 
 def refresh_review(plan,snapshot_policy):
     planned={r['address']:r for r in plan.get('resource_changes',[]) if r.get('mode')=='managed'}
@@ -202,6 +214,7 @@ def apply_policy(a,out):
     values=M.read(old/'monitoring-scope.tfvars.json')
     values.update(M.previous_settings(before,M.read(c['create']['var_file']),account))
     values.update(enable_rosa_monitoring_restore=True,rosa_monitoring_restore_policy_json=M.canonical(expected).decode())
+    bind_terraform_sources(values,scope)
     varfile=out/'restore-scope.tfvars.json';M.save(varfile,values);varsha=M.sha(varfile)
     saved=out/'saved.tfplan';run.command(tf+['plan','-input=false','-no-color','-lock-timeout=60s','-detailed-exitcode','-var-file='+str(varfile),'-out='+str(saved)],codes=(0,2))
     plan=json.loads(run.command(tf+['show','-json',str(saved)]).stdout);M.save(out/'plan-private.json',plan)

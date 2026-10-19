@@ -10,7 +10,7 @@ import tempfile
 
 HERE=Path(__file__).resolve().parent
 raw=(HERE/'rosa-monitoring-restore-permission.py').read_bytes()
-if hashlib.sha256(raw).hexdigest()!='3832069c18963eabd3941853269ec561b6b9a381f4ca6468c43498ccd42e1cb8':
+if hashlib.sha256(raw).hexdigest()!='26e18086c3c5e654fe76e7d71a29659dcec274f0509775e1b4befbc59410b9ba':
     raise RuntimeError('PINNED_RESTORE_HELPER_REQUIRED')
 spec=importlib.util.spec_from_file_location('partial_restore_base',HERE/'rosa-monitoring-restore-permission.py')
 R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
@@ -133,6 +133,7 @@ def reconcile(a,out,run):
          'CURRENT_FLAGS_CHANGED_NO_AUTOMATIC_REPLAN')
     need(values.get('enable_rosa_monitoring_restore') is True
          and R.doc(values['rosa_monitoring_restore_policy_json'])==R.doc(expected),'PARTIAL_SCOPE_CHANGED')
+    R.bind_terraform_sources(values,scope)
     varfile=out/'remainder.tfvars.json';M.save(varfile,values);varsha=M.sha(varfile);M.save(out/'before.tfstate',before)
     saved=out/'remainder.tfplan';run.phase='PLAN_MISSING_POLICY_AND_ATTACHMENT_ONLY'
     run.command(tf+['plan','-input=false','-no-color','-lock-timeout=60s','-detailed-exitcode','-var-file='+str(varfile),'-out='+str(saved)],codes=(0,2))
