@@ -100,6 +100,103 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(raw[31] & 64, 64)
         self.assertEqual(archive.public_key(private), public)
 
+
+    def _assert_import_blocked(self, responses):
+        repo = Path(archive.__file__).resolve().parents[1]
+        replies = iter([str(repo), *responses])
+
+        def fake_git(command, **kwargs):
+            return subprocess.CompletedProcess(
+                command, 0,
+                stdout=next(replies) + "\n",
+                stderr=""
+            )
+
+        argv = [
+            "vpn_aws_key_archive.py",
+            "--create",
+            "--expected-source",
+            "a" * 40,
+            "--recipients-file",
+            "/unused",
+        ]
+
+        with (
+            patch.object(
+                archive.subprocess, "run", side_effect=fake_git
+            ),
+            patch.object(
+                archive, "load_guard_after_verification"
+            ) as loader,
+            patch.object(archive.sys, "argv", argv),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(archive.main(), 2)
+            loader.assert_not_called()
+
+    def test_wrong_sha_blocks_import(self):
+        self._assert_import_blocked(["b" * 40])
+
+    def test_wrong_branch_blocks_import(self):
+        self._assert_import_blocked([
+            "a" * 40, "feature/unapproved"
+        ])
+
+    def test_modified_guard_blocks_import(self):
+        self._assert_import_blocked([
+            "a" * 40,
+            "main",
+            " M scripts/vpn_onprem_key_supply.py"
+        ])
+
+
+
+    def test_committed_guard_loads_successfully(self):
+        # 기존 Git 저장소에서 승인된 실제 공통 모듈 확인
+        # main()을 실행하지 않아 키 공급·복호화는 발생하지 않음
+        script = Path(archive.__file__).resolve()
+
+        guard = archive.load_guard_after_verification(script)
+
+        self.assertTrue(callable(guard.verify_source))
+        self.assertTrue(callable(guard.protected_file))
+        self.assertEqual(
+            Path(guard.__file__).resolve(),
+            script.with_name("vpn_onprem_key_supply.py")
+        )
+
+    def test_modified_guard_bytes_rejected_before_execution(self):
+        # 실제 파일은 수정하지 않고 읽은 소스만 가짜 값으로 교체
+        # 만약 변조된 코드가 실행되면 AssertionError로 실패
+        script = Path(archive.__file__).resolve()
+
+        fake_committed = subprocess.CompletedProcess(
+            ["git"],
+            0,
+            stdout=b"# approved source\\n",
+            stderr=b""
+        )
+
+        unapproved_source = (
+            b"raise AssertionError('UNAPPROVED_CODE_EXECUTED')\\n"
+        )
+
+        with (
+            patch.object(
+                archive.subprocess,
+                "run",
+                return_value=fake_committed
+            ),
+            patch.object(
+                Path,
+                "read_bytes",
+                return_value=unapproved_source
+            )
+        ):
+            with self.assertRaises(ValueError):
+                archive.load_guard_after_verification(script)
+
+
 if __name__ == "__main__":
     import io
     suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])

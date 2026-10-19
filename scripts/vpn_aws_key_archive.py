@@ -5,6 +5,7 @@ sys.dont_write_bytecode = True
 import argparse
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import stat
@@ -19,6 +20,123 @@ RECIPIENTS = (
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def verify_source_before_import(script, expected_source):
+    require(
+        os.name == "posix"
+        and isinstance(expected_source, str)
+        and len(expected_source) == 40
+        and all(c in "0123456789abcdef" for c in expected_source),
+        "실행 환경 또는 승인 SHA 입력이 다릅니다."
+    )
+
+    repo = script.parents[1]
+    env = {
+        k: v for k, v in os.environ.items()
+        if not k.startswith("GIT_")
+    }
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+
+    checks = (
+        (["rev-parse", "--show-toplevel"], None),
+        (["rev-parse", "HEAD"], expected_source),
+        (["branch", "--show-current"], "main"),
+        (["status", "--porcelain", "--untracked-files=all"], ""),
+    )
+
+    for command, expected in checks:
+        result = subprocess.run(
+            ["git", "--no-optional-locks",
+             "-c", "core.fsmonitor=false", *command],
+            cwd=str(repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        require(result.returncode == 0, "Git 조회 실패")
+        actual = result.stdout.strip()
+
+        if expected is None:
+            require(
+                Path(actual).resolve() == repo,
+                "저장소 위치 불일치"
+            )
+        else:
+            require(
+                actual == expected,
+                "승인 Source·브랜치·변경 상태 불일치"
+            )
+
+    return repo, env
+
+
+def load_guard_after_verification(script):
+    guard_file = script.with_name("vpn_onprem_key_supply.py")
+
+    require(
+        not any(p.is_symlink() for p in
+                (guard_file, *guard_file.parents)),
+        "공통 모듈 경로에 심볼릭 링크가 있습니다."
+    )
+    require(guard_file.is_file(), "공통 모듈 없음")
+
+    spec = importlib.util.spec_from_file_location(
+        "vpn_onprem_key_supply", str(guard_file)
+    )
+    require(
+        spec is not None and spec.loader is not None,
+        "공통 모듈 로딩 실패"
+    )
+
+    guard = importlib.util.module_from_spec(spec)
+    # Git HEAD에 기록된 승인 소스를 직접 확인한다.
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("GIT_")
+    }
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+
+    committed = subprocess.run(
+        [
+            "git", "--no-optional-locks",
+            "-c", "core.fsmonitor=false",
+            "show", "HEAD:scripts/vpn_onprem_key_supply.py"
+        ],
+        cwd=str(script.parents[1]),
+        env=env,
+        capture_output=True,
+        timeout=15,
+    )
+
+    require(
+        committed.returncode == 0,
+        "승인된 공통 모듈을 확인하지 못했습니다."
+    )
+
+    # 실제 파일 내용과 Git의 승인 내용이 같은지 확인
+    source_bytes = guard_file.read_bytes()
+
+    require(
+        source_bytes == committed.stdout,
+        "공통 모듈 내용이 승인된 Git Source와 다릅니다."
+    )
+
+    # .pyc 캐시를 거치지 않고 확인한 소스만 실행
+    exec(
+        compile(source_bytes, str(guard_file), "exec"),
+        guard.__dict__
+    )
+
+    require(
+        Path(guard.__file__).resolve(strict=True) == guard_file,
+        "공통 모듈 경로 불일치"
+    )
+    return guard
+
 
 def public_key(private):
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -117,13 +235,24 @@ def main():
         script = script.resolve(strict=True)
         require(script.name == "vpn_aws_key_archive.py" and script.parent.name == "scripts",
                 "실행 파일 위치가 다릅니다.")
-        import vpn_onprem_key_supply as guard
-        require(Path(guard.__file__).resolve()
-                == script.with_name("vpn_onprem_key_supply.py"),
-                "검사 모듈 위치가 다릅니다.")
-        repo, env = guard.verify_source(
-            script.with_name("vpn_onprem_key_supply.py"), args.expected_source)
-        require(repo == script.parents[1], "검사 저장소와 실행 위치가 다릅니다.")
+        # 승인 Source를 먼저 확인
+        repo, env = verify_source_before_import(
+            script, args.expected_source
+        )
+
+        # 검증 통과 후 공통 모듈 로딩
+        guard = load_guard_after_verification(script)
+
+        # 기존 PR #87 Source 재검증 유지
+        checked_repo, checked_env = guard.verify_source(
+            script.with_name("vpn_onprem_key_supply.py"),
+            args.expected_source
+        )
+        require(
+            checked_repo == repo,
+            "검사 저장소와 실행 위치가 다릅니다."
+        )
+        env = checked_env
         stage = "보호 입력 확인"
         identity = Path.home() / ".config/sops/age/keys.txt"
         recipients_file = Path(args.recipients_file)
