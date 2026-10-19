@@ -1,0 +1,15 @@
+{
+  "binding": null,
+  "target_reference": null,
+  "mariadb": null,
+  "credential_file": null,
+  "ca_file": null,
+  "database_host": null,
+  "accounts": [
+    "identity_svc",
+    "game_svc"
+  ],
+  "interval_seconds": 5,
+  "duration_seconds": 600,
+  "not_after": null
+}

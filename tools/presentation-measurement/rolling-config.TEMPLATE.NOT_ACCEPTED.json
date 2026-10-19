@@ -1,0 +1,23 @@
+{
+  "actor": "tjung03",
+  "namespace": "seokpan-cloud",
+  "application": "seokpan-cloud-app",
+  "oc": null,
+  "personal_kubeconfig": null,
+  "api": null,
+  "namespace_uid": null,
+  "application_uid": null,
+  "run_id": null,
+  "source_sha256": null,
+  "normalized_source_sha256": null,
+  "expected_images": {
+    "backend": null,
+    "frontend": null
+  },
+  "expected_replicas": {
+    "backend": null,
+    "frontend": null
+  },
+  "not_before": null,
+  "not_after": null
+}

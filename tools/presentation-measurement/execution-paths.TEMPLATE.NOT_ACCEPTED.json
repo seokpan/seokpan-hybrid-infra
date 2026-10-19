@@ -1,0 +1,15 @@
+{
+  "controller_python": null,
+  "controller_measurement_dir": null,
+  "controller_work": null,
+  "controller_trigger_prefix": null,
+  "observer_node": null,
+  "observer_playwright_module": null,
+  "db_mariadb": null,
+  "db_credential_file": null,
+  "db_ca_file": null,
+  "db_target_reference": null,
+  "db_interval_seconds": 5,
+  "db_duration_seconds": 600,
+  "extra_recovery_seconds": 30
+}

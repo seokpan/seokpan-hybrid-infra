@@ -1,0 +1,12 @@
+{
+  "identity_svc": {
+    "max_user_connections": null,
+    "global_max_user_connections": null,
+    "evidence_ref": null
+  },
+  "game_svc": {
+    "max_user_connections": null,
+    "global_max_user_connections": null,
+    "evidence_ref": null
+  }
+}
