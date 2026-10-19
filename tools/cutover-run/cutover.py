@@ -43,6 +43,15 @@ def gates(c,external,rotation,now=None):
          and stamp(rotation['safe_until'])>=end,'CURRENT_A_ROTATION_7200_GATE_REQUIRED')
     return {'external_hold_sha256':sha(external),'rotation_sha256':sha(rotation),'operator_reports_not_cryptographic_attestation':True}
 
+def destination_ready(c):
+    platform=read(c['platform_handoff'])
+    need(platform.get('state')=='ready' and platform.get('cluster_id')==c['cloud_cluster_id']
+         and c['cloud_cluster_id']!='2tejeb2farjaaoef1e74asdf6amrtpu3','NEW_CLOUD_PLATFORM_READY_BEFORE_SOURCE_STOP')
+    need(c['deployment_review_ref'] and c['cloud_connection_preparation_ref'] and c['A_preflight_ref'],'PREPARED_DEPLOYMENT_CONNECTION_AND_A_REFERENCES_REQUIRED')
+    return {'platform_receipt_sha256':sha(platform),'new_cloud_cluster_id':c['cloud_cluster_id'],
+            'deployment_review_ref':c['deployment_review_ref'],'cloud_connection_preparation_ref':c['cloud_connection_preparation_ref'],
+            'final_import_and_app_business_not_required_before_dump':True}
+
 def config(c):
     need(c.get('schema')==1 and re.fullmatch(r'[a-z0-9-]{3,60}',c.get('run_id') or ''),'RUN_SCHEMA_REQUIRED')
     need(c['source_api'].startswith('https://') and 'openshiftapps.com' not in c['source_api'],'ORIGINAL_KUBERNETES_API_REQUIRED')
@@ -105,7 +114,8 @@ def main():
         if a.action=='access':
             r=access(c,v);r.update(config_sha256=fingerprint)
             save(a.work/('access-'+str(time.time_ns())+'.json'),r);print(json.dumps(r));return 0
-        if a.action in {'stop','go'}:proof=gates(c,read(c['external_hold']),read(c['rotation_receipt']))
+        if a.action in {'stop','go'}:
+            proof=gates(c,read(c['external_hold']),read(c['rotation_receipt']));proof.update(destination_ready(c))
         if a.action=='stop':
             who=access(c,v);pr=gh(c,'repos/'+REPO+'/pulls/156')
             if pr.get('merged'):

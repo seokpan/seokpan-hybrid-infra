@@ -14,7 +14,7 @@ import writers
 
 def inputs():
     def zoned(n):return C.dt.datetime.fromtimestamp(n,C.dt.timezone.utc).isoformat()
-    now=time.time();c={'schema':1,'run_id':'cutover-fixture','source_api':'https://10.1.93.90:6443','stop_budget_minutes':75,'joint_budget_minutes':120,
+    now=time.time()-1;c={'schema':1,'run_id':'cutover-fixture','source_api':'https://10.1.93.90:6443','stop_budget_minutes':75,'joint_budget_minutes':120,
       'window':{'not_before':zoned(now-10),'not_after':zoned(now+6000)}}
     e={'run_id':c['run_id'],'source_api_sha256':C.hashlib.sha256(c['source_api'].encode()).hexdigest(),'inventory_complete':True,'operator':'B','reference':'existing-controls',
       'checked_at':zoned(now),'hold_until':zoned(now+6100),'categories':{k:{'state':'CONFIRMED_NONE','evidence_ref':'current-inventory'} for k in writers.CATEGORIES}}
@@ -70,7 +70,9 @@ class Tests(unittest.TestCase):
         c,e,r=inputs()
         with tempfile.TemporaryDirectory() as t:
             root=Path(t);w=root/'work';w.mkdir()
-            c.update(source_contract=str(root/'contract.json'),source_read=str(root/'source.json'),external_hold=str(root/'external.json'),rotation_receipt=str(root/'rotation.json'))
+            c.update(source_contract=str(root/'contract.json'),source_read=str(root/'source.json'),external_hold=str(root/'external.json'),rotation_receipt=str(root/'rotation.json'),
+                     platform_handoff=str(root/'platform.json'),cloud_cluster_id='newcluster012345',deployment_review_ref='reviewed-code',cloud_connection_preparation_ref='new-worker-binding',A_preflight_ref='A-existing-preflight')
+            C.save(root/'platform.json',{'state':'ready','cluster_id':c['cloud_cluster_id']})
             for name,value in [('contract',{}),('source',{}),('external',e),('rotation',r),('c',c)]:C.save(root/(name+'.json'),value)
             C.save(w/'merge.STARTED.json',{'config_sha256':C.sha(c),'utc':C.utc()})
             C.save(w/'kubernetes-stop.json',{'config_sha256':C.sha(c),'observed_at':C.utc(),'result':{'merge_sha':'a'*40}})
@@ -87,6 +89,13 @@ class Tests(unittest.TestCase):
             with patch('sys.argv',['cutover.py','decision','--choice','SOURCE','--data-decision',str(root/'d.json'),'--config',str(root/'c.json'),'--work',str(root/'work'),'--infra',str(root),'--execute']),patch('cutover.verifier',return_value=object()),redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(C.main(),2)
             self.assertIn('NO_SIMPLE_SOURCE_REOPEN',out.getvalue())
+    def test_source_stop_requires_new_ready_platform_but_not_final_import_or_app_business(self):
+        with tempfile.TemporaryDirectory() as t:
+            p=Path(t)/'platform.json';C.save(p,{'state':'ready','cluster_id':'newcluster012345'})
+            c={'platform_handoff':str(p),'cloud_cluster_id':'newcluster012345','deployment_review_ref':'approved','cloud_connection_preparation_ref':'new-worker-path','A_preflight_ref':'existing-ready'}
+            self.assertTrue(C.destination_ready(c)['final_import_and_app_business_not_required_before_dump'])
+            c['cloud_cluster_id']='2tejeb2farjaaoef1e74asdf6amrtpu3'
+            with self.assertRaisesRegex(RuntimeError,'PLATFORM_READY'):C.destination_ready(c)
 
 
 if __name__=='__main__':unittest.main()

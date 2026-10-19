@@ -115,6 +115,8 @@ python3 -I "$HPA/results.py" --config "$B_HPA_CONFIG" --work "$B_HPA_WORK" \
 
 `rotation.TEMPLATE`는 A의 실제 `rot_check 7200` 결과·확인 시각·기존 출력 참조·그날의 안전 종료 시각을 B가 결합한다.1800초 검사는 관리 접속 파일 준비에 유지하고7200초 확인을 대신하지 않는다. 자동 회전을 끄거나 오래된 관리 비밀번호로 우회하지 않는다. 실제 원본 중지 직전 현재 상태가 필요하며 과거 완료 검사의 반복과 다르다.
 
+원본 중지/GO에는 새 ROSA의 기존 platform handoff(state ready/새 Cluster ID)와 채택 배포 리뷰·새 Worker/Data 연결 준비·A 사전 준비 근거도 연결한다. 해당 파일은 생성/복원 흐름에서 얻는다. 아직 없으면 원본을 멈추지 않는다. 최종 Import나 앱 업무 성공을 Dump 전 조건으로 요구하는 순환 조건은 만들지 않는다.
+
 ### 원본 조작 명령
 
 아래 `CUT` 도구와 원본 kubeconfig/Context가 있는 host에서 실행한다. 자동 Git 병합 경로는 기존 `github_api_argv`(예: 보호 인증이 준비된 gh api 또는 기존 Controller 호출 argv)를 사용한다. 없으면 B가 합의 시각에 기존 GitHub 화면에서 병합하고 `stop --adopt-existing-merge`로 같은 PR/head·현재 창 안의 최근 병합을 검증한다. 사후에 외부 통제/회전을 수락한 것처럼 소급 기록할 수 없다.
