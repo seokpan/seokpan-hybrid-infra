@@ -40,7 +40,7 @@ def payload():
     for line in lines:
         wanted,name=line.split();need(re.fullmatch(r'[a-f0-9]{64}',wanted) and '/' not in name and '\\' not in name,'EXACT_REPAIR_MANIFEST_REQUIRED')
         rows[name]=wanted
-    need(set(rows)=={'finish_known_inputs.py','finish_prestart.py','metadata_transport.py','restricted_delegate.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
+    need(set(rows)=={'finish_known_inputs.py','finish_prestart.py','metadata_transport.py','restricted_delegate.py','observer_access_plan.py'},'EXACT_REPAIR_MANIFEST_REQUIRED')
     for name,wanted in rows.items():need(hashlib.sha256(raw(HERE/name)).hexdigest()==wanted,'REPAIR_PAYLOAD_HASH_MISMATCH')
     return rows
 
@@ -80,6 +80,7 @@ def reconcile(c,a):
     exact(work/'STARTED.NO_AUTOMATIC_RETRY.json',encoded(marker))
     exact(delegate,raw(HERE/'restricted_delegate.py'));replace(base/'metadata_transport.py',raw(HERE/'metadata_transport.py'))
     replace(base/'finish_prestart.py',raw(HERE/'finish_prestart.py'))
+    exact(base/'observer_access_plan.py',raw(HERE/'observer_access_plan.py'))
     replace(settings,encoded(new))
     spec=importlib.util.spec_from_file_location('known_transport',base/'metadata_transport.py')
     T=importlib.util.module_from_spec(spec);spec.loader.exec_module(T)
@@ -115,7 +116,11 @@ def bind_references(c,a):
         'global_user_limit':a.db_user_limit,'reserved':a.reserved,'evidence_ref':a.db_reference,
         'account_limits':{'identity_svc':None,'game_svc':None},'node_capacity':None,
         'current_limit_read':'FIRST_APPROVED_DATA_CONNECTION_BEFORE_APP_CAPACITY_ACCEPTANCE',
-        'current_values_asserted':False}
+        'current_values_asserted':False,
+        'global_process_privilege_required':True,'existing_grant_reference_does_not_prove_global_process':True,
+        'privilege_plan_generator':str(Path(c['out']).parent/'observer_access_plan.py'),
+        'permission_input':'existing protected Data-admin execution path or current PROCESS grant proof',
+        'grant_execution':'only if missing, using actual CURRENT_USER host binding; never grant application accounts'}
     exact(work/'db-reference.NOT_ACCEPTED.json',encoded(reference));r['capacity_reference_file']=str(work/'db-reference.NOT_ACCEPTED.json')
     origin={'host':a.source_host,'execution':'HOST_LOCAL_EXISTING_CONTEXT','source_contract':a.source_contract,
         'source_read_directory':a.source_read_directory,'controller_local':False,

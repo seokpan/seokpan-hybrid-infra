@@ -9,6 +9,7 @@
 | finish_prestart.py | 기존 원본 탐색, 보호 입력 추출 재사용, 입력 변환 및 미충족 목록 |
 | read_sources.py | 실패 하위 영수증·설정 해시·별도 인계 폴더의 원본 후보만 읽기. 등록·해독·자동 채택 없음 |
 | finish_known_inputs.py / restricted_delegate.py | 관측한 전용 키의 실패만 대조·보존하고 검토된 두 명령 제한기로 연결. 기존 참조 입력은 현재값과 구분해 등록 |
+| observer_access_plan.py | 실제 매칭된 db_admin의 전역 PROCESS 근거가 없을 때 기존 Data 관리자 세션용 최소 권한 계획만 생성. SQL 실행 없음 |
 | materialize_inputs.py | 수락한 보존본의 공급 객체와 현재 계정 암호문의 선택 추출·해시 캐시 |
 | readonly_handoff.py / d_generator.py | 별도 운영자에게 코드·config·plan·상태 읽기 ACL, 발생 결과의 제한 반환 |
 | metadata_transport.py | 기존 강제 명령 키에 정해진 상태/외부 결과 명령만 추가 |
@@ -43,6 +44,7 @@ Windows의 상태/외부 확인 경로도 windows-settings.TEMPLATE.NOT_ACCEPTED
 - 입력이 없거나 서로 다른 원본이 둘 이상이면 PENDING으로 남긴다. 과거 한도·기본 Replica 10·과거 비용을 현재값으로 자동 수락하지 않는다.
 - 새 노드 용량을 포함한 HPA 상한은 생성 전 입력으로 요구하지 않는다. 현재 DB/계정·노드 증거는 생성 후 실제 HPA 결합/활성 시 강제로 요구하며, Foundation·네트워크·현재 예산의 생성 전 조건은 유지한다. 앱 기동 전 목적 SQL/계정/Schema 확인도 그대로 유지한다.
 - DB 자격은 공유 ACL/메타데이터 전송 대상이 아니다. 기본 관측 경로는 기존 Backend에 private stdin으로 자격을 공급하며 Pod UID가 바뀐 표본은 실패다.
+- DB별 권한 목록은 전역 PROCESS 권한을 증명하지 않는다. 계정별 전체 연결수 관측 전에 기존 관리자 실행 경로 또는 현재 권한 근거를 연결한다. 실제 CURRENT_USER 결과와 같은 db_admin 계정/Host에만 계획하며 계정이 없거나 다르면 중단한다. 이미 있거나 미확인이면 GRANT 계획을 만들지 않는다. 애플리케이션 계정·비밀번호·GRANT OPTION은 변경하지 않는다.
 - 메타데이터 전송은 임의 경로 읽기·일반 셸·포트 전달을 제공하지 않는다. 원래 rolling/guard 명령은 기존 제한기에 위임한다. 기존 제한기 해시는 최대 두 개의 명시된 값만 허용하며 공백을 일반적으로 제거해 허용하지 않는다.
 - 설치가 중간에 멈추면 original-dispatch.json과 현재 강제 명령을 대조한다. 파일을 삭제하거나 등록을 반복해 표식을 피하지 않는다.
 - 관측한 기존 코드의 해시가 소비 도구와 다르더라도 그 해시를 추가해 알 수 없는 원문을 실행하지 않는다. 명시한 원본/기존 모듈 해시와 현재 강제 명령을 대조한 뒤, 원본 파일을 보존하고 검토된 restricted_delegate.py로 기존 probe·두 정확한 명령만 연결한다. 다른 키·셸 접근·ACL은 바꾸지 않는다. STARTED 표식 뒤 실패하면 자동 반복하지 않는다. 기본 prepare나 완료한 probe·해독은 호출하지 않는다.

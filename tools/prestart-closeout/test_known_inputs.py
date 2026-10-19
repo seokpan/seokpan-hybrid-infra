@@ -15,11 +15,23 @@ HERE=Path(__file__).resolve().parent
 def load(name):
     s=importlib.util.spec_from_file_location('known_'+name,HERE/(name+'.py'))
     m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
-F=load('finish_known_inputs');D=load('restricted_delegate');P=load('finish_prestart')
+F=load('finish_known_inputs');D=load('restricted_delegate');P=load('finish_prestart');O=load('observer_access_plan')
 def private(path,value):
     path.write_text(json.dumps(value),encoding='utf-8');path.chmod(0o600)
 
 class KnownInputs(unittest.TestCase):
+    def test_process_plan_is_only_for_matched_observer_without_grant_option(self):
+        x=O.plan('db_admin@192.0.2.0/255.255.255.0','missing','actual-existing-sql-result')
+        self.assertEqual(x['grant_sql'],"GRANT PROCESS ON *.* TO 'db_admin'@'192.0.2.0/255.255.255.0';")
+        self.assertNotIn('GRANT OPTION',x['grant_sql']);self.assertEqual(x['sql_calls'],0)
+        for account in ('identity_svc@%','db_admin@x\';DROP USER x;--'):
+            with self.assertRaises(ValueError):O.plan(account,'missing','actual-existing-sql-result')
+
+    def test_existing_or_unknown_process_visibility_never_produces_grant(self):
+        for state in ('present','unknown'):
+            x=O.plan('db_admin@192.0.2.1',state,'actual-existing-sql-result')
+            self.assertNotIn('grant_sql',x);self.assertEqual(x['sql_calls'],0)
+
     def test_future_hpa_capacity_is_not_a_precreate_gate_and_real_gates_remain(self):
         before,later=P.requirement_phases(['CURRENT_FOUNDATION_AND_NETWORK_PROOF','CURRENT_COST_SOURCE_REQUIRED',
             'CURRENT_DB_ACCOUNT_LIMITS_RESERVATION_AND_POOL_EVIDENCE_SOURCE_REQUIRED'])
@@ -85,4 +97,3 @@ class KnownInputs(unittest.TestCase):
             self.assertFalse(result['other_keys_changed'])
 
 if __name__=='__main__':unittest.main()
-
