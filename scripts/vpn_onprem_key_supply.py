@@ -12,8 +12,6 @@ import stat
 import subprocess
 from pathlib import Path
 
-from vpn_key_install_remote import validate_payload
-
 ARCHIVE_HASH = "8e45de907e5e4e5c9850c5c9d3ac9c3f8621494c0d9367eae1651460fd2beef6"
 
 
@@ -31,6 +29,39 @@ def protected_file(path):
 
     if info.st_size > 200000:
         raise ValueError("보호 파일 크기 제한 초과")
+
+
+def verify_source(script_file, expected_source):
+    script = Path(script_file).absolute()
+    if any(part.is_symlink() for part in (script, *script.parents)):
+        raise ValueError("연결 파일 경로의 실행 코드는 사용하지 않습니다.")
+    script = script.resolve(strict=True)
+    if script.name != "vpn_onprem_key_supply.py" or script.parent.name != "scripts":
+        raise ValueError("실행 파일 위치가 예상 구조와 다릅니다.")
+    repo = script.parents[1]
+    env = {name: value for name, value in os.environ.items()
+           if not name.startswith("GIT_")}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    commands = (
+        (["rev-parse", "--show-toplevel"], None),
+        (["rev-parse", "HEAD"], expected_source),
+        (["branch", "--show-current"], "main"),
+        (["status", "--porcelain", "--untracked-files=all"], ""),
+    )
+    for command, expected in commands:
+        result = subprocess.run(
+            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", *command],
+            cwd=str(repo), env=env, capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            raise ValueError("실행 저장소를 확인하지 못했습니다.")
+        actual = result.stdout.strip()
+        if expected is None:
+            if Path(actual).resolve() != repo:
+                raise ValueError("실행 파일과 저장소 최상위 위치가 다릅니다.")
+        elif actual != expected:
+            raise ValueError("실행 Source·브랜치·작업 상태가 다릅니다.")
+    return repo, env
 
 
 def main():
@@ -63,32 +94,8 @@ def main():
             raise ValueError("실행 환경 또는 기준 커밋 입력이 다릅니다.")
 
         home = Path.home()
-        repo = home / "work/seokpan-hybrid-infra-vpn-integrated-20261016"
-        env = os.environ.copy()
-        for name in (
-            "GIT_DIR", "GIT_WORK_TREE",
-            "GIT_INDEX_FILE", "GIT_COMMON_DIR"
-        ):
-            env.pop(name, None)
-
-        for command, expected in (
-            (["rev-parse", "HEAD"], args.expected_source),
-            (["branch", "--show-current"], "main"),
-            (["status", "--porcelain", "--untracked-files=all"], ""),
-        ):
-            result = subprocess.run(
-                [
-                    "git", "--no-optional-locks",
-                    "-c", "core.fsmonitor=false", *command
-                ],
-                cwd=str(repo),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0 or result.stdout.strip() != expected:
-                raise ValueError("실행 Source·브랜치·작업 상태가 다릅니다.")
+        repo, env = verify_source(__file__, args.expected_source)
+        from vpn_key_install_remote import validate_payload
 
         archive = (
             home / ".local/share/seokpan-hybrid/secrets/vpn"
@@ -129,9 +136,9 @@ def main():
             "wireguard_public_key": public,
         }).encode()
 
-        helper = Path(__file__).with_name(
-            "vpn_key_install_remote.py"
-        ).read_text(encoding="utf-8")
+        helper = (repo / "scripts/vpn_key_install_remote.py").read_text(
+            encoding="utf-8"
+        )
 
         print(
             "승인한 기존 키의 서버 공급을 실행합니다."
