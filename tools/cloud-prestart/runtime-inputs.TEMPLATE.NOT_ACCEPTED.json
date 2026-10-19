@@ -1,0 +1,10 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {"apiVersion": "v1", "kind": "Secret", "metadata": {"namespace": "seokpan-cloud", "name": "backend-db-runtime"}, "type": "Opaque", "data": {"SEOKPAN_IDENTITY_DATABASE_URL": null, "SEOKPAN_GAME_DATABASE_URL": null}},
+    {"apiVersion": "v1", "kind": "Secret", "metadata": {"namespace": "seokpan-cloud", "name": "backend-redis-runtime"}, "type": "Opaque", "data": {"SEOKPAN_REDIS_AUTH_TOKEN": null}},
+    {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"namespace": "seokpan-cloud", "name": "backend-database-ca"}, "data": {"ca.crt": null}},
+    {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"namespace": "seokpan-cloud", "name": "backend-redis-ca"}, "data": {"ca.crt": null}}
+  ]
+}

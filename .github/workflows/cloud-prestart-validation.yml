@@ -1,0 +1,22 @@
+name: Cloud prestart new connection boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-prestart/**'
+      - 'scripts/cloud-ready.sh'
+      - '.github/workflows/cloud-prestart-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  new-pod-and-launch-link:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -I tools/cloud-prestart/test_prestart.py
+      - run: bash -n scripts/cloud-ready.sh
