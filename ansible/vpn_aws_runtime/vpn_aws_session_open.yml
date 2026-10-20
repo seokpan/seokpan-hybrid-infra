@@ -1,0 +1,173 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-20
+# 작성 내용: 기존 프로그램 전달 뒤 서버 신원 확인·수신 세션 호출
+# 실제 실행은 별도 승인 후에만 한다.
+# 이번 준비 명령은 문법 검사만 한다.
+
+- name: 기존 프로그램 전달 절차 재사용
+  ansible.builtin.import_playbook: vpn_aws_runtime_deploy.yml
+
+- name: 승인한 서버에 임시 수신 세션 준비
+  hosts: vpn_aws
+  gather_facts: false
+  become: true
+
+  vars:
+    vpn_allow_receiver_prepare: false
+    vpn_approved_target_file: ""
+    ansible_connection: community.aws.aws_ssm
+    ansible_aws_ssm_region: ap-northeast-2
+    ansible_aws_ssm_plugin: "/usr/local/bin/session-manager-plugin"
+    ansible_aws_ssm_bucket_sse_mode: AES256
+    ansible_python_interpreter: /usr/bin/python3
+
+  pre_tasks:
+    - name: 별도 승인·기존 전달 결과·단일 대상 확인
+      ansible.builtin.assert:
+        that:
+          - vpn_allow_receiver_prepare | bool
+          - groups['vpn_aws'] | length == 1
+          - vpn_runtime_destination is defined
+          - vpn_approved_target_file | length > 0
+        fail_msg: 수신 세션 실행 승인과 기존 프로그램 전달 결과가 필요합니다.
+
+  tasks:
+    - name: 기존 신원 확인·세션 생성 함수를 호출
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -I
+          - -B
+          - -c
+          - |
+            import hashlib, json, os, stat, tempfile, time, types
+            from pathlib import Path
+
+            try:
+                import sys
+
+                if os.geteuid() != 0:
+                    raise ValueError()
+
+                approved = json.loads(sys.stdin.read())
+                base = Path(sys.argv[1])
+
+                if (
+                    not base.is_absolute()
+                    or any(p.is_symlink() for p in (base, *base.parents))
+                ):
+                    raise ValueError()
+
+                info = base.stat()
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) != 0o700
+                ):
+                    raise ValueError()
+
+                modules = {}
+
+                for name, digest in {'vpn_aws_session_prepare.py': '080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205', 'vpn_aws_imds_bridge.py': '4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3'}.items():
+                    path = base / name
+                    info = path.lstat()
+
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != 0
+                        or stat.S_IMODE(info.st_mode) != 0o600
+                        or info.st_nlink != 1
+                    ):
+                        raise ValueError()
+
+                    raw = path.read_bytes()
+                    if hashlib.sha256(raw).hexdigest() != digest:
+                        raise ValueError()
+
+                    module = types.ModuleType(name[:-3])
+                    module.__file__ = str(path)
+                    exec(
+                        compile(raw, str(path), "exec"),
+                        module.__dict__,
+                    )
+                    modules[name] = module
+
+                bridge = modules["vpn_aws_imds_bridge.py"]
+                prepare = modules["vpn_aws_session_prepare.py"]
+
+                observed = bridge.read_imds_identity()
+                bridge.verify_identity(approved, observed)
+
+                run = Path("/run")
+                if run.is_symlink():
+                    raise ValueError()
+
+                info = run.stat()
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) & 0o022
+                ):
+                    raise ValueError()
+
+                mounts = Path(
+                    "/proc/self/mountinfo"
+                ).read_text().splitlines()
+
+                if not any(
+                    line.split()[4] == "/run"
+                    and line.split(" - ", 1)[1].split()[0] == "tmpfs"
+                    for line in mounts
+                ):
+                    raise ValueError()
+
+                parent = Path(tempfile.mkdtemp(
+                    prefix="seokpan-vpn-receiver-",
+                    dir=run,
+                ))
+
+                directory = bridge.prepare_receiver_session(
+                    parent=parent,
+                    approved=approved,
+                    archive_sha256=(
+                        "65c6c09946f186fd5cf50169f2c330b4f9f5"
+                        "ac3dda58e29345cb45decbebf886"
+                    ),
+                    wireguard_public_key=(
+                        "/ROoAYvAbe6M3sp1h0UDgXS9DFo+1bVXrUE1/1ZCiAU="
+                    ),
+                    now=int(time.time()),
+                    prepare_function=prepare.prepare_session,
+                    identity_reader=lambda: observed,
+                )
+
+                challenge = json.loads(
+                    (directory / "challenge.json").read_text()
+                )
+
+                print(json.dumps({
+                    "session_directory": str(directory),
+                    "challenge": challenge,
+                }))
+
+            except Exception:
+                print(
+                    "중단: 서버 신원·프로그램·메모리 경로·"
+                    "수신 세션 상태를 확인하세요. 자동 재실행하지 마세요."
+                )
+                raise SystemExit(2)
+          - "{{ vpn_runtime_destination }}"
+        stdin: "{{ lookup('file', vpn_approved_target_file) }}"
+      register: vpn_receiver_prepare_result
+      changed_when: true
+      no_log: true
+
+    - name: 공개 수신 정보만 후속 단계에 연결
+      ansible.builtin.set_fact:
+        vpn_receiver_open: "{{ vpn_receiver_prepare_result.stdout | from_json }}"
+      no_log: true
+
+    - name: 완료 범위 안내
+      ansible.builtin.debug:
+        msg: 임시 수신 세션 생성 완료. 운영 VPN 키 공급·설정·서비스 시작은 아직 하지 않았습니다.
