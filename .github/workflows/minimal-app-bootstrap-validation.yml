@@ -1,0 +1,16 @@
+name: Minimal app bootstrap boundaries
+on:
+  pull_request:
+    paths:
+      - scripts/rosa-minimal-app-bootstrap.py
+      - scripts/test_minimal_app_bootstrap.py
+      - .github/workflows/minimal-app-bootstrap-validation.yml
+jobs:
+  minimal-bootstrap-boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -m unittest discover -s scripts -p test_minimal_app_bootstrap.py -v
