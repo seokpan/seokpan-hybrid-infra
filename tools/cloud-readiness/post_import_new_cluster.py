@@ -11,7 +11,7 @@ import subprocess
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
-CONTRACT_SHA = "0256bdd9daebcf97c356cd45a62a2cfb14d72f480651dfee3e3983b2246333bd"
+CONTRACT_SHA = "0dc4256cd55a329acc6e344770de55068ea9e7657630286f7c307b9ee382ebbd"
 PROBE_SHA = "eaef0182eeffb70d64ae8c180d0a16b9eb653252a164f52f91fce43f26a287c3"
 
 

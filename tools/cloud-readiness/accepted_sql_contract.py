@@ -11,10 +11,32 @@ def need(ok, reason):
     if not ok: raise Stop(reason)
 
 
+def fresh_target_handoff(value):
+    need(value.get('data_mode') == 'fresh_test' and value.get('accepted_by') == 'tjung03'
+         and value.get('fresh_test_target_accepted') is True and value.get('legacy_targets_excluded') is True,
+         'FRESH_TARGET_ISOLATION_ACCEPTANCE_REQUIRED')
+    need(value.get('target_database_name') == 'stone_game'
+         and all(isinstance(value.get(k), str) and value[k].strip() for k in
+                 ('target_database_host', 'target_redis_host', 'fresh_target_evidence_ref')),
+         'FRESH_TARGET_REFERENCE_REQUIRED')
+    need(not value.get('final_import_compare_and_schema_handoff_accepted')
+         and not value.get('source_writer_hold_accepted'), 'FRESH_MODE_MUST_NOT_ASSERT_LEGACY_IMPORT_OR_STOP')
+    return True
+
+
+def handoff_binding(value):
+    if value.get('data_mode') != 'fresh_test': return value
+    fresh_target_handoff(value)
+    # Data Pod 준비 뒤 계정/Schema 근거만 추가한다. 대상/보호 입력 변경은 허용하지 않는다.
+    return {k: v for k, v in value.items() if k not in
+            ('purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref', 'reported_schema_revision')}
+
+
 def accepted_handoff(value):
     mode = value.get('data_mode', 'migrated')
     need(mode in ('migrated', 'fresh_test'), 'EXPLICIT_KNOWN_DATA_MODE_REQUIRED')
     if mode == 'fresh_test':
+        fresh_target_handoff(value)
         missing = []
         for name in ('fresh_test_target_accepted', 'legacy_targets_excluded'):
             if value.get(name) is not True: missing.append(name)

@@ -242,5 +242,44 @@ class FreshData(unittest.TestCase):
     def test_changed_contract_and_probe_hash_pins_match(self):
         self.assertTrue(N.load_contract().accepted_handoff(handoff()))
         self.assertEqual(N.PROBE_SHA, N.hashlib.sha256((ROOT/'tools/cloud-readiness/accepted_sql_probe.py').read_bytes()).hexdigest())
+    def test_target_only_draft_allows_pod_preparation_but_not_final_sql(self):
+        h = handoff()
+        for k in ('purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref', 'reported_schema_revision'): h[k] = None
+        self.assertTrue(C.fresh_target_handoff(h))
+        with self.assertRaises(C.Stop): C.accepted_handoff(h)
+    def test_account_schema_evidence_completion_keeps_target_binding(self):
+        final = handoff(); draft = dict(final)
+        for k in ('purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref', 'reported_schema_revision'): draft[k] = None
+        self.assertEqual(C.handoff_binding(draft), C.handoff_binding(final))
+        changed = final | {'target_database_host': 'other.example.test'}
+        self.assertNotEqual(C.handoff_binding(draft), C.handoff_binding(changed))
+    def test_prepare_data_pod_does_not_call_sql_schema_or_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = P.Flow.__new__(P.Flow); f.work = Path(tmp); f.binding = {'synthetic': 'fresh'}
+            f.pod_prepare_only = True; f.handoff = handoff(); f.cluster = 'synthetic-new'
+            f.resume_readonly = False; f.runner = None
+            f.c = {'personal_kubeconfig': 'synthetic', 'oc': 'synthetic'}
+            f.L = SimpleNamespace(oc_client=lambda *a: None)
+            calls = []
+            f.supply_inputs = lambda: calls.append('supply') or {'status': 'PASS_SYNTHETIC'}
+            f.bind_inputs = lambda: calls.append('bind') or {'status': 'PASS_SYNTHETIC', 'inputs': {
+                'database_host': 'db.example.test', 'redis_host': 'cache.example.test'}}
+            f.package = lambda c: calls.append('package') or {'status': 'PASS_SYNTHETIC'}
+            f.data_pod = lambda c: calls.append('pod') or {'status': 'PASS_SYNTHETIC', 'target': {'synthetic': 'new-pod'}}
+            f.sql = lambda *a: self.fail('NO_SQL'); f.schema_mode = lambda *a: self.fail('NO_SCHEMA_EXEC')
+            result = f.prepare_data_pod()
+            self.assertEqual(result['status'], 'PASS_NEW_DATA_POD_READY_FOR_ACCOUNT_SCHEMA_SETUP')
+            self.assertEqual(calls, ['supply', 'bind', 'package', 'pod'])
+            self.assertEqual(result['sql_calls'], 0); self.assertFalse(result['application_started'])
+    def test_prepare_only_flow_cannot_stage_apps(self):
+        f = P.Flow.__new__(P.Flow); f.pod_prepare_only = True
+        with self.assertRaisesRegex(P.Stop, 'PREPARE_ONLY'): f.stage('single')
+    def test_final_handoff_is_sealed_before_sql_and_cannot_be_replaced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = P.Flow.__new__(P.Flow); f.work = Path(tmp); f.handoff = handoff()
+            f.Q = SimpleNamespace(load_contract=lambda: C)
+            f.seal_handoff(); f.seal_handoff()
+            f.handoff = handoff() | {'schema_prepared_evidence_ref': 'different-schema-record'}
+            with self.assertRaisesRegex(P.Stop, 'HANDOFF_CHANGED'): f.seal_handoff()
 
 if __name__ == '__main__': unittest.main()

@@ -176,7 +176,7 @@ def pool_choice(sql):
 
 
 class Flow:
-    def __init__(self, config, work, runner=subprocess.run, resume_readonly=False):
+    def __init__(self, config, work, runner=subprocess.run, resume_readonly=False, prepare_data_pod=False):
         self.c, self.work, self.runner = config, Path(work), runner
         self.resume_readonly = resume_readonly
         self.L, self.Q = helpers()
@@ -187,7 +187,12 @@ class Flow:
              and self.platform.get('cluster_id') == self.cluster and self.platform.get('state') == 'ready',
              'NEW_READY_PLATFORM_REQUIRED_NO_RECREATION_BY_THIS_TOOL')
         self.handoff = read(config['final_data_handoff'])
-        self.Q.load_contract().accepted_handoff(self.handoff)
+        contract = self.Q.load_contract()
+        self.pod_prepare_only = prepare_data_pod
+        if prepare_data_pod:
+            contract.fresh_target_handoff(self.handoff)
+        else:
+            contract.accepted_handoff(self.handoff)
         self.launch = read(config['launch_inputs'])
         self.L.budget_check(self.launch, dt.datetime.now(dt.timezone.utc))
         self.schema = read(config['schema_credentials_file'])
@@ -203,7 +208,7 @@ class Flow:
         if os.name == 'posix':
             info = self.work.stat()
             need(info.st_uid == os.getuid() and not stat.S_IMODE(info.st_mode) & 0o077, 'PRIVATE_WORK_DIRECTORY_REQUIRED')
-        fingerprint = digest(canon({'config': config, 'launch': self.launch, 'handoff': self.handoff,
+        fingerprint = digest(canon({'config': config, 'launch': self.launch, 'handoff': contract.handoff_binding(self.handoff),
             'schema_hash': digest(private(config['schema_credentials_file'])),
             'runtime_inputs_hash': digest(private(config['runtime_inputs_file'])),
             'lifecycle_hash': digest(private(config['lifecycle_config'])), 'platform': self.platform,
@@ -217,12 +222,39 @@ class Flow:
         else:
             write(bind, binding)
         self.binding = binding
+        if not prepare_data_pod:
+            self.seal_handoff()
         prefix = [config['oc'], '--kubeconfig='+config['personal_kubeconfig'], '--request-timeout=20s']
         def call(*args, payload=None):
             p = runner(prefix+list(args), input=payload, capture_output=True, timeout=90 if args[0] == 'exec' else 35)
             need(p.returncode == 0, 'OC_READ_OR_WRITE_FAILED_PRESERVE_RUN_NO_AUTOMATIC_RETRY')
             return p.stdout
         self.call = call
+
+    def seal_handoff(self):
+        self.Q.load_contract().accepted_handoff(self.handoff)
+        path = self.work/'data-handoff.accepted.json'
+        if path.exists():
+            need(read(path) == self.handoff, 'ACCEPTED_DATA_HANDOFF_CHANGED_REQUIRES_RECONCILIATION')
+        else:
+            write(path, self.handoff)
+
+    def prepare_data_pod(self):
+        need(self.pod_prepare_only and self.handoff.get('data_mode') == 'fresh_test', 'FRESH_POD_PREPARATION_ONLY_REQUIRED')
+        self.step('runtime-inputs', self.supply_inputs, reconcile=True)
+        c = self.step('new-inputs', self.bind_inputs, readonly=True)['inputs']
+        self.L.oc_client(c, self.c['personal_kubeconfig'], self.c['oc'], self.runner)
+        need(self.handoff['target_database_host'] == c['database_host']
+             and self.handoff['target_redis_host'] == c['redis_host'], 'FRESH_PREPARED_TARGET_MISMATCH')
+        self.step('local-package', lambda: self.package(c), reconcile=True)
+        target = self.step('new-pod', lambda: self.data_pod(c), reconcile=True)['target']
+        path = self.work/'prepared-data-target.json'
+        if path.exists(): need(read(path) == target, 'PREPARED_DATA_TARGET_CHANGED')
+        else: write(path, target)
+        return {'status': 'PASS_NEW_DATA_POD_READY_FOR_ACCOUNT_SCHEMA_SETUP',
+                'cluster_id': self.cluster, 'target_file': str(path),
+                'sql_calls': 0, 'schema_changes': 0, 'application_started': False,
+                'next': 'EXISTING_AUTHORIZED_ACCOUNT_SCHEMA_SETUP_THEN_SAME_RUN_STAGE'}
 
     def supply_inputs(self):
         private(self.c['personal_kubeconfig'])
@@ -483,6 +515,7 @@ class Flow:
         return c
 
     def stage(self, stage, business=None):
+        need(not getattr(self, 'pod_prepare_only', False), 'PREPARE_ONLY_CANNOT_STAGE_APPS')
         c = self.before_sync()
         e = read(self.work/'execution-evidence.json')
         if stage != 'single':
@@ -591,6 +624,7 @@ def main():
     parser.add_argument('--work', type=Path)
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--after-sync', action='store_true')
+    parser.add_argument('--prepare-data-pod', action='store_true')
     parser.add_argument('--stage', choices=('single', 'shared', 'target'), default='single')
     parser.add_argument('--business-evidence', type=Path)
     parser.add_argument('--resume-read-only', action='store_true')
@@ -604,14 +638,18 @@ def main():
                       'missing': missing, 'api_calls': 0, 'sql_calls': 0, 'recreate_invoked': False}
         else:
             need(not missing and args.work is not None, 'ACTUAL_INPUT_PATHS_AND_PRIVATE_WORK_REQUIRED')
+            need(not (args.after_sync and args.prepare_data_pod), 'PREPARE_AND_AFTER_SYNC_ARE_SEPARATE')
             import pwd
             need(pwd.getpwuid(os.getuid()).pw_name == 'jth', 'USE_CONTROLLER_JTH')
             args.work.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             import fcntl
             with open(str(args.work)+'.lock', 'a') as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                flow = Flow(c, args.work, resume_readonly=args.resume_read_only)
-                result = flow.after_sync(args.stage) if args.after_sync else flow.stage(args.stage, args.business_evidence)
+                flow = Flow(c, args.work, resume_readonly=args.resume_read_only, prepare_data_pod=args.prepare_data_pod)
+                if args.prepare_data_pod:
+                    result = flow.prepare_data_pod()
+                else:
+                    result = flow.after_sync(args.stage) if args.after_sync else flow.stage(args.stage, args.business_evidence)
         print(json.dumps(result))
         return 0 if result['status'].startswith('PASS_') else 2
     except Exception as error:
