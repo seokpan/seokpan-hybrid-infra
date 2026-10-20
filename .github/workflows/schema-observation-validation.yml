@@ -1,0 +1,22 @@
+name: Schema observation receipt boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-prestart/resume_schema_observation.py'
+      - 'tools/cloud-prestart/test_resume_schema_observation.py'
+      - '.github/workflows/schema-observation-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  schema-observation-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -I tools/cloud-prestart/test_resume_schema_observation.py -v
