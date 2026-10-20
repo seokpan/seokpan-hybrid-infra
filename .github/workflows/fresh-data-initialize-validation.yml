@@ -1,0 +1,22 @@
+name: Fresh empty database initialization boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-prestart/initialize_fresh_data.py'
+      - 'tools/cloud-prestart/test_initialize_fresh_data.py'
+      - '.github/workflows/fresh-data-initialize-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fresh-initialize-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -I tools/cloud-prestart/test_initialize_fresh_data.py -v
