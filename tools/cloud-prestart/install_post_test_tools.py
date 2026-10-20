@@ -57,14 +57,24 @@ def install():
         'public_hpa_export.py':'0b4c24d20cf81ff86ab94217c7f335a34a0eb0e4c8473e05262790c4d0554511',
         'prepare_b_final_delete.py':'24d106397c7106dd4bd928b6d48de7edd58fc99ba2e7ef1daccfa198f1cb06a9',
         'apply_b_final_delete.py':'90faf7edd4e9e05b33cf23a5a9ccaf165ca435ce34af2a7686d5e59ccf52cffb'}
-    # 고정된 종료 도구만 연결하고 기존 키 등록은 반복하지 않습니다.
+    # 모든 입력과 기존 대상이 수락되는지 먼저 확인해 부분 설치를 방지합니다.
+    payload=[]
     for name in ('public_hpa_export.py','finish_hpa_time_copy.py','finish_hpa_final_teardown.py',
                  'prepare_b_final_delete.py','apply_b_final_delete.py',
                  'b_final_residuals.py','run_b_final_delete_plan.sh'):
-        result[name]=adopt(BASE/name,raw(HERE/name),old_sources.get(name))
-    result['metadata_transport.py']=adopt(BASE/'metadata_transport.py',
-        raw(HERE/'metadata_transport.py'),{OLD_TRANSPORT_SHA,
-        'c32634e65f6eaed17afde72accd8185fa75bfe632c3708b1147b4363622e3d63'})
+        payload.append((name,raw(HERE/name),old_sources.get(name)))
+    payload.append(('metadata_transport.py',raw(HERE/'post_test_metadata_transport.py'),
+        {OLD_TRANSPORT_SHA,'c32634e65f6eaed17afde72accd8185fa75bfe632c3708b1147b4363622e3d63'}))
+    for name,data,allowed in payload:
+        target=BASE/name
+        if target.exists():
+            current=raw(target)
+            accepted={allowed} if isinstance(allowed,str) else set(allowed or ())
+            need(current==data or hashlib.sha256(current.replace(b'\r\n',b'\n')).hexdigest()
+                 in accepted,'UNEXPECTED_EXISTING_SOURCE_PRESERVED')
+    # 저장소의 명시적 파일명을 사용하고 설치 대상 이름은 그대로 유지합니다.
+    for name,data,allowed in payload:
+        result[name]=adopt(BASE/name,data,allowed)
     return {'status':'PASS_POST_TEST_TOOLS_CONNECTED_NOT_EXECUTED','files':result,
         'authorized_keys_changed':False,'settings_changed':False,
         'acl_or_installation_repeated':False,'runtime_tests_repeated':False,

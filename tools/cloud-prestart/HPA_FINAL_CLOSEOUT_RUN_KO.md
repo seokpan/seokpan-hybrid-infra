@@ -1,6 +1,22 @@
 # HPA 시험 종료와 B 담당 자원 정리
 
-## 실제 확인한 상태
+## 2026-10-21 최종 종료 결과
+
+사용자 제공 Controller 결과로 B ROSA 삭제 Apply와 State managed instance0, 원격 클러스터 부재, 정확한 현행 owned 태그의 EC2/EBS/ENI/LB 각각0을 확인했다. B Snapshot4개도 삭제 후 개별 조회에서 모두 ABSENT였다. 확인 범위 내 B 자원 정리는 완료이며 A 자원은 변경하지 않았다. 완료한 설치·부하·조회·삭제를 다시 실행하지 않는다.
+
+계정 전체 과금0·태그 없는 자원/공유 자원 부재·다른 담당 자원의 정리는 이 결과로 확정하지 않는다. 최종 비용 청구액은 조회하지 않았다. 실제 결과와 한계는 h-docs의 `execution/B_ROSA_FINAL_CLOSEOUT_20261021.md`에 후속으로 기록한다.
+
+## 저장소 설치·체크섬 해석
+
+저장소의 `post_test_metadata_transport.py`를 실행 환경의 `prestart-closeout/metadata_transport.py`로 설치한다. 저장소에 없는 `tools/cloud-prestart/metadata_transport.py`를 입력으로 요구하지 않는다. 설치기는 모든 소스와 기존 대상의 허용 해시를 먼저 확인한 뒤 파일을 반영한다. 누락 입력이나 미승인 로컬 변경이 있으면 대상 파일을 바꾸기 전에 중단한다.
+
+`post-test-SHA256SUMS`와 `final-teardown-SHA256SUMS`는 현재 저장소의 실제 파일명·바이트를 검증하는 목록이다. 이전 배포 해시는 Git 이력과 설치기의 명시적 허용 목록으로 보존한다. 최신 전체 종료 목록에는 독립 B 수집기와 외부 D 인수 도구도 포함한다.
+
+GitHub 보존 참조는 자동 게시 증명이 아니다. 참조를 기록하기 전에 게시 URL을 직접 열거나 저장소 API로 실제 파일 존재를 확인하고, 내려받은 ZIP의 SHA256이 Controller의 공개 ZIP 해시와 같은지 대조한다. URL 모양만 확인한 상태에서 게시 완료로 기록하지 않는다.
+
+아래 절은 당시 실행 준비와 전환 이력이며 최종 완료 판정과 구분한다.
+
+## 당시 확인한 상태
 
 - B 관측·게시 GO 성공. 같은 HPA 유지, HPA 재생성 없음, cloud_resource_writes=0.
 - 활성 config SHA256: `cb82bcf65e8f9338af8a24e6b549d481c622035dfc69b741aedae537f13493b8`.
