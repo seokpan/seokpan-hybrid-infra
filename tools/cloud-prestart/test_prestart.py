@@ -169,7 +169,8 @@ class Boundaries(unittest.TestCase):
         async def connect(**kw): self.fail('SOCKET_MUST_NOT_OPEN')
         with self.assertRaisesRegex(R.Stop, 'TARGET'):
             asyncio.run(R.assess({'schema_url': 'mysql+asyncmy://db_admin:synthetic@wrong:3306/stone_game',
-                                  'database_host': 'right'}, connect, None))
+                                  'database_host': 'right', 'final_data_accepted': True,
+                                  'all_old_writers_stopped': True}, connect, None))
 
     def test_execution_evidence_is_generated_from_actual_results_and_refs(self):
         f = self.flow()
@@ -241,7 +242,8 @@ class Boundaries(unittest.TestCase):
         async def connect(**kw): return Connection()
         payload = {'schema_url': 'mysql+asyncmy://db_admin:synthetic@db.example:3306/stone_game',
                    'database_host': 'db.example', 'database_ca_sha256': P.digest(b'public-ca'),
-                   'redis_ca_sha256': P.digest(b'public-ca')}
+                   'redis_ca_sha256': P.digest(b'public-ca'), 'final_data_accepted': True,
+                   'all_old_writers_stopped': True}
         with patch('builtins.open', side_effect=lambda *a, **kw: io.BytesIO(b'public-ca')), \
              patch.object(R.ssl, 'create_default_context', return_value=types.SimpleNamespace()):
             with self.assertRaisesRegex(R.Stop, 'SCHEMA_DIFFERENCE'):
@@ -276,7 +278,8 @@ class Boundaries(unittest.TestCase):
             return Redis()
         payload = {'schema_url': 'mysql+asyncmy://db_admin:synthetic@db.example:3306/stone_game',
                    'database_host': 'db.example', 'database_ca_sha256': P.digest(b'public-ca'),
-                   'redis_ca_sha256': P.digest(b'public-ca'), 'redis_host': 'redis.example', 'redis_auth': 'synthetic'}
+                   'redis_ca_sha256': P.digest(b'public-ca'), 'redis_host': 'redis.example', 'redis_auth': 'synthetic',
+                   'final_data_accepted': True, 'all_old_writers_stopped': True}
         with patch('builtins.open', side_effect=lambda *a, **kw: io.BytesIO(b'public-ca')), \
              patch.object(R.ssl, 'create_default_context', return_value=types.SimpleNamespace()):
             result = asyncio.run(R.assess(payload, connect, factory))

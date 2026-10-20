@@ -16,7 +16,7 @@ from stage_clock import module, read, save
 from timeline import need, sha
 
 MERGED_BASE = 'df71963f975cae2925f8783472a8c143b5f264af'
-LAUNCH_SHA256 = '4564cb9ce5bb0892024dd7f9fb4de5e2d9d8cb851f651bb3baa21813218f3f82'
+LAUNCH_SHA256 = 'fa59c64bc1d1c65af58c2fb05ac36c5a625873765269f388e2e5f7dbb8c81f8c'
 UUID = r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}'
 PATH_FIELDS = {'controller_python', 'controller_measurement_dir', 'controller_work',
                'controller_trigger_prefix', 'observer_node', 'observer_playwright_module',
