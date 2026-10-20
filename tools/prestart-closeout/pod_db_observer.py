@@ -1,5 +1,6 @@
 """Read-only DB observation through the approved running Backend. No new Pod/client."""
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import importlib.util
@@ -117,7 +118,9 @@ def sample(c,runner=subprocess.run):
     need(ns['metadata']['uid']==b['namespace_uid'] and app['metadata']['uid']==b['application_uid'],
          'DB_OBSERVER_TARGET_UID_CHANGED')
     C=load_common(c)
-    need(C.digest(C.normalized(app['spec']['source']))==b['normalized_source_sha256'],'OBSERVED_SOURCE_CHANGED')
+    observed_source=C.digest(C.normalized(app['spec']['source']))
+    allowed=recording_sources(c)
+    need(observed_source in allowed,'OBSERVED_SOURCE_CHANGED')
     pods=json.loads(call(['get','pods','-n','seokpan-cloud','-l','app.kubernetes.io/name=backend','-o','json']))['items']
     eligible=[p for p in pods if not p['metadata'].get('deletionTimestamp') and p.get('status',{}).get('phase')=='Running'
         and any(x['type']=='Ready' and x['status']=='True' for x in p.get('status',{}).get('conditions',[]))
@@ -138,13 +141,28 @@ def sample(c,runner=subprocess.run):
     need(result['status'] in accepted and result['binding']==b,'CURRENT_DB_SAMPLE_REQUIRED')
     result.update(collector_pod_uid=uid,collector_pod=name,transport='EXISTING_BACKEND_EXEC_PRIVATE_STDIN',
                   credentials_in_argv_or_logs=False,new_pods_created=0,database_ca_file=ca_file,
-                  database_ca_uid=ca['metadata']['uid'],database_ca_sha256=ca_hash)
+                  database_ca_uid=ca['metadata']['uid'],database_ca_sha256=ca_hash,observed_normalized_source_sha256=observed_source)
     return result
 
 def load_common(c):
     path=Path(c['hpa_source'])/'common.py'
     need(hashlib.sha256(path.read_bytes().replace(b'\r\n',b'\n')).hexdigest()==c['common_sha256'],'ADOPTED_HPA_COMMON_REQUIRED')
     spec=importlib.util.spec_from_file_location('pod_db_common',path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+
+def recording_sources(c):
+    bound=c['binding']['normalized_source_sha256'];scope=c.get('observation_scope','FULL')
+    allowed=c.get('allowed_normalized_source_sha256',[bound])
+    need(isinstance(allowed,list) and 1<=len(allowed)<=2 and bound in allowed
+         and all(isinstance(x,str) and re.fullmatch(r'[0-9a-f]{64}',x) for x in allowed)
+         and (scope=='TOTAL_ONLY' or allowed==[bound]),'BOUNDED_RECORDING_SOURCE_ALLOWLIST_REQUIRED')
+    return allowed
+
+def summary_input(rows):
+    result=copy.deepcopy(rows)
+    for row in result:
+        if row.get('sample') and row['sample'].get('per_account') is None:
+            row['sample']['per_account']={'identity_svc':None,'game_svc':None}
+    return result
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('action',choices=['probe','sample'])
@@ -168,7 +186,8 @@ def main():
         need(hashlib.sha256(path.read_bytes().replace(b'\r\n',b'\n')).hexdigest()==c['db_observation_sha256'],'ADOPTED_DB_SUMMARIZER_REQUIRED')
         sys.path.insert(0,str(path.parent));spec=importlib.util.spec_from_file_location('pod_db_approved_summary',path)
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
-        result=m.observed_summary(rows)
+        result=m.observed_summary(summary_input(rows))
+        result['account_visibility_accepted']=bool(rows) and all((x.get('sample') or {}).get('account_visibility_accepted') is True for x in rows)
         result.update(transport='EXISTING_BACKEND_EXEC_PRIVATE_STDIN',new_pods_created=0,
             requested_interval_seconds=c['interval_seconds'],requested_duration_seconds=c['duration_seconds'])
         print(json.dumps(result));return 0 if result.get('valid_samples',0)>0 else 2
