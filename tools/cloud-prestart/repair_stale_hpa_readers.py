@@ -246,10 +246,29 @@ def execute(accepted):
         while alive(r) and time.monotonic()<deadline:
             time.sleep(.1)
         need(not alive(r),'OLD_READER_EXIT_PENDING_NO_DUPLICATE')
-    for name in ('observer','publisher'):
+    def ensure_reader(name, action):
+        marker = out/(name+'.process.json')
+        if marker.exists():
+            existing = F.read(marker)
+            if alive(existing):
+                argv = existing['argv']
+                need(len(argv) == 6 and argv[1] == '-I'
+                     and argv[3:] == [action,'--dispatch',str(pointer)],
+                     'EXISTING_READER_TARGET_MISMATCH')
+                script = Path(argv[2])
+                need(not script.is_symlink() and script.stat().st_uid == os.getuid(),
+                     'OWNED_EXISTING_READER_SOURCE_REQUIRED')
+                known = {'c553990f3764dc0f884c4729a57c6bf8ddcf8c92297e119d8e6cbe75f6dddbb7',
+                         '4ca39a7a1ae4890ff21c44705028ca5405dbe103683c4456e24e826d8d24a4f5'}
+                need(script.resolve() == Path(__file__).resolve()
+                     or hashlib.sha256(script.read_bytes()).hexdigest() in known,
+                     'EXISTING_READER_SOURCE_REVIEW_REQUIRED')
+                return 'REUSED_RUNNING_NO_RESTART'
         preserve_dead_reader(F,out,name)
-    F.spawn('observer',[sys.executable,'-I',str(Path(__file__).resolve()),
-                        'observe','--dispatch',str(pointer)],out)
+        F.spawn(name,[sys.executable,'-I',str(Path(__file__).resolve()),
+                      action,'--dispatch',str(pointer)],out)
+        return 'STARTED_MISSING_READER_ONLY'
+    reader_actions = {'observer':ensure_reader('observer','observe')}
     deadline = time.monotonic()+40
     while time.monotonic()<deadline:
         if (work/'latest.json').exists():
@@ -263,8 +282,7 @@ def execute(accepted):
     else:
         raise RuntimeError('NEW_SAMPLE_PENDING_DO_NOT_START_D')
     H.publish_file(shared/'state/latest.json',F.canonical(row)+b'\n','cyj')
-    F.spawn('publisher',[sys.executable,'-I',str(Path(__file__).resolve()),
-                         'feed','--dispatch',str(pointer)],out)
+    reader_actions['publisher'] = ensure_reader('publisher','feed')
     replace_pointer(F,RUN/'hpa-active-time-copy.json',d,active_before)
     ret = Path(settings['handoff_root'])/'return/cyj/d-start-window'
     stopped = ret/c['run_id']/'receipt.json'
@@ -284,6 +302,7 @@ def execute(accepted):
         'results_command':shlex.join([sys.executable,'-I',str(source/'results.py')]+args+
             ['--load-out',str(ret/c['run_id']),'--out',str(out/'hpa-result.json')])}
     preserve_or_save(F,out/'receipt.json',result)
+    F.save(out/('reader-recovery-'+str(time.time_ns())+'.json'),reader_actions)
     H.publish_file(shared/'ready.json',F.canonical(result)+b'\n','cyj',True)
     H.publish_file(oldshare.parent/'active-time-copy.json',F.canonical({
         'shared_plan':result['shared_plan'],'config_sha256':result['config_sha256'],
