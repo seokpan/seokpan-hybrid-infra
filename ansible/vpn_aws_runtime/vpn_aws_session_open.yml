@@ -163,7 +163,7 @@
                     print("중단: 수신 서비스·신원·정리 상태를 확인하세요. 자동 재실행하지 마세요.")
                     raise SystemExit(2)
           - "{{ vpn_runtime_destination }}"
-        stdin: "{{ lookup('file', vpn_approved_target_file) }}"
+        stdin: "{{ lookup('file', vpn_approved_target_file) | from_json | to_json }}"
       register: vpn_receiver_prepare_result
       changed_when: true
       no_log: true
