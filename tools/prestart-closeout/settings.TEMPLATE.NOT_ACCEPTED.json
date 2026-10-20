@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "root": "/ABSOLUTE/PRIVATE/ROOT",
+  "run": "/ABSOLUTE/PRIVATE/RUN",
+  "out": "/ABSOLUTE/PRIVATE/RUN/prestart-closeout/inputs",
+  "reader": "EXISTING_READER_ACCOUNT",
+  "app_source": "/ABSOLUTE/ADOPTED/PR89_SOURCE",
+  "ops_source": "/ABSOLUTE/ADOPTED/PR90_SOURCE",
+  "adopted_app_ref": "REPLACE_WITH_ADOPTED_COMMIT",
+  "release_review_ref": "REPLACE_WITH_REVIEW_REFERENCE",
+  "lifecycle_config": "/ABSOLUTE/PRIVATE/rosa-lifecycle.json",
+  "input_registry": "/ABSOLUTE/PRIVATE/input-registry.json",
+  "handoff_settings": "/ABSOLUTE/PRIVATE/handoff-settings.json",
+  "transport_settings": "/ABSOLUTE/PRIVATE/transport-settings.json",
+  "packaged_gitops_source": "/ABSOLUTE/ADOPTED/GITOPS_SOURCE",
+  "launch_candidates": [
+    "/ABSOLUTE/PRIVATE/launch-inputs.json"
+  ],
+  "execution_paths": {},
+  "db_bridge": {
+    "peer": "USER@EXISTING_DB_HOST",
+    "ssh_prefix": [
+      "ssh"
+    ],
+    "remote_python": "python3",
+    "reference": "EXISTING_DATA_EVIDENCE",
+    "paths": {
+      "credential_file": "/ABSOLUTE/PRIVATE/client.cnf",
+      "ca_file": "/ABSOLUTE/CA.pem"
+    },
+    "source_sha256": {}
+  },
+  "protected_sources": {
+    "archive": "/ABSOLUTE/PRIVATE/checkpoint.sops.json",
+    "archive_sha256": "REPLACE_WITH_REVIEWED_SHA256",
+    "account_cipher": "/ABSOLUTE/PRIVATE/accounts.sops.yaml",
+    "key_file": "/ABSOLUTE/PRIVATE/keys.txt",
+    "sops_candidates": [
+      "/ABSOLUTE/EXISTING/sops"
+    ],
+    "sops_sha256": "REPLACE_WITH_REVIEWED_SHA256"
+  },
+  "input_slots": {
+    "foundation_handoff": {
+      "stage": "BEFORE_CREATE"
+    },
+    "recreate_readiness": {
+      "stage": "BEFORE_CREATE"
+    },
+    "schema_credentials": {
+      "stage": "BEFORE_CREATE"
+    },
+    "runtime_inputs": {
+      "stage": "BEFORE_CREATE"
+    },
+    "source_contract": {
+      "stage": "BEFORE_SELECTED_MIGRATION"
+    },
+    "source_read": {
+      "stage": "BEFORE_SELECTED_MIGRATION"
+    },
+    "writer_plan": {
+      "stage": "BEFORE_SELECTED_MIGRATION"
+    },
+    "smtp_protected_source": {
+      "stage": "BEFORE_SELECTED_MAIL_TEST"
+    },
+    "final_data_handoff": {
+      "stage": "AFTER_DATA_EXECUTION"
+    }
+  }
+}

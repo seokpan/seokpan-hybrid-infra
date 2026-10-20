@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "execution_paths_file": "REPLACE_WITH_EXISTING_EXECUTION_PATHS_FILE",
+  "measurement_source": "REPLACE_WITH_ADOPTED_MEASUREMENT_DIRECTORY",
+  "result_root": "REPLACE_WITH_PRIVATE_EXISTING_RESULT_PARENT",
+  "controller_alias": "REPLACE_WITH_EXISTING_SSH_ALIAS"
+}

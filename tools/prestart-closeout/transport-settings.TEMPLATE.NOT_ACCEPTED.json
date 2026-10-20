@@ -1,0 +1,8 @@
+{
+  "python": "/ABSOLUTE/EXISTING/python3",
+  "run": "/ABSOLUTE/PRIVATE/RUN",
+  "out": "/ABSOLUTE/PRIVATE/RUN/prestart-closeout/inputs",
+  "public_key": "REPLACE_WITH_EXISTING_SCOPED_PUBLIC_KEY",
+  "original_dispatch_sha256": "REPLACE_WITH_REVIEWED_DISPATCH_SHA256",
+  "original_dispatch_sha256_variants": []
+}
