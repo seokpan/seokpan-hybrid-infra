@@ -26,3 +26,10 @@ jobs:
           python-version: '3.9'
       - name: New fresh-data synthetic tests only
         run: python -I tools/cloud-prestart/test_fresh_data.py -v
+      - name: Post-test installer path regression
+        run: python -I tools/cloud-prestart/test_install_post_test_tools.py -v
+      - name: Current post-test source checksums
+        working-directory: tools/cloud-prestart
+        run: |
+          sha256sum --check post-test-SHA256SUMS
+          sha256sum --check final-teardown-SHA256SUMS
