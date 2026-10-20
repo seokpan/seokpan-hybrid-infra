@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shlex
 import signal
 import subprocess
 import sys
@@ -174,12 +175,23 @@ def execute(accepted):
     F.spawn('publisher',[sys.executable,'-I',str(BASE/'finalize_hpa.py'),
                          'feed','--dispatch',str(pointer)],out)
     F.save(RUN/'hpa-active-time-copy.json',d)
+    ret = Path(settings['handoff_root'])/'return/cyj/time-copy'
+    stopped = ret/c['run_id']/'receipt.json'
+    control = [sys.executable,'-I',str(source/'control.py')]
+    args = ['--config',d['config'],'--work',d['work']]
     result = {'status':'PASS_TIME_COPY_BOUND_SAME_HPA_D_START_GO',
         'run_id':c['run_id'],'hpa_uid':created['uid'],'original_files_preserved':True,
         'hpa_created_again':False,'cloud_resource_writes':0,'load_started':False,
         'config':d['config'],'work':d['work'],'shared_plan':str(shared/'plan.json'),
         'observation_not_after':end.isoformat(),'config_sha256':C.digest(c),
-        'D_work':'/home/cyj/hpa-load/out/'+c['run_id']+'-attempt03'}
+        'D_work':'/home/cyj/hpa-load/out/'+c['run_id']+'-attempt03',
+        'D_return_root':str(ret),
+        'stop_command':shlex.join(control+['stop']+args+['--execute']),
+        'restore_command':shlex.join(control+['restore']+args+
+            ['--load-receipt',str(stopped),'--execute']),
+        'verify_restore_command':shlex.join(control+['verify-restore']+args+['--execute']),
+        'results_command':shlex.join([sys.executable,'-I',str(source/'results.py')]+args+
+            ['--load-out',str(ret/c['run_id']),'--out',str(out/'hpa-result.json')])}
     F.save(out/'receipt.json',result)
     H.publish_file(shared/'ready.json',F.canonical(result)+b'\n','cyj',True)
     return result
