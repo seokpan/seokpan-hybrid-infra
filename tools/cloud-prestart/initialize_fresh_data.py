@@ -267,10 +267,11 @@ def main():
                 need(len(versions)==1,'ONE_CURRENT_MASTER_VERSION_REQUIRED')
                 value=aws('secretsmanager','get-secret-value','--secret-id',arn,'--version-id',versions[0],'--version-stage','AWSCURRENT')
                 master=master_value(db,meta,value,c['database_host'],foundation['account_id'])
-                for row in infra['operator_attachments']:
-                    entities=aws('iam','list-entities-for-policy','--policy-arn',row['policy_arn'],'--entity-filter','Role',optional=True)
-                    row['current_expected_role_attached']=None if entities is None else row['role'] in {x['RoleName'] for x in entities.get('PolicyRoles',[])}
-                P.write(out/'current-operator-mapping.json',infra)
+                if not (out/'current-operator-mapping.json').exists():
+                    for row in infra['operator_attachments']:
+                        entities=aws('iam','list-entities-for-policy','--policy-arn',row['policy_arn'],'--entity-filter','Role',optional=True)
+                        row['current_expected_role_attached']=None if entities is None else row['role'] in {x['RoleName'] for x in entities.get('PolicyRoles',[])}
+                    P.write(out/'current-operator-mapping.json',infra)
                 flow.verify_pod(target,c)
                 deployments=json.loads(flow.call('get','deployment','-n','seokpan-cloud','-o','json'))
                 need(all(o['spec'].get('replicas',1)==0 for o in deployments.get('items',[])),'APPS_MUST_REMAIN_HELD_BEFORE_INITIALIZATION')
