@@ -34,14 +34,18 @@ async def main():
    await cur.execute('SHOW GRANTS FOR CURRENT_USER');grants=await cur.fetchall()
    visible=any(__import__('re').search(r'\b(ALL PRIVILEGES|PROCESS)\b.*\bON\s+\*\.\*',
     (x[0].decode() if isinstance(x[0],bytes) else x[0]).upper()) for x in grants)
-   await cur.execute('SELECT USER,COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST GROUP BY USER');counts=dict(await cur.fetchall())
    if not tls or not tls[1]:raise RuntimeError('TLS_REQUIRED')
-   if not visible:raise RuntimeError('GLOBAL_PROCESS_VISIBILITY_REQUIRED')
-   print(json.dumps({'status':'PASS_CURRENT_DB_SAMPLE','binding':p['binding'],
+   if not visible and p.get('observation_scope')!='TOTAL_ONLY':raise RuntimeError('GLOBAL_PROCESS_VISIBILITY_REQUIRED')
+   counts={}
+   if visible:
+    await cur.execute('SELECT USER,COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST GROUP BY USER');counts=dict(await cur.fetchall())
+   print(json.dumps({'status':'PASS_CURRENT_DB_SAMPLE' if visible else 'PASS_CURRENT_DB_TOTAL_SAMPLE','binding':p['binding'],
     'utc':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
     'tls':True,'global_limit':int(limits[0]),'global_max_user_connections':int(limits[1]),
     'connections_total':int(total[1]),'observer_connection_included':True,
-    'per_account':{n:int(counts.get(n,0)) for n in ('identity_svc','game_svc')},'counts_not_atomic':True}))
+    'per_account':{n:int(counts.get(n,0)) for n in ('identity_svc','game_svc')} if visible else None,
+    'process_grant_observed':visible,'account_visibility_accepted':visible,
+    'counts_not_atomic':True}))
  finally:conn.close()
 try:asyncio.run(main())
 except Exception as e:
@@ -88,6 +92,8 @@ def database_ca_path(pod):
     return matches[0]
 
 def sample(c,runner=subprocess.run):
+    scope=c.get('observation_scope','FULL')
+    need(scope in ('FULL','TOTAL_ONLY'),'EXPLICIT_DB_OBSERVATION_SCOPE_REQUIRED')
     b=c['binding'];schema=read(c['schema_credentials_file'],True);target(c,schema)
     need(b['cluster_id']!='2tejeb2farjaaoef1e74asdf6amrtpu3' and b.get('namespace_uid') and b.get('application_uid'),
          'NEW_BOUND_CLUSTER_REQUIRED')
@@ -124,10 +130,12 @@ def sample(c,runner=subprocess.run):
          'ACCEPTED_DATABASE_CA_UID_REQUIRED')
     ca_hash=hashlib.sha256(ca['data']['ca.crt'].encode()).hexdigest()
     result=json.loads(call(['exec','-i','-n','seokpan-cloud',name,'-c','backend','--','python','-c',PROGRAM],
-        json.dumps({'binding':b,'database_url':schema['database_url'],'ca_file':ca_file,'ca_sha256':ca_hash}).encode()))
+        json.dumps({'binding':b,'database_url':schema['database_url'],'ca_file':ca_file,'ca_sha256':ca_hash,
+                    'observation_scope':scope}).encode()))
     after=json.loads(call(['get','pod',name,'-n','seokpan-cloud','-o','json']))
     need(after['metadata']['uid']==uid and not after['metadata'].get('deletionTimestamp'),'OBSERVER_POD_REPLACED_SAMPLE_UNKNOWN')
-    need(result['status']=='PASS_CURRENT_DB_SAMPLE' and result['binding']==b,'CURRENT_DB_SAMPLE_REQUIRED')
+    accepted=('PASS_CURRENT_DB_SAMPLE','PASS_CURRENT_DB_TOTAL_SAMPLE') if scope=='TOTAL_ONLY' else ('PASS_CURRENT_DB_SAMPLE',)
+    need(result['status'] in accepted and result['binding']==b,'CURRENT_DB_SAMPLE_REQUIRED')
     result.update(collector_pod_uid=uid,collector_pod=name,transport='EXISTING_BACKEND_EXEC_PRIVATE_STDIN',
                   credentials_in_argv_or_logs=False,new_pods_created=0,database_ca_file=ca_file,
                   database_ca_uid=ca['metadata']['uid'],database_ca_sha256=ca_hash)

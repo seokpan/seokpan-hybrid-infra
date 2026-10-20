@@ -246,7 +246,7 @@ class Boundaries(unittest.TestCase):
             schema.chmod(0o600)
             c={'binding':{'cluster_id':'new0123456789','namespace_uid':'ns','application_uid':'app','normalized_source_sha256':'source'},
                 'schema_credentials_file':str(schema),'database_host':'rds.correct','oc':'oc','personal_kubeconfig':'/private/k',
-                'api':'https://api.new.test:6443','backend_image':'image@sha256:approved'}
+                'api':'https://api.new.test:6443','backend_image':'image@sha256:approved','database_ca_uid':'ca'}
             changed=[False];calls=[]
             def runner(argv,**kw):
                 calls.append((argv,kw.get('input')))
@@ -255,7 +255,10 @@ class Boundaries(unittest.TestCase):
                 elif args==['whoami']:return types.SimpleNamespace(returncode=0,stdout=b'tjung03\n')
                 elif args[:2]==['get','namespace']:v={'metadata':{'uid':'ns'}}
                 elif args[:2]==['get','application']:v={'metadata':{'uid':'app'},'spec':{'source':{}}}
-                elif args[:2]==['get','pods']:v={'items':[{'metadata':{'uid':'pod','name':'backend-one'},'status':{'phase':'Running','conditions':[{'type':'Ready','status':'True'}]},'spec':{'containers':[{'image':c['backend_image']}]}}]}
+                elif args[:2]==['get','pods']:v={'items':[{'metadata':{'uid':'pod','name':'backend-one'},'status':{'phase':'Running','conditions':[{'type':'Ready','status':'True'}]},'spec':{
+                    'containers':[{'name':'backend','image':c['backend_image'],'volumeMounts':[{'name':'database-ca','mountPath':'/etc/seokpan/database-ca','readOnly':True}]}],
+                    'volumes':[{'name':'database-ca','configMap':{'name':'backend-database-ca'}}]}}]}
+                elif args[:2]==['get','configmap']:v={'metadata':{'uid':'ca'},'data':{'ca.crt':'fixture-ca'}}
                 elif args[0]=='exec':v={'status':'PASS_CURRENT_DB_SAMPLE','binding':c['binding']}
                 elif args[:2]==['get','pod']:v={'metadata':{'uid':'replacement' if changed[0] else 'pod'}}
                 else:raise AssertionError(args)

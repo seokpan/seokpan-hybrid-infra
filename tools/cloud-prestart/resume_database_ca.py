@@ -11,7 +11,8 @@ import subprocess
 import time
 
 OLD='bb15dc60e7b32bcf12bc46966b93dc0aeddb41f19e4f6f4f97ceab79d2e4f030'
-NEW='d04d33713ab388469dc2c9567fe12acc3a30a1d217940efb700659a7a37cefaa'
+CA_FIX='d04d33713ab388469dc2c9567fe12acc3a30a1d217940efb700659a7a37cefaa'
+NEW='0609bcf7f62ee0e16b579fef99f0217ffd6c593b547058fc9af85fdb8844c619'
 CID='2ti8n9c2j2em1h6jbb34kc0dq95dv4fi'
 
 def need(ok,reason):
@@ -27,7 +28,7 @@ def save(path,value):
     path.chmod(0o600)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--observer-source',type=Path,required=True);p.add_argument('--execute',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--observer-source',type=Path,required=True);p.add_argument('--execute',action='store_true');p.add_argument('--total-only',action='store_true');a=p.parse_args()
     need(a.execute,'EXPLICIT_OBSERVATION_EXECUTION_REQUIRED');os.umask(0o077)
     run=Path.home()/'.local/share/seokpan-rosa-plan-inputs-5psj2l62/controller-run-bundle-K2Tx7HgB'
     out=run/'current-monitoring-closeout-20261020';need(out.is_dir() and not out.is_symlink(),'EXISTING_PRIVATE_RESULT_DIRECTORY_REQUIRED')
@@ -46,15 +47,16 @@ def main():
         target=run/'prestart-closeout/pod_db_observer.py';need(target.is_file() and not target.is_symlink(),'EXISTING_OBSERVER_REQUIRED')
         info=target.stat();need(info.st_uid==os.getuid() and stat.S_ISREG(info.st_mode),'OWNED_OBSERVER_REQUIRED')
         original=target.read_bytes();current=hashlib.sha256(original.replace(b'\r\n',b'\n')).hexdigest()
-        need(current in (OLD,NEW),'UNEXPECTED_OBSERVER_PRESERVED')
-        if current==OLD:
-            backup=out/'pod_db_observer.before-ca-fix.py'
+        need(current in (OLD,CA_FIX,NEW),'UNEXPECTED_OBSERVER_PRESERVED')
+        if current!=NEW:
+            backup=out/('pod_db_observer.before-'+current[:12]+'.py')
             if backup.exists():need(backup.read_bytes()==original,'EXISTING_BACKUP_MISMATCH')
             else:
                 fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
                 with os.fdopen(fd,'wb') as f:f.write(original)
             target.write_bytes(raw);target.chmod(0o600)
-        save(out/'db-observer.json',c)
+        c['observation_scope']='TOTAL_ONLY' if a.total_only else 'FULL'
+        save(out/('db-observer-total-only.json' if a.total_only else 'db-observer.json'),c)
         print(json.dumps({'phase':'OBSERVE_DB_WITH_CURRENT_BACKEND_CA','old_data_pod_path_reused':False}),flush=True)
         spec=importlib.util.spec_from_file_location('current_db_observer',target)
         m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -63,17 +65,24 @@ def main():
             left=end-time.monotonic();need(left>0,'DB_SAMPLE_TIME_BOUND_REACHED')
             kwargs['timeout']=min(kwargs.get('timeout',18),left)
             return subprocess.run(*args,**kwargs)
-        if (out/'db-sample.json').exists():
-            sample=read(out/'db-sample.json');need(sample.get('status')=='PASS_CURRENT_DB_SAMPLE' and sample['binding']==c['binding'],'SAME_ACCEPTED_SAMPLE_REQUIRED')
+        cached=out/'db-sample.json'
+        if not cached.exists() and a.total_only:cached=out/'db-total-sample.json'
+        if cached.exists():
+            sample=read(cached);accepted=('PASS_CURRENT_DB_SAMPLE','PASS_CURRENT_DB_TOTAL_SAMPLE') if a.total_only else ('PASS_CURRENT_DB_SAMPLE',)
+            need(sample.get('status') in accepted and sample['binding']==c['binding'],'SAME_ACCEPTED_SAMPLE_REQUIRED')
             result['sample_reused']=True
         else:
-            sample=m.sample(c,runner=runner);save(out/'db-sample.json',sample)
+            sample=m.sample(c,runner=runner)
+            save(out/('db-sample.json' if sample['status']=='PASS_CURRENT_DB_SAMPLE' else 'db-total-sample.json'),sample)
             result['sample_reused']=False
-        report['db_observer']=sample;report['remaining']=[x for x in report['remaining'] if x!='DB_OBSERVER_ACTUAL_ACCEPTANCE']
+        report['remaining']=[x for x in report['remaining'] if x not in ('DB_OBSERVER_ACTUAL_ACCEPTANCE','DB_ACCOUNT_PROCESS_VISIBILITY')]
+        report['db_observer']=sample
+        if sample['status']=='PASS_CURRENT_DB_TOTAL_SAMPLE':report['remaining'].append('DB_ACCOUNT_PROCESS_VISIBILITY')
         report['status']='PASS_B_RUNTIME_CLOSEOUT_NOT_LOAD_TEST' if not report['remaining'] else 'PARTIAL_B_RUNTIME_CLOSEOUT'
         report['window_extended']=True;report['extension_scope']='USER_AUTHORIZED_DB_ONLY_MAXIMUM_90_SECONDS'
         save(out/'receipt.json',report);save(out/'D-runtime-handoff.json',report)
-        result.update(status=report['status'],sample=sample,remaining=report['remaining'],load_test_started=False)
+        result.update(status='PASS_DB_TOTAL_SAMPLE_ONLY_NOT_HPA_ACCEPTANCE' if sample['status']=='PASS_CURRENT_DB_TOTAL_SAMPLE' else report['status'],
+                      sample=sample,remaining=report['remaining'],load_test_started=False)
     except Exception as e:
         result['reason']=str(e) if type(e) is RuntimeError else type(e).__name__
     path=out/('db-ca-resume-'+str(time.time_ns())+'.json');save(path,result)
