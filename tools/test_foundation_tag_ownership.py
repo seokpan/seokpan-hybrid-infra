@@ -43,8 +43,26 @@ class TagOwnership(unittest.TestCase):
     def test_shared_provider_ignores_only_cluster_prefix(self):
         found = blocks(self.shared, r'\bignore_tags\s*\{')
         self.assertEqual(len(found), 1)
-        self.assertRegex(found[0][1], r'^\s*key_prefixes\s*=\s*\["kubernetes\.io/cluster/"\]\s*$')
-        self.assertNotIn('ignore_changes', '\n'.join(self.sources.values()))
+        self.assertRegex(
+            found[0][1],
+            r'^\s*key_prefixes\s*=\s*\["kubernetes\.io/cluster/"\]\s*$'
+        )
+
+    def test_only_vpn_source_dest_check_can_be_ignored(self):
+        ignores = []
+
+        for name, resource_body in self.resources.items():
+            for match in re.finditer(
+                r'(?m)^[ \t]*ignore_changes[ \t]*=[ \t]*([^\n#]+)',
+                resource_body,
+            ):
+                value = re.sub(r'\s+', '', match.group(1))
+                ignores.append((name, value))
+
+        self.assertEqual(
+            ignores,
+            [('aws_instance.vpn', '[source_dest_check]')]
+        )
 
     def test_same_region_and_identical_default_tags(self):
         for p in (self.default, self.shared):
