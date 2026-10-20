@@ -18,8 +18,6 @@ resource "aws_instance" "vpn" {
     network_interface_id = aws_network_interface.vpn[0].id
   }
 
-  source_dest_check = false
-
   root_block_device {
     encrypted             = true
     volume_type           = "gp3"
@@ -61,6 +59,8 @@ resource "aws_instance" "vpn" {
   ]
 
   lifecycle {
+    ignore_changes = [source_dest_check]
+
     precondition {
       condition     = var.vpn_ami_id != null
       error_message = "VPN 생성 시 승인된 AL2023 x86_64 AMI ID를 공급해야 합니다."
