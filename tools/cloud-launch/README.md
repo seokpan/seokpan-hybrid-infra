@@ -56,13 +56,15 @@ python3 -I tools/cloud-launch/cloud_launch.py prepare \
 `execution-evidence.TEMPLATE.NOT_ACCEPTED.json`에 기존 결과의 경로를 연결한다. `fresh_test`는 현재 빈 Schema 관측·목적 계정/TLS·Schema 준비·앱 모드를 확인한다. 별도 이관 경로는 최종 Import/비교 근거를 요구한다. Migration current `20260902_0002`와 Pool·상태 전환 근거를 연결하며 완료한 SQL·upgrade를 반복하지 않는다.
 
 ```bash
-# 기본 호출은 로컬 근거와 선언을 대조한다.
+# 기본 호출은 로컬 패키지만 확인한다.
 python3 -I tools/cloud-launch/cloud_launch.py stage \
   --package /private/new-launch-package --stage single \
   --evidence /private/execution-evidence.json \
   --kubeconfig /private/current-personal-kubeconfig \
   --receipt /private/new-stage-single.json
 ```
+
+위 명령에서 --execute를 생략하면 로컬 패키지 무결성만 확인한다. --evidence와 --kubeconfig로 지정한 파일을 읽거나 Data·목적 계정·TLS·Schema·현재 클러스터를 검사하지 않는다. 해당 실행 근거와 현재 대상 대조는 --execute 분기에서 수행한다.
 
 당시 별도 허가된 Source 연결에만 `--execute`를 사용했다. API·Namespace·보호 객체 UID·개인 계정과 Application을 대조한 뒤 UID/resourceVersion/spec 조건부 패치를 수행한다. Source 연결은 Sync·앱 기동이 아니다. 결과 불명·timeout에서 변경 명령을 자동 재시도하지 않는다.
 
