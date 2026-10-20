@@ -152,15 +152,27 @@ def validate_pod(live, wanted, uid=None):
 
 
 def pool_choice(sql):
-    need(sql.get('status') == 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION', 'PURPOSE_SQL_PASS_REQUIRED')
+    fresh = sql.get('data_mode') == 'fresh_test'
+    expected = ('PASS_FRESH_TEST_PURPOSE_READS_NOT_APP_ACTIVATION' if fresh
+                else 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION')
+    need(sql.get('status') == expected, 'PURPOSE_SQL_PASS_REQUIRED')
     rows = sql.get('accounts', [])
     need(len(rows) == 2 and {r['account'] for r in rows} == {'identity_svc', 'game_svc'}, 'TWO_ACCOUNT_RESULTS_REQUIRED')
-    need(all(r['status'] == 'PASS_PURPOSE_ACCOUNT_READ_ONLY' and r.get('max_connections') == 68
+    limits = {r.get('max_connections') for r in rows}
+    if fresh:
+        need(len(limits) == 1 and all(type(v) is int and v >= 43 for v in limits),
+             'CURRENT_GLOBAL_LIMIT_AND_INITIAL_POOL_HEADROOM_REQUIRED')
+        maximum = next(iter(limits))
+        need(all(r.get('tls') is True for r in rows), 'CURRENT_PURPOSE_TLS_REQUIRED')
+    else:
+        maximum = 68
+    need(all(r['status'] == 'PASS_PURPOSE_ACCOUNT_READ_ONLY' and r.get('max_connections') == maximum
              and r.get('account_limit_covers_candidate_14') is True for r in rows), 'ACCOUNT_BUDGET_NOT_ACCEPTED')
     return {'status': 'PASS_INITIAL_POOL_SELECTION_NOT_RUNTIME_TEST', 'pool_size': 2, 'max_overflow': 0,
             'timeout_seconds': 5, 'processes_per_backend': 1, 'peak_backend_pods': 7,
             'engines_per_process': 2, 'per_service_peak': 14, 'app_peak': 28, 'reserved': 10,
-            'candidate_total': 38, 'accepted_database_limit': 68, 'runtime_lifetime_tested': False}
+            'candidate_total': 38, 'accepted_database_limit': maximum, 'runtime_lifetime_tested': False,
+            'data_mode': 'fresh_test' if fresh else 'migrated'}
 
 
 class Flow:
@@ -394,7 +406,10 @@ class Flow:
         result = self.Q.execute(self.lifecycle, self.platform, target, self.handoff,
             private(self.work/'held-bundle.json'), self.Q.load_contract(),
             (ROOT/'tools/cloud-readiness/accepted_sql_probe.py').read_bytes(), self.runner)
-        if result.get('status') != 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION':
+        expected = ('PASS_FRESH_TEST_PURPOSE_READS_NOT_APP_ACTIVATION'
+                    if self.handoff.get('data_mode') == 'fresh_test'
+                    else 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION')
+        if result.get('status') != expected:
             write(self.work/('failed-purpose-sql-'+str(time.time_ns())+'.json'), result)
             raise Stop('PURPOSE_SQL_NOT_ACCEPTED_SEE_SANITIZED_FAILURE_RECEIPT')
         return result
@@ -411,7 +426,15 @@ class Flow:
         payload = {'schema_url': self.schema['database_url'], 'database_host': c['database_host'],
             'redis_host': c['redis_host'], 'redis_auth': base64.b64decode(redis['data']['SEOKPAN_REDIS_AUTH_TOKEN'], validate=True).decode(),
             'database_ca_sha256': digest(ca['data']['ca.crt'].encode()), 'redis_ca_sha256': digest(rca['data']['ca.crt'].encode()),
-            'final_data_accepted': True, 'all_old_writers_stopped': True}
+            'data_mode': self.handoff.get('data_mode', 'migrated')}
+        if payload['data_mode'] == 'fresh_test':
+            payload.update({k: self.handoff[k] for k in ('fresh_test_target_accepted',
+                'legacy_targets_excluded', 'target_database_host', 'target_redis_host',
+                'reported_schema_revision', 'fresh_target_evidence_ref',
+                'purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref')})
+        else:
+            payload.update(final_data_accepted=self.handoff['final_import_compare_and_schema_handoff_accepted'],
+                           all_old_writers_stopped=self.handoff['source_writer_hold_accepted'])
         raw = self.call('exec', '-i', '-n', NS, target['pod_name'], '-c', 'db-admin', '--', 'python', '-c',
                         (HERE/'runtime_probe.py').read_text(encoding='utf-8'), payload=canon(payload))
         result = json.loads(raw)
@@ -599,3 +622,4 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+

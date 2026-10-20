@@ -12,6 +12,22 @@ def need(ok, reason):
 
 
 def accepted_handoff(value):
+    mode = value.get('data_mode', 'migrated')
+    need(mode in ('migrated', 'fresh_test'), 'EXPLICIT_KNOWN_DATA_MODE_REQUIRED')
+    if mode == 'fresh_test':
+        missing = []
+        for name in ('fresh_test_target_accepted', 'legacy_targets_excluded'):
+            if value.get(name) is not True: missing.append(name)
+        for name in ('target_database_host', 'target_redis_host', 'fresh_target_evidence_ref',
+                     'purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref'):
+            if not isinstance(value.get(name), str) or not value[name].strip(): missing.append(name)
+        if value.get('target_database_name') != 'stone_game': missing.append('target_database_name')
+        if value.get('accepted_by') != 'tjung03': missing.append('accepted_by')
+        if value.get('reported_schema_revision') != '20260902_0002': missing.append('reported_schema_revision')
+        need(not missing, 'PENDING_FRESH_TEST_HANDOFF_FIELDS:' + ','.join(missing))
+        need(not value.get('final_import_compare_and_schema_handoff_accepted')
+             and not value.get('source_writer_hold_accepted'), 'FRESH_MODE_MUST_NOT_ASSERT_LEGACY_IMPORT_OR_STOP')
+        return True
     missing = []
     for name in ('final_import_compare_and_schema_handoff_accepted', 'source_writer_hold_accepted'):
         if value.get(name) is not True: missing.append(name)
@@ -25,6 +41,7 @@ def accepted_handoff(value):
 
 
 def runtime_payload(bundle, secret, ca, handoff):
+    accepted_handoff(handoff)
     maps = [o for o in bundle['items'] if o.get('kind') == 'ConfigMap'
             and 'SEOKPAN_DATABASE_EXPECTED_HOST' in o.get('data', {})]
     need(len(maps) == 1, 'ONE_ACCEPTED_DATABASE_CONTRACT_REQUIRED')
@@ -40,7 +57,18 @@ def runtime_payload(bundle, secret, ca, handoff):
              and unquote(url.username or '') == user and bool(url.password) and not url.fragment,
              'PROTECTED_RUNTIME_URL_CONTRACT_MISMATCH')
         accounts.append({'user': user, 'password': unquote(url.password)})
-    return {'host': data['SEOKPAN_DATABASE_EXPECTED_HOST'], 'database': 'stone_game',
-            'accounts': accounts, 'ca_sha256': hashlib.sha256(ca.encode()).hexdigest(),
-            'final_import_compare_and_schema_handoff_accepted': handoff['final_import_compare_and_schema_handoff_accepted'],
-            'source_writer_hold_accepted': handoff['source_writer_hold_accepted']}
+    result = {'host': data['SEOKPAN_DATABASE_EXPECTED_HOST'], 'database': 'stone_game',
+              'accounts': accounts, 'ca_sha256': hashlib.sha256(ca.encode()).hexdigest()}
+    if handoff.get('data_mode') == 'fresh_test':
+        need(handoff['target_database_host'] == result['host']
+             and handoff['target_redis_host'] == data.get('SEOKPAN_REDIS_EXPECTED_HOST'),
+             'FRESH_TARGET_MUST_MATCH_BOUND_DATABASE_AND_REDIS')
+        result.update({k: handoff[k] for k in ('data_mode', 'fresh_test_target_accepted',
+            'legacy_targets_excluded', 'target_database_host', 'target_redis_host',
+            'reported_schema_revision', 'fresh_target_evidence_ref',
+            'purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref')})
+    else:
+        result.update(final_import_compare_and_schema_handoff_accepted=handoff['final_import_compare_and_schema_handoff_accepted'],
+                      source_writer_hold_accepted=handoff['source_writer_hold_accepted'])
+    return result
+

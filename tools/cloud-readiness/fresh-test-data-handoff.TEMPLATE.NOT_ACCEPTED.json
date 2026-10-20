@@ -1,0 +1,13 @@
+{
+  "data_mode": "fresh_test",
+  "accepted_by": null,
+  "fresh_test_target_accepted": false,
+  "legacy_targets_excluded": false,
+  "target_database_host": null,
+  "target_database_name": "stone_game",
+  "target_redis_host": null,
+  "fresh_target_evidence_ref": null,
+  "purpose_accounts_evidence_ref": null,
+  "schema_prepared_evidence_ref": null,
+  "reported_schema_revision": null
+}

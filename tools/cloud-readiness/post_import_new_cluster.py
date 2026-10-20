@@ -11,8 +11,8 @@ import subprocess
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
-CONTRACT_SHA = "61f2b3234634e9b62ee7a6b1ae334d13ed178ea6d7c1a206516c7e0b39326296"
-PROBE_SHA = "e9220546fdbf1f8162b17f90e0cc719ad92c501c809f27a9af359e55e5fa1d37"
+CONTRACT_SHA = "0256bdd9daebcf97c356cd45a62a2cfb14d72f480651dfee3e3983b2246333bd"
+PROBE_SHA = "eaef0182eeffb70d64ae8c180d0a16b9eb653252a164f52f91fce43f26a287c3"
 
 
 class Stop(RuntimeError):
@@ -115,7 +115,8 @@ def execute(lifecycle, platform, target, handoff, held_raw, contract, probe, run
     payload = contract.runtime_payload(held, secret, ca["data"]["ca.crt"], handoff)
     result = json.loads(call("exec", "-i", "-n", "seokpan-cloud", target["pod_name"], "-c", "db-admin", "--", "python", "-c",
                              probe.decode("utf-8"), payload=json.dumps(payload).encode("utf-8")))
-    need(result.get("status") in ("PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION", "STOP_POST_IMPORT_PURPOSE_READS"),
+    need(result.get("status") in ("PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION",
+                                "PASS_FRESH_TEST_PURPOSE_READS_NOT_APP_ACTIVATION", "STOP_POST_IMPORT_PURPOSE_READS"),
          "EXPECTED_SANITIZED_PROBE_RESULT_REQUIRED")
     result.update(cluster_id=cluster, new_cluster_bound=True, old_token_or_pod_reused=False,
                   handoff_assertions="HUMAN_ACCEPTED_NOT_INDEPENDENT_REPROOF")
@@ -159,3 +160,4 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -58,7 +58,7 @@ def stamp(value):
 
 
 def ref(value):
-    return isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_./:#@+ -]{2,255}', value)) \
+    return isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9/][A-Za-z0-9_./:#@+ -]{2,255}', value)) \
         and not re.search(r'pending|input.required|password|token=', value, re.I)
 
 
@@ -287,10 +287,27 @@ def oc_client(c, kubeconfig, oc, runner=subprocess.run):
 
 def evidence(c, e, stage):
     handoff, sql, target = (read(e[k]) for k in ('final_data_handoff', 'purpose_sql_receipt', 'purpose_sql_target'))
-    need(handoff.get('accepted_by') == 'tjung03' and handoff.get('final_import_compare_and_schema_handoff_accepted') is True
+    mode = handoff.get('data_mode', 'migrated')
+    need(mode in ('migrated', 'fresh_test'), 'KNOWN_DATA_MODE_REQUIRED')
+    if mode == 'fresh_test':
+        path = HERE.parent/'cloud-readiness/accepted_sql_contract.py'
+        spec = importlib.util.spec_from_file_location('launch_fresh_data_contract', path)
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+        try:
+            contract.accepted_handoff(handoff)
+        except RuntimeError:
+            raise Stop('FRESH_DATA_ACCOUNT_SCHEMA_AND_ISOLATION_EVIDENCE_REQUIRED') from None
+        need(handoff['target_database_host'] == c['database_host']
+             and handoff['target_redis_host'] == c['redis_host'], 'FRESH_TARGET_MUST_MATCH_CURRENT_LAUNCH')
+        need(sql.get('data_mode') == mode, 'FRESH_SQL_MODE_MUST_MATCH')
+    else:
+        need(handoff.get('accepted_by') == 'tjung03' and handoff.get('final_import_compare_and_schema_handoff_accepted') is True
          and handoff.get('source_writer_hold_accepted') is True and handoff.get('reported_schema_revision') == '20260902_0002'
          and ref(handoff.get('final_import_evidence_ref')) and ref(handoff.get('source_writer_hold_evidence_ref')), 'FINAL_DATA_AND_OLD_WRITERS_HOLD_REQUIRED')
-    need(sql.get('status') == 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION'
+    expected_sql = ('PASS_FRESH_TEST_PURPOSE_READS_NOT_APP_ACTIVATION' if mode == 'fresh_test'
+                    else 'PASS_POST_IMPORT_PURPOSE_READS_NOT_APP_ACTIVATION')
+    need(sql.get('status') == expected_sql
          and sql.get('cluster_id') == c['cluster_id'] and sql.get('new_cluster_bound') is True, 'CURRENT_PURPOSE_SQL_PASS_REQUIRED')
     need(target.get('cluster_id') == c['cluster_id'] and target.get('namespace_uid') == c['namespace_uid']
          and target.get('secret_uid') == c['protected_uids']['secret/backend-db-runtime']
@@ -302,6 +319,14 @@ def evidence(c, e, stage):
     need(e.get('migration_current') == '20260902_0002' and ref(e.get('migration_current_ref'))
          and e.get('captured_transition_accepted') is True and ref(e.get('captured_transition_ref'))
          and e.get('pool_candidate_accepted') is True, 'MIGRATION_CURRENT_LIFECYCLE_AND_POOL_ACCEPTANCE_REQUIRED')
+    if mode == 'fresh_test':
+        observed = read(e['captured_transition_ref'])
+        need(observed.get('status') == 'PASS_SCHEMA_AND_CAPTURED_ADMISSION_NOT_BUSINESS'
+             and observed.get('data_mode') == 'fresh_test'
+             and observed.get('fresh_database_empty_verified') is True
+             and observed.get('schema_revision') == '20260902_0002'
+             and observed.get('database_writes') == 0 and observed.get('redis_writes') == 0,
+             'CURRENT_FRESH_EMPTY_SCHEMA_OBSERVATION_REQUIRED')
     if stage != 'single':
         prior = read(e['prior_readback'])
         previous = 'single' if stage == 'shared' else 'shared'
@@ -475,3 +500,4 @@ def main():
 
 if __name__ == '__main__':
     raise SystemExit(main())
+
