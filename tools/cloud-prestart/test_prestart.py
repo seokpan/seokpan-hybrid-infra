@@ -99,6 +99,7 @@ class Boundaries(unittest.TestCase):
             return P.canon(live)
         f.call = call
         c = {'namespace_uid': 'new-ns', 'protected_uids': {'secret/backend-db-runtime': 'new-secret', 'configmap/backend-database-ca': 'new-ca'}}
+        P.write(f.work/'new-inputs.json', {'binding': f.binding, 'result': {'inputs': c, 'platform_pull_refs': []}})
         self.assertEqual(f.data_pod(c)['target']['pod_uid'], live['metadata']['uid'])
         self.assertEqual(len(calls), 1)
 
