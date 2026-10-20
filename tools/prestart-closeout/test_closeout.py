@@ -4,9 +4,11 @@ import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import types
@@ -27,6 +29,58 @@ else:
     with patch.dict(sys.modules,{'fcntl':types.SimpleNamespace(),'pwd':types.SimpleNamespace()}):H=load('readonly_handoff')
     with patch.dict(sys.modules,{'fcntl':types.SimpleNamespace(flock=lambda *a:None,LOCK_EX=1)}):T=load('metadata_transport')
     with patch.dict(sys.modules,{'pwd':types.SimpleNamespace()}):D=load('d_generator')
+
+def remote_observer_fixture(action,invalid=None):
+    # 실제 DB 도구 대신 격리된 Python 파일만 실행합니다.
+    # 자격 파일은 합성 표식이며 하위 파일은 이를 읽거나 DB에 접속하지 않습니다.
+    with tempfile.TemporaryDirectory() as tmp:
+        root=Path(tmp);credential=root/'synthetic.cnf';ca=root/'synthetic.pem'
+        credential.write_text('SYNTHETIC_INPUT_MUST_NOT_APPEAR',encoding='utf-8');credential.chmod(0o600)
+        ca.write_text('SYNTHETIC_CA',encoding='utf-8')
+        script="""import argparse,json,sys
+from pathlib import Path
+p=argparse.ArgumentParser();p.add_argument('action',nargs='?');p.add_argument('--out')
+p.add_argument('--config',required=True);p.add_argument('--execute',action='store_true');a=p.parse_args()
+c=json.loads(Path(a.config).read_text());assert a.execute
+if a.action=='sample':
+ assert c['database_host']=='db.invalid' and c['mariadb']=='/synthetic/mariadb'
+ Path(a.out).write_text(json.dumps({'sample':'synthetic','binding':c['binding']})+'\\n')
+ print(json.dumps({'status':'STUB_SAMPLE_EXECUTED','binding':c['binding']}))
+else:
+ assert a.action is None and c['db_local_paths']['database_host']=='db.invalid'
+ assert c['db_local_paths']['mariadb']=='/synthetic/mariadb'
+ print(json.dumps({'status':'STUB_PROBE_EXECUTED','binding':c['binding']}))
+"""
+        names=['db_probe.py','common.py','db_observation.py','stage_clock.py','timeline.py']
+        for name in names:
+            (root/name).write_text(script if name in ('db_probe.py','db_observation.py') else '# synthetic dependency\n',
+                                  encoding='utf-8')
+        settings={'paths':{'credential_file':str(credential),'ca_file':str(ca)},
+            'hpa_source':str(root),'measurement_source':str(root),'database_host':'db.invalid',
+            'source_sha256':{name:hashlib.sha256((root/name).read_bytes().replace(b'\r\n',b'\n')).hexdigest() for name in names}}
+        binding={'cluster_id':'synthetic-new','namespace_uid':'synthetic-namespace'}
+        packet=DB.packet(settings,action,{'binding':binding,'database_host':'db.invalid','duration_seconds':1})
+        packet['timeout']=5
+        if invalid=='hash':
+            first=next(iter(packet['files']));packet['files'][first]['sha256']='0'*64
+        if invalid=='name':
+            first=next(iter(packet['files']));packet['files']['../not_allowed.py']=packet['files'].pop(first)
+        output=io.StringIO();exit_code=0;old_umask=os.umask(0o077)
+        try:
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(patch.object(sys,'stdin',io.StringIO(json.dumps(packet))))
+                stack.enter_context(contextlib.redirect_stdout(output))
+                stack.enter_context(patch('shutil.which',return_value='/synthetic/mariadb'))
+                if os.name=='nt':
+                    # Windows 합성 실행에서만 Unix 소유/모드 메타데이터를 대체합니다.
+                    # Linux CI에서는 chmod600과 실제 소유/모드 검증을 그대로 사용합니다.
+                    stack.enter_context(patch.object(os,'getuid',create=True,return_value=0))
+                    stack.enter_context(patch.object(stat,'S_IMODE',return_value=0o600))
+                try:exec(compile(DB.REMOTE,'isolated-db-bridge-fixture','exec'),{'__name__':'__main__'})
+                except SystemExit as error:exit_code=error.code
+        finally:os.umask(old_umask)
+        result=output.getvalue()
+        return exit_code,json.loads(result),result,binding
 
 class Boundaries(unittest.TestCase):
     def test_windows_handoff_paths_come_from_explicit_settings(self):
@@ -120,6 +174,29 @@ class Boundaries(unittest.TestCase):
 
     def test_remote_loader_compiles_without_running(self):
         compile(DB.REMOTE,'remote-existing-db-host','exec')
+
+    def test_remote_probe_validates_sources_and_executes_isolated_stub(self):
+        code,result,raw,binding=remote_observer_fixture('probe')
+        self.assertEqual(code,0);self.assertEqual(result['status'],'STUB_PROBE_EXECUTED')
+        self.assertEqual(result['binding'],binding);self.assertNotIn('SYNTHETIC_INPUT_MUST_NOT_APPEAR',raw)
+
+    def test_remote_sample_validates_sources_executes_stub_and_returns_samples(self):
+        code,result,raw,binding=remote_observer_fixture('sample')
+        self.assertEqual(code,0);self.assertEqual(result['status'],'COLLECTED_REMOTE_DB_SAMPLES')
+        self.assertEqual(result['summary'],{'status':'STUB_SAMPLE_EXECUTED','binding':binding})
+        samples=base64.b64decode(result['samples_base64'],validate=True)
+        self.assertEqual(json.loads(samples),{'sample':'synthetic','binding':binding})
+        self.assertFalse(result['credential_values_exported']);self.assertNotIn('SYNTHETIC_INPUT_MUST_NOT_APPEAR',raw)
+
+    def test_remote_bad_source_hash_stops_before_stub_execution(self):
+        code,result,_,_=remote_observer_fixture('probe','hash')
+        self.assertEqual(code,2);self.assertEqual(result['reason'],'OBSERVER_SOURCE_HASH_MISMATCH')
+        self.assertEqual(result['status'],'STOP_DB_BRIDGE_REMOTE')
+
+    def test_remote_bad_filename_stops_before_stub_execution(self):
+        code,result,_,_=remote_observer_fixture('sample','name')
+        self.assertEqual(code,2);self.assertEqual(result['reason'],'EXACT_OBSERVER_FILE_REQUIRED')
+        self.assertEqual(result['status'],'STOP_DB_BRIDGE_REMOTE')
 
     def test_guard_original_timestamp_and_target_are_preserved(self):
         now=dt.datetime.now(dt.timezone.utc)

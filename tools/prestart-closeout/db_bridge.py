@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 REMOTE = r'''
-import hashlib,json,os,shutil,socket,stat,subprocess,sys,tempfile
+import hashlib,json,os,re,shutil,socket,stat,subprocess,sys,tempfile
 from pathlib import Path
 p=json.load(sys.stdin);os.umask(0o077)
 def need(ok,code):
