@@ -5,7 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import ssl
 import subprocess
@@ -14,12 +14,14 @@ import time
 from urllib.parse import urlsplit,unquote
 
 PROGRAM=r'''
-import asyncio,json,ssl,sys
+import asyncio,hashlib,json,ssl,sys
 import asyncmy
 from urllib.parse import urlsplit,unquote
 async def main():
  p=json.load(sys.stdin);u=urlsplit(p['database_url'])
- ctx=ssl.create_default_context(cafile='/run/rds-ca/ca.crt')
+ with open(p['ca_file'],'rb') as f:
+  if hashlib.sha256(f.read()).hexdigest()!=p['ca_sha256']:raise RuntimeError('CURRENT_DATABASE_CA_CONTENT_MISMATCH')
+ ctx=ssl.create_default_context(cafile=p['ca_file'])
  ctx.check_hostname=True;ctx.minimum_version=ssl.TLSVersion.TLSv1_2
  conn=await asyncmy.connect(host=u.hostname,port=u.port,user=unquote(u.username),
   password=unquote(u.password),db=unquote(u.path.lstrip('/')),ssl=ctx,
@@ -33,7 +35,8 @@ async def main():
    visible=any(__import__('re').search(r'\b(ALL PRIVILEGES|PROCESS)\b.*\bON\s+\*\.\*',
     (x[0].decode() if isinstance(x[0],bytes) else x[0]).upper()) for x in grants)
    await cur.execute('SELECT USER,COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST GROUP BY USER');counts=dict(await cur.fetchall())
-   if not tls or not tls[1] or not visible:raise RuntimeError('TLS_AND_GLOBAL_PROCESS_VISIBILITY_REQUIRED')
+   if not tls or not tls[1]:raise RuntimeError('TLS_REQUIRED')
+   if not visible:raise RuntimeError('GLOBAL_PROCESS_VISIBILITY_REQUIRED')
    print(json.dumps({'status':'PASS_CURRENT_DB_SAMPLE','binding':p['binding'],
     'utc':__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
     'tls':True,'global_limit':int(limits[0]),'global_max_user_connections':int(limits[1]),
@@ -41,8 +44,11 @@ async def main():
     'per_account':{n:int(counts.get(n,0)) for n in ('identity_svc','game_svc')},'counts_not_atomic':True}))
  finally:conn.close()
 try:asyncio.run(main())
-except Exception:
- print(json.dumps({'status':'STOP_POD_DB_SAMPLE','reason':'READ_OR_TLS_OR_VISIBILITY_FAILED_RAW_NOT_EXPORTED'}));sys.exit(2)
+except Exception as e:
+ reason=str(e) if type(e) is RuntimeError else type(e).__name__
+ if not __import__('re').fullmatch(r'[A-Za-z0-9_]{1,100}',reason):reason='UNCLASSIFIED_PRIVATE_ERROR'
+ print(json.dumps({'status':'STOP_POD_DB_SAMPLE','reason':reason,
+  'error_code':next((x for x in e.args if type(x) is int),None)}));sys.exit(2)
 '''
 
 def need(ok,code):
@@ -59,6 +65,28 @@ def target(c,config):
         and unquote(u.username or '')=='db_admin' and u.password and unquote(u.path)=='/stone_game'
         and not u.query and not u.fragment,'EXACT_EXISTING_DB_OBSERVER_CREDENTIAL_REQUIRED')
 
+
+def database_ca_path(pod):
+    container,=[x for x in pod['spec']['containers'] if x['name']=='backend']
+    matches=[]
+    for volume in pod['spec'].get('volumes',[]):
+        cm=volume.get('configMap',{})
+        if cm.get('name')!='backend-database-ca':continue
+        items=cm.get('items',[{'key':'ca.crt','path':'ca.crt'}])
+        keys=[x['path'] for x in items if x.get('key')=='ca.crt']
+        need(len(keys)==1,'EXACT_DATABASE_CA_KEY_REQUIRED')
+        rel=PurePosixPath(keys[0])
+        need(not rel.is_absolute() and '..' not in rel.parts and str(rel) not in ('','.'),
+             'REGULAR_RELATIVE_CA_ITEM_REQUIRED')
+        for mount in container.get('volumeMounts',[]):
+            if mount['name']!=volume['name']:continue
+            base=PurePosixPath(mount['mountPath'])
+            need(mount.get('readOnly') is True and base.is_absolute() and '..' not in base.parts
+                 and not mount.get('subPath') and not mount.get('subPathExpr'),'READ_ONLY_FULL_DATABASE_CA_MOUNT_REQUIRED')
+            matches.append(str(base/rel))
+    need(len(matches)==1,'UNIQUE_CURRENT_DATABASE_CA_MOUNT_REQUIRED')
+    return matches[0]
+
 def sample(c,runner=subprocess.run):
     b=c['binding'];schema=read(c['schema_credentials_file'],True);target(c,schema)
     need(b['cluster_id']!='2tejeb2farjaaoef1e74asdf6amrtpu3' and b.get('namespace_uid') and b.get('application_uid'),
@@ -66,7 +94,14 @@ def sample(c,runner=subprocess.run):
     prefix=[c['oc'],'--kubeconfig='+c['personal_kubeconfig'],'--request-timeout=10s']
     def call(args,payload=None):
         p=runner(prefix+args,input=payload,capture_output=True,timeout=18)
-        need(p.returncode==0,'CURRENT_DB_OBSERVER_CONTEXT_OR_POD_UNAVAILABLE')
+        if p.returncode:
+            try:
+                remote=json.loads(p.stdout)
+            except Exception:remote={}
+            reason=remote.get('reason')
+            if remote.get('status')=='STOP_POD_DB_SAMPLE' and isinstance(reason,str) and re.fullmatch(r'[A-Za-z0-9_]{1,100}',reason):
+                raise RuntimeError('REMOTE_DATABASE_'+reason)
+            raise RuntimeError('CURRENT_DB_OBSERVER_CONTEXT_OR_POD_UNAVAILABLE')
         return p.stdout
     local=json.loads(call(['config','view','--minify','-o','json']))['clusters'][0]['cluster']
     need(local.get('server')==c['api'] and not local.get('insecure-skip-tls-verify'),'SAME_TRUSTED_API_REQUIRED')
@@ -83,13 +118,19 @@ def sample(c,runner=subprocess.run):
         and len(p['spec']['containers'])==1 and p['spec']['containers'][0]['image']==c['backend_image']]
     need(eligible,'APPROVED_READY_BACKEND_REQUIRED')
     pod=sorted(eligible,key=lambda x:x['metadata']['name'])[0];name=pod['metadata']['name'];uid=pod['metadata']['uid']
+    ca_file=database_ca_path(pod)
+    ca=json.loads(call(['get','configmap','backend-database-ca','-n','seokpan-cloud','-o','json']))
+    need(c.get('database_ca_uid') and ca['metadata']['uid']==c['database_ca_uid'],
+         'ACCEPTED_DATABASE_CA_UID_REQUIRED')
+    ca_hash=hashlib.sha256(ca['data']['ca.crt'].encode()).hexdigest()
     result=json.loads(call(['exec','-i','-n','seokpan-cloud',name,'-c','backend','--','python','-c',PROGRAM],
-        json.dumps({'binding':b,'database_url':schema['database_url']}).encode()))
+        json.dumps({'binding':b,'database_url':schema['database_url'],'ca_file':ca_file,'ca_sha256':ca_hash}).encode()))
     after=json.loads(call(['get','pod',name,'-n','seokpan-cloud','-o','json']))
     need(after['metadata']['uid']==uid and not after['metadata'].get('deletionTimestamp'),'OBSERVER_POD_REPLACED_SAMPLE_UNKNOWN')
     need(result['status']=='PASS_CURRENT_DB_SAMPLE' and result['binding']==b,'CURRENT_DB_SAMPLE_REQUIRED')
     result.update(collector_pod_uid=uid,collector_pod=name,transport='EXISTING_BACKEND_EXEC_PRIVATE_STDIN',
-                  credentials_in_argv_or_logs=False,new_pods_created=0)
+                  credentials_in_argv_or_logs=False,new_pods_created=0,database_ca_file=ca_file,
+                  database_ca_uid=ca['metadata']['uid'],database_ca_sha256=ca_hash)
     return result
 
 def load_common(c):
