@@ -1,0 +1,18 @@
+name: HPA final binding
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-prestart/finalize_hpa.py'
+      - 'tools/cloud-prestart/test_finalize_hpa.py'
+      - '.github/workflows/hpa-final-binding-validation.yml'
+permissions:
+  contents: read
+jobs:
+  binding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python tools/cloud-prestart/test_finalize_hpa.py -v
