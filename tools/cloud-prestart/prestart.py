@@ -115,16 +115,43 @@ def pod_spec(name, run, image):
                     for k, n in (('rds-ca', 'backend-database-ca'), ('redis-ca', 'backend-redis-ca'))]}}
 
 
-def validate_pod(live, wanted, uid=None):
+def platform_pull_refs(sa, lookup):
+    m = sa.get('metadata', {})
+    need(m.get('name') == SA and m.get('namespace') == NS and m.get('uid')
+         and not m.get('deletionTimestamp'), 'CURRENT_RUNTIME_SA_IDENTITY_REQUIRED')
+    refs = sa.get('imagePullSecrets') or []
+    if not refs:
+        return []
+    name = m.get('annotations', {}).get('openshift.io/internal-registry-pull-secret-ref')
+    need(len(refs) == 1 and refs == [{'name': name}]
+         and isinstance(name, str) and re.fullmatch(re.escape(SA)+r'-dockercfg-[a-z0-9]+', name),
+         'ONLY_PLATFORM_OWNED_INTERNAL_PULL_REFERENCE_ALLOWED')
+    secret = lookup(name)
+    sm = secret.get('metadata', {})
+    owners = sm.get('ownerReferences', [])
+    need(secret.get('type') == 'kubernetes.io/dockercfg' and sm.get('name') == name
+         and sm.get('namespace') == NS and sm.get('uid') and not sm.get('deletionTimestamp')
+         and len(owners) == 1 and owners[0].get('apiVersion') == 'v1'
+         and owners[0].get('kind') == 'ServiceAccount' and owners[0].get('name') == SA
+         and owners[0].get('uid') == m['uid'], 'INTERNAL_PULL_SECRET_OWNER_UID_REQUIRED')
+    return copy.deepcopy(refs)
+
+
+def validate_pod(live, wanted, uid=None, platform_refs=None):
     m, s, w = live.get('metadata', {}), live.get('spec', {}), wanted['spec']
     need(m.get('name') == wanted['metadata']['name'] and m.get('namespace') == NS
          and m.get('labels', {}).get('seokpan.io/cloud-prestart') == wanted['metadata']['labels']['seokpan.io/cloud-prestart']
          and m.get('uid') and (uid is None or uid == m['uid']) and not m.get('deletionTimestamp'),
          'EXACT_NEW_POD_IDENTITY_REQUIRED')
     need(s.get('serviceAccountName') == SA and s.get('automountServiceAccountToken') is False
-         and not s.get('imagePullSecrets') and not s.get('initContainers') and not s.get('ephemeralContainers')
+         and not s.get('initContainers') and not s.get('ephemeralContainers')
          and s.get('restartPolicy') == 'Never' and s.get('nodeSelector') == w['nodeSelector']
          and s.get('affinity') == w['affinity'] and not s.get('activeDeadlineSeconds'), 'POD_EXECUTION_CONTRACT_CHANGED')
+    pull = s.get('imagePullSecrets') or []
+    allowed = platform_refs or []
+    need(all(set(x) == {'name'} and isinstance(x['name'], str)
+             and re.fullmatch(re.escape(SA)+r'-dockercfg-[a-z0-9]+', x['name']) for x in allowed)
+         and len(allowed) <= 1 and (not pull or pull == allowed), 'UNREVIEWED_POD_PULL_REFERENCE_REJECTED')
     need(not any(s.get(k, False) for k in ('hostNetwork', 'hostPID', 'hostIPC', 'shareProcessNamespace')),
          'POD_HOST_NAMESPACE_REJECTED')
     psc = s.get('securityContext', {})
@@ -364,8 +391,12 @@ class Flow:
         self.L.validate_inputs(c)
         self.L.budget_check(c, dt.datetime.now(dt.timezone.utc))
         sa = json.loads(self.call('get', 'serviceaccount', SA, '-n', NS, '-o', 'json'))
-        need(not sa.get('imagePullSecrets'), 'NATIVE_PULL_RUNTIME_SA_REQUIRED_NO_TEMP_PULL_REATTACH')
-        return {'status': 'PASS_NEW_CONNECTION_INPUTS_BOUND', 'inputs': c}
+        refs = platform_pull_refs(sa, lambda name: json.loads(self.call('get', 'secret', name, '-n', NS, '-o', 'json')))
+        return {'status': 'PASS_NEW_CONNECTION_INPUTS_BOUND', 'inputs': c, 'platform_pull_refs': refs}
+
+    def validate_live_pod(self, live, wanted, uid=None):
+        bound = read(self.work/'new-inputs.json')['result']
+        return validate_pod(live, wanted, uid, bound.get('platform_pull_refs', []))
 
     def package(self, c):
         out = self.work/'package'
@@ -412,14 +443,14 @@ class Flow:
         else:
             need(marker.exists() and read(marker) == {'binding': self.binding, 'desired_sha256': digest(canon(wanted))},
                  'EXISTING_POD_NOT_OWNED_BY_THIS_RUN')
-        uid = validate_pod(live, wanted)
+        uid = self.validate_live_pod(live, wanted)
         deadline = time.monotonic()+180
         while not (live.get('status', {}).get('phase') == 'Running' and any(
                 r.get('type') == 'Ready' and r.get('status') == 'True' for r in live.get('status', {}).get('conditions', []))):
             need(time.monotonic() < deadline, 'POD_READY_TIMEOUT_RESUME_READBACK_ONLY')
             time.sleep(3)
             live = json.loads(self.call('get', 'pod', wanted['metadata']['name'], '-n', NS, '-o', 'json'))
-            validate_pod(live, wanted, uid)
+            self.validate_live_pod(live, wanted, uid)
         target = {'schema': 1, 'cluster_id': self.cluster, 'namespace': NS,
             'namespace_uid': c['namespace_uid'], 'readonly_pod_scope_accepted': True,
             'pod_name': wanted['metadata']['name'], 'pod_uid': uid, 'container': 'db-admin',
@@ -431,7 +462,7 @@ class Flow:
 
     def verify_pod(self, target, c):
         live = json.loads(self.call('get', 'pod', target['pod_name'], '-n', NS, '-o', 'json'))
-        validate_pod(live, self.wanted(c), target['pod_uid'])
+        self.validate_live_pod(live, self.wanted(c), target['pod_uid'])
 
     def sql(self, target, c):
         self.verify_pod(target, c)
@@ -555,7 +586,7 @@ class Flow:
         live = json.loads(raw)
         need(live.get('metadata', {}).get('uid') == target['pod_uid'], 'CLEANUP_UID_CHANGED_NO_DELETE')
         if not marker.exists():
-            validate_pod(live, self.wanted(c), target['pod_uid'])
+            self.validate_live_pod(live, self.wanted(c), target['pod_uid'])
             write(marker, {'binding': self.binding, 'pod_uid': target['pod_uid']})
             options = {'apiVersion': 'v1', 'kind': 'DeleteOptions', 'preconditions': {'uid': target['pod_uid']},
                        'gracePeriodSeconds': 5, 'propagationPolicy': 'Background'}

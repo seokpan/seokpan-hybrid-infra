@@ -1,0 +1,23 @@
+name: Native platform pull reference boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-prestart/prestart.py'
+      - 'tools/cloud-prestart/resume_native_pull.py'
+      - 'tools/cloud-prestart/test_native_pull.py'
+      - '.github/workflows/native-pull-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-pull-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -I tools/cloud-prestart/test_native_pull.py -v
