@@ -69,7 +69,7 @@ def route(command,settings):
                     'b-hpa-publication-proof-v1'}:
         import importlib.util
         helper=HERE/'public_hpa_export.py'
-        need(sha(helper)=='0b4c24d20cf81ff86ab94217c7f335a34a0eb0e4c8473e05262790c4d0554511','PUBLIC_EXPORT_SOURCE_CHANGED')
+        need(sha(helper)=='f3485eb9af1dbd0dde197807d24574f61484e40de2ebadd127ddc2a2d4716929','PUBLIC_EXPORT_SOURCE_CHANGED')
         spec=importlib.util.spec_from_file_location('hpa_public_export',helper)
         obj=importlib.util.module_from_spec(spec)
         spec.loader.exec_module(obj)

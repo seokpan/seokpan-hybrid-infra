@@ -30,7 +30,8 @@ def adopt(target,data,allowed_old=None):
         if current==data:
             return 'REUSED_IDENTICAL_SOURCE'
         need(allowed_old is not None and hashlib.sha256(
-             current.replace(b'\r\n',b'\n')).hexdigest()==allowed_old,
+             current.replace(b'\r\n',b'\n')).hexdigest() in
+             ({allowed_old} if isinstance(allowed_old,str) else set(allowed_old)),
              'UNEXPECTED_EXISTING_SOURCE_PRESERVED')
         backup=target.with_name(target.name+'.before-public-export-'+str(time.time_ns()))
         fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
@@ -52,13 +53,18 @@ def install():
     need(os.getuid()!=0 and Path.home().name=='jth','USE_CONTROLLER_JTH')
     need(BASE.is_dir() and not BASE.is_symlink(),'EXISTING_PRESTART_DIRECTORY_REQUIRED')
     result={}
+    old_sources={
+        'public_hpa_export.py':'0b4c24d20cf81ff86ab94217c7f335a34a0eb0e4c8473e05262790c4d0554511',
+        'prepare_b_final_delete.py':'24d106397c7106dd4bd928b6d48de7edd58fc99ba2e7ef1daccfa198f1cb06a9',
+        'apply_b_final_delete.py':'90faf7edd4e9e05b33cf23a5a9ccaf165ca435ce34af2a7686d5e59ccf52cffb'}
     # 고정된 종료 도구만 연결하고 기존 키 등록은 반복하지 않습니다.
-    for name in ('public_hpa_export.py','finish_hpa_time_copy.py',
+    for name in ('public_hpa_export.py','finish_hpa_time_copy.py','finish_hpa_final_teardown.py',
                  'prepare_b_final_delete.py','apply_b_final_delete.py',
                  'b_final_residuals.py','run_b_final_delete_plan.sh'):
-        result[name]=adopt(BASE/name,raw(HERE/name))
+        result[name]=adopt(BASE/name,raw(HERE/name),old_sources.get(name))
     result['metadata_transport.py']=adopt(BASE/'metadata_transport.py',
-        raw(HERE/'metadata_transport.py'),OLD_TRANSPORT_SHA)
+        raw(HERE/'metadata_transport.py'),{OLD_TRANSPORT_SHA,
+        'c32634e65f6eaed17afde72accd8185fa75bfe632c3708b1147b4363622e3d63'})
     return {'status':'PASS_POST_TEST_TOOLS_CONNECTED_NOT_EXECUTED','files':result,
         'authorized_keys_changed':False,'settings_changed':False,
         'acl_or_installation_repeated':False,'runtime_tests_repeated':False,

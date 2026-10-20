@@ -36,8 +36,11 @@ def prepare():
     dispatch = read(RUN/'hpa-active-time-copy.json')
     final = Path(dispatch['directory'])/'final-closeout'
     stopped = read(final/'receipt.json')
-    need(stopped['status'] == 'PASS_RUN_STOPPED_RESTORED_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
-         and stopped['restoration_verified'] is True,'STOPPED_RESTORED_EVIDENCE_REQUIRED')
+    need(((stopped.get('status') == 'PASS_RUN_STOPPED_RESTORED_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and stopped.get('restoration_verified') is True)
+         or (stopped.get('status') == 'PASS_FINAL_TEARDOWN_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and stopped.get('final_teardown_selected') is True
+         and stopped.get('generator_stopped') is True and stopped.get('B_readers_stopped') is True)),'STOPPED_RESTORED_EVIDENCE_REQUIRED')
     pointer = read(RUN/'today-recreate-dispatch-20261020.json')
     config = read(pointer['config'])
     source = Path(pointer['ops'])/'scripts/rosa-lifecycle-plan.py'

@@ -34,8 +34,11 @@ def route(command):
     need(directory.resolve().is_relative_to((RUN/'hpa-20261020-124957').resolve())
          and not directory.is_symlink(), 'EXACT_RUN_CLOSEOUT_REQUIRED')
     receipt = read(directory/'receipt.json')
-    need(receipt['status'] == 'PASS_RUN_STOPPED_RESTORED_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
-         and receipt['restoration_verified'] is True, 'POST_TEST_CLOSEOUT_REQUIRED')
+    need(((receipt.get('status') == 'PASS_RUN_STOPPED_RESTORED_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and receipt.get('restoration_verified') is True)
+         or (receipt.get('status') == 'PASS_FINAL_TEARDOWN_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and receipt.get('final_teardown_selected') is True
+         and receipt.get('generator_stopped') is True and receipt.get('B_readers_stopped') is True)), 'POST_TEST_CLOSEOUT_REQUIRED')
     archive = directory/'public-evidence.zip'
     data = raw(archive)
     digest = hashlib.sha256(data).hexdigest()

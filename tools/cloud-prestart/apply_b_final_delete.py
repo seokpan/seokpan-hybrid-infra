@@ -34,7 +34,11 @@ def main():
     final=Path(active['directory'])/'final-closeout'
     stopped=L.read_json(final/'receipt.json')
     proof=L.read_json(final/'github-publication.json')
-    need(stopped['restoration_verified'] is True
+    need(((stopped.get('status') == 'PASS_RUN_STOPPED_RESTORED_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and stopped.get('restoration_verified') is True)
+         or (stopped.get('status') == 'PASS_FINAL_TEARDOWN_EVIDENCE_PRESERVED_NOT_TEST_VERDICT'
+         and stopped.get('final_teardown_selected') is True
+         and stopped.get('generator_stopped') is True and stopped.get('B_readers_stopped') is True))
          and proof['status']=='PASS_GITHUB_PUBLIC_EVIDENCE_SAVED'
          and proof['run_id']==stopped['run_id']
          and proof['public_archive_sha256']==stopped['public_archive_sha256']
