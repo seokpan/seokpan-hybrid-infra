@@ -31,7 +31,7 @@
   vars:
     ansible_connection: community.aws.aws_ssm
     ansible_aws_ssm_region: ap-northeast-2
-    ansible_aws_ssm_plugin: "/usr/local/bin/session-manager-plugin"
+    ansible_aws_ssm_plugin: "/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
     ansible_aws_ssm_bucket_sse_mode: AES256
     ansible_python_interpreter: /usr/bin/python3
     vpn_approved_target_file: ""
@@ -77,24 +77,10 @@
               - item.stat.mode == '0600'
               - item.stat.checksum == vpn_entry_hashes[item.item]
           vars:
-            vpn_entry_hashes: {"vpn_aws_install_entry.py": "b4776651b3999073b883633bfb6b7dd77f8170954535b8c760ec703a2700b5dd", "vpn_aws_receiver_cleanup.py": "0efe620de14efea997afa8940de516b8b9020bbe5c1602e90937b5b465ccb786"}
+            vpn_entry_hashes: {"vpn_aws_install_entry.py": "b4776651b3999073b883633bfb6b7dd77f8170954535b8c760ec703a2700b5dd", "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8"}
           loop: "{{ vpn_entry_files.results }}"
 
-        - name: 연결 중단에 대비한 임시 수신키 정리 예약
-          ansible.builtin.command:
-            argv:
-              - systemd-run
-              - --quiet
-              - --collect
-              - "--unit=seokpan-vpn-rsa-{{ vpn_receiver_open.challenge.nonce }}"
-              - --on-active=360
-              - /usr/bin/python3
-              - -I
-              - -B
-              - "{{ vpn_runtime_destination }}/vpn_aws_receiver_cleanup.py"
-              - --apply
-              - "{{ vpn_receiver_open.session_directory }}"
-          no_log: true
+        # 독립 정리는 수신 세션 서비스 생성 시 이미 등록돼 있다.
 
         - name: 컨트롤러에서 기존 암호문을 복구하고 전달용으로 암호화
           delegate_to: localhost
@@ -146,8 +132,7 @@
               - /usr/bin/python3
               - -I
               - -B
-              - -c
-              - "# \uc791\uc131\uc790: \uc774\uc720\ube48\n# \uc791\uc131\uc77c: 2026-10-20\n# \uc791\uc131 \ub0b4\uc6a9: \uc9c0\uc815\ud55c \uc784\uc2dc \uc218\uc2e0 \uc138\uc158\uc758 RSA \uac1c\uc778\ud0a4\ub9cc \uc815\ub9ac\n\nimport os, re, stat, sys\nfrom pathlib import Path\n\ndef main():\n    if len(sys.argv) != 3 or sys.argv[1] != '--apply':\n        print('\uc900\ube44 \uc0c1\ud0dc: \uc784\uc2dc \uc218\uc2e0\ud0a4 \uc815\ub9ac \ubbf8\uc2e4\ud589')\n        return\n\n    try:\n        directory = Path(sys.argv[2])\n\n        if (\n            os.geteuid() != 0\n            or not re.fullmatch(\n                r'/run/seokpan-vpn-receiver-[A-Za-z0-9_-]+/session',\n                str(directory),\n            )\n        ):\n            raise ValueError()\n\n        if any(\n            p.is_symlink()\n            for p in (directory, *directory.parents)\n        ):\n            raise ValueError()\n\n        for path in (directory.parent, directory):\n            info = path.stat()\n            if (\n                not stat.S_ISDIR(info.st_mode)\n                or info.st_uid != 0\n                or stat.S_IMODE(info.st_mode) != 0o700\n            ):\n                raise ValueError()\n\n        target = directory / 'receiver-rsa-private.pem'\n\n        if os.path.lexists(target):\n            info = target.lstat()\n            if (\n                not stat.S_ISREG(info.st_mode)\n                or info.st_uid != 0\n                or stat.S_IMODE(info.st_mode) != 0o600\n                or info.st_nlink != 1\n            ):\n                raise ValueError()\n\n            target.unlink()\n            fd = os.open(\n                directory,\n                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,\n            )\n            try:\n                os.fsync(fd)\n            finally:\n                os.close(fd)\n\n        print(\n            '\uc784\uc2dc RSA \uc218\uc2e0\ud0a4 \uc5c6\uc74c \ud655\uc778. '\n            '\uc6b4\uc601 VPN \ud0a4\uc640 \uc124\uce58 \uae30\ub85d\uc740 \uc720\uc9c0\ud569\ub2c8\ub2e4.'\n        )\n\n    except Exception:\n        print(\n            '\uc911\ub2e8: \uc784\uc2dc \uc218\uc2e0\ud0a4 \uc815\ub9ac \uc0c1\ud0dc\ub97c \ud655\uc778\ud574\uc57c \ud569\ub2c8\ub2e4. '\n            '\uac15\uc81c \uc0ad\uc81c\ud558\uc9c0 \ub9c8\uc138\uc694.'\n        )\n        raise SystemExit(2)\n\nif __name__ == '__main__':\n    main()\n"
+              - "{{ vpn_runtime_destination }}/vpn_aws_receiver_cleanup.py"
               - --apply
               - "{{ vpn_receiver_open.session_directory }}"
           when: vpn_receiver_open is defined and vpn_runtime_destination is defined

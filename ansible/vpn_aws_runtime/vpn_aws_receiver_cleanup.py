@@ -28,6 +28,18 @@ def main():
         ):
             raise ValueError()
 
+        # 세션 생성 전에 실패했으면 임시 키도 없다.
+        if not directory.exists():
+            info = directory.parent.stat()
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != 0
+                or stat.S_IMODE(info.st_mode) != 0o700
+            ):
+                raise ValueError()
+            print("임시 수신 세션 없음. 운영 키와 설치 기록은 유지합니다.")
+            return
+
         for path in (directory.parent, directory):
             info = path.stat()
             if (

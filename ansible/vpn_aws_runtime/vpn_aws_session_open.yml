@@ -18,7 +18,7 @@
     vpn_approved_target_file: ""
     ansible_connection: community.aws.aws_ssm
     ansible_aws_ssm_region: ap-northeast-2
-    ansible_aws_ssm_plugin: "/usr/local/bin/session-manager-plugin"
+    ansible_aws_ssm_plugin: "/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
     ansible_aws_ssm_bucket_sse_mode: AES256
     ansible_python_interpreter: /usr/bin/python3
 
@@ -33,7 +33,7 @@
         fail_msg: 수신 세션 실행 승인과 기존 프로그램 전달 결과가 필요합니다.
 
   tasks:
-    - name: 기존 신원 확인·세션 생성 함수를 호출
+    - name: 서버 독립 정리를 먼저 등록하고 수신 세션 생성
       ansible.builtin.command:
         argv:
           - /usr/bin/python3
@@ -41,24 +41,77 @@
           - -B
           - -c
           - |
-            import hashlib, json, os, stat, tempfile, time, types
+            # 작성자: 이유빈
+            # 작성일: 2026-10-20
+            # 작성 내용: 정리가 먼저 등록된 서버 서비스에서 수신 세션 생성
+
+            import hashlib, json, os, re, secrets, stat, subprocess, sys, tempfile, time
             from pathlib import Path
 
-            try:
-                import sys
+            WORKER = 'import hashlib, json, os, stat, tempfile, time, types\nfrom pathlib import Path\n\ntry:\n    import sys\n\n    if os.geteuid() != 0:\n        raise ValueError()\n\n    approved = json.loads((Path(sys.argv[2]) / "approved.json").read_text())\n    base = Path(sys.argv[1])\n\n    if (\n        not base.is_absolute()\n        or any(p.is_symlink() for p in (base, *base.parents))\n    ):\n        raise ValueError()\n\n    info = base.stat()\n    if (\n        not stat.S_ISDIR(info.st_mode)\n        or info.st_uid != 0\n        or stat.S_IMODE(info.st_mode) != 0o700\n    ):\n        raise ValueError()\n\n    modules = {}\n\n    for name, digest in {\'vpn_aws_session_prepare.py\': \'080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205\', \'vpn_aws_imds_bridge.py\': \'4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3\'}.items():\n        path = base / name\n        info = path.lstat()\n\n        if (\n            not stat.S_ISREG(info.st_mode)\n            or info.st_uid != 0\n            or stat.S_IMODE(info.st_mode) != 0o600\n            or info.st_nlink != 1\n        ):\n            raise ValueError()\n\n        raw = path.read_bytes()\n        if hashlib.sha256(raw).hexdigest() != digest:\n            raise ValueError()\n\n        module = types.ModuleType(name[:-3])\n        module.__file__ = str(path)\n        exec(\n            compile(raw, str(path), "exec"),\n            module.__dict__,\n        )\n        modules[name] = module\n\n    bridge = modules["vpn_aws_imds_bridge.py"]\n    prepare = modules["vpn_aws_session_prepare.py"]\n\n    observed = bridge.read_imds_identity()\n    bridge.verify_identity(approved, observed)\n\n    run = Path("/run")\n    if run.is_symlink():\n        raise ValueError()\n\n    info = run.stat()\n    if (\n        not stat.S_ISDIR(info.st_mode)\n        or info.st_uid != 0\n        or stat.S_IMODE(info.st_mode) & 0o022\n    ):\n        raise ValueError()\n\n    mounts = Path(\n        "/proc/self/mountinfo"\n    ).read_text().splitlines()\n\n    if not any(\n        line.split()[4] == "/run"\n        and line.split(" - ", 1)[1].split()[0] == "tmpfs"\n        for line in mounts\n    ):\n        raise ValueError()\n\n    parent = Path(sys.argv[2])\n\n    directory = bridge.prepare_receiver_session(\n        parent=parent,\n        approved=approved,\n        archive_sha256=(\n            "65c6c09946f186fd5cf50169f2c330b4f9f5"\n            "ac3dda58e29345cb45decbebf886"\n        ),\n        wireguard_public_key=(\n            "/ROoAYvAbe6M3sp1h0UDgXS9DFo+1bVXrUE1/1ZCiAU="\n        ),\n        now=int(time.time()),\n        prepare_function=prepare.prepare_session,\n        identity_reader=lambda: observed,\n    )\n\n    challenge = json.loads(\n        (directory / "challenge.json").read_text()\n    )\n\n    result = json.dumps({\n        "session_directory": str(directory),\n        "challenge": challenge,\n    })\n    pending = parent / "open.pending"\n    fd = os.open(\n        pending,\n        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,\n        0o600,\n    )\n    with os.fdopen(fd, "w") as stream:\n        stream.write(result)\n        stream.flush()\n        os.fsync(stream.fileno())\n    os.rename(pending, parent / "open.json")\n    # 서버의 실행 시간 제한이 끝나면 종료 후 정리가 실행된다.\n    time.sleep(360)\n\nexcept Exception:\n    print(\n        "중단: 서버 신원·프로그램·메모리 경로·"\n        "수신 세션 상태를 확인하세요. 자동 재실행하지 마세요."\n    )\n    raise SystemExit(2)\n'
+            CLEANUP_HASH = '01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8'
 
-                if os.geteuid() != 0:
-                    raise ValueError()
+            def launch_receiver(base, parent, read_result, runner=subprocess.run,
+                                clock=time.monotonic, pause=time.sleep):
+                unit = "seokpan-vpn-receiver-" + secrets.token_hex(16)
+                cleanup = (
+                    "/usr/bin/python3 -I -B "
+                    + str(base / "vpn_aws_receiver_cleanup.py")
+                    + " --apply " + str(parent / "session")
+                )
+                command = [
+                    "systemd-run", "--quiet", "--collect",
+                    "--unit=" + unit,
+                    "--property=Type=exec",
+                    "--property=RuntimeMaxSec=360",
+                    "--property=TimeoutStopSec=5s",
+                    "--property=StandardOutput=null",
+                    "--property=StandardError=null",
+                    "--property=ExecStopPost=" + cleanup,
+                    "/usr/bin/python3", "-I", "-B", "-c", WORKER,
+                    str(base), str(parent),
+                ]
+                try:
+                    result = runner(command, capture_output=True, timeout=20)
+                    if result.returncode != 0:
+                        raise ValueError("수신 서비스 등록 실패")
+                    deadline = clock() + 60
+                    while clock() < deadline:
+                        value = read_result(parent / "open.json")
+                        if value is not None:
+                            return value
+                        pause(0.25)
+                    raise ValueError("수신 세션 준비 제한 시간 초과")
+                except BaseException:
+                    # 연결이 살아 있으면 즉시 중지한다.
+                    # 연결이 끊겨도 서버 서비스의 실행 시간 제한은 유지된다.
+                    try:
+                        runner(["systemctl", "stop", unit + ".service"],
+                               capture_output=True, timeout=15)
+                    except Exception:
+                        pass
+                    raise
 
-                approved = json.loads(sys.stdin.read())
-                base = Path(sys.argv[1])
-
+            def read_result(path):
+                if not os.path.lexists(path):
+                    return None
+                info = path.lstat()
                 if (
-                    not base.is_absolute()
-                    or any(p.is_symlink() for p in (base, *base.parents))
+                    not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_nlink != 1 or info.st_size > 16384
                 ):
                     raise ValueError()
+                return json.loads(path.read_text())
 
+            def main():
+                if os.geteuid() != 0:
+                    raise ValueError()
+                base = Path(sys.argv[1])
+                if not re.fullmatch(r"/opt/seokpan-vpn-runtime-[0-9a-f]{16}", str(base)):
+                    raise ValueError()
+                if any(p.is_symlink() for p in (base, *base.parents)):
+                    raise ValueError()
                 info = base.stat()
                 if (
                     not stat.S_ISDIR(info.st_mode)
@@ -66,97 +119,49 @@
                     or stat.S_IMODE(info.st_mode) != 0o700
                 ):
                     raise ValueError()
-
-                modules = {}
-
-                for name, digest in {'vpn_aws_session_prepare.py': '080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205', 'vpn_aws_imds_bridge.py': '4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3'}.items():
-                    path = base / name
-                    info = path.lstat()
-
-                    if (
-                        not stat.S_ISREG(info.st_mode)
-                        or info.st_uid != 0
-                        or stat.S_IMODE(info.st_mode) != 0o600
-                        or info.st_nlink != 1
-                    ):
-                        raise ValueError()
-
-                    raw = path.read_bytes()
-                    if hashlib.sha256(raw).hexdigest() != digest:
-                        raise ValueError()
-
-                    module = types.ModuleType(name[:-3])
-                    module.__file__ = str(path)
-                    exec(
-                        compile(raw, str(path), "exec"),
-                        module.__dict__,
-                    )
-                    modules[name] = module
-
-                bridge = modules["vpn_aws_imds_bridge.py"]
-                prepare = modules["vpn_aws_session_prepare.py"]
-
-                observed = bridge.read_imds_identity()
-                bridge.verify_identity(approved, observed)
-
-                run = Path("/run")
-                if run.is_symlink():
+                cleanup = base / "vpn_aws_receiver_cleanup.py"
+                info = cleanup.lstat()
+                if (
+                    not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                    or hashlib.sha256(cleanup.read_bytes()).hexdigest() != CLEANUP_HASH
+                ):
                     raise ValueError()
-
-                info = run.stat()
+                run = Path("/run")
+                info = run.lstat()
                 if (
                     not stat.S_ISDIR(info.st_mode)
                     or info.st_uid != 0
                     or stat.S_IMODE(info.st_mode) & 0o022
                 ):
                     raise ValueError()
-
-                mounts = Path(
-                    "/proc/self/mountinfo"
-                ).read_text().splitlines()
-
-                if not any(
-                    line.split()[4] == "/run"
-                    and line.split(" - ", 1)[1].split()[0] == "tmpfs"
-                    for line in mounts
+                approved = json.loads(sys.stdin.read(16385))
+                parent = Path(tempfile.mkdtemp(
+                    prefix="seokpan-vpn-receiver-", dir=run
+                ))
+                fd = os.open(
+                    parent / "approved.json",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                )
+                with os.fdopen(fd, "w") as stream:
+                    json.dump(approved, stream)
+                value = launch_receiver(base, parent, read_result)
+                if value.get("session_directory") != str(parent / "session"):
+                    raise ValueError()
+                if (
+                    value.get("challenge", {}).get("instance_id")
+                    != approved.get("instance_id")
                 ):
                     raise ValueError()
+                print(json.dumps(value))
 
-                parent = Path(tempfile.mkdtemp(
-                    prefix="seokpan-vpn-receiver-",
-                    dir=run,
-                ))
-
-                directory = bridge.prepare_receiver_session(
-                    parent=parent,
-                    approved=approved,
-                    archive_sha256=(
-                        "65c6c09946f186fd5cf50169f2c330b4f9f5"
-                        "ac3dda58e29345cb45decbebf886"
-                    ),
-                    wireguard_public_key=(
-                        "/ROoAYvAbe6M3sp1h0UDgXS9DFo+1bVXrUE1/1ZCiAU="
-                    ),
-                    now=int(time.time()),
-                    prepare_function=prepare.prepare_session,
-                    identity_reader=lambda: observed,
-                )
-
-                challenge = json.loads(
-                    (directory / "challenge.json").read_text()
-                )
-
-                print(json.dumps({
-                    "session_directory": str(directory),
-                    "challenge": challenge,
-                }))
-
-            except Exception:
-                print(
-                    "중단: 서버 신원·프로그램·메모리 경로·"
-                    "수신 세션 상태를 확인하세요. 자동 재실행하지 마세요."
-                )
-                raise SystemExit(2)
+            if __name__ == "__main__":
+                try:
+                    main()
+                except Exception:
+                    print("중단: 수신 서비스·신원·정리 상태를 확인하세요. 자동 재실행하지 마세요.")
+                    raise SystemExit(2)
           - "{{ vpn_runtime_destination }}"
         stdin: "{{ lookup('file', vpn_approved_target_file) }}"
       register: vpn_receiver_prepare_result

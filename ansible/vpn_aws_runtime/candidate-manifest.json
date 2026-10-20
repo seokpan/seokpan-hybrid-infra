@@ -15,11 +15,13 @@
     "vpn_aws_install_once.py": "a5b7757783e05c3a450b6880ef50c7a3132294dcc007d975739fc42b68a4af81",
     "vpn_aws_key_envelope.py": "eb99d68acb91fd5440d86bcdfa0c5e3ee25975a71bc5cdf21c12168fdd609a62",
     "vpn_aws_key_receiver.py": "b5307b9aabd9f60f7e6e3b8bf2cdde462fdc1d7a0d331f023f8887256e85774e",
-    "vpn_aws_key_supply.yml": "4796f48de67c2a76d6b5b33534b0ca61d2c744d99ad8581f2b99f28dc27e21dd",
-    "vpn_aws_receiver_cleanup.py": "0efe620de14efea997afa8940de516b8b9020bbe5c1602e90937b5b465ccb786",
-    "vpn_aws_runtime_deploy.yml": "1626570d5ee4f6be7f326cd423997922221bd2c82525b23b70dce969968e0aa8",
-    "vpn_aws_session_open.yml": "5d56dde1a6f45fdbb0c422f48f219f10966b878fb652b570772dc80f78f071a9",
+    "vpn_aws_key_supply.yml": "dee0549d3dd06f1e0c6e0944aea06604dfa14204ea6d8f8fda2a879dbc6ced22",
+    "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8",
+    "vpn_aws_runtime_deploy.yml": "6113d53ff0a8c02c0835086ee41ae33f5d7ff27459695a3a615ed293f146ec00",
+    "vpn_aws_session_open.yml": "3174a57d051cdc7d29b96c8e53291eaad3443cc8741337bc4e61a494a890766e",
     "vpn_aws_session_prepare.py": "080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205",
-    "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415"
+    "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415",
+    "test_vpn_session_lifecycle.py": "1729772d474202e9524494df0d7db9fc3c4303592f415bca443021ca05526c8f",
+    "README.md": "0ff5dde5131cd7f31d6ed3336b7fe1ec7d2f8ecf2a22f04d184f5ff14a43ba0e"
   }
 }

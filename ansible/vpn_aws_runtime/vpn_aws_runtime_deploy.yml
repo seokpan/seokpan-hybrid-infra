@@ -17,15 +17,16 @@
     vpn_runtime_candidate_dir: "{{ playbook_dir }}"
     ansible_connection: community.aws.aws_ssm
     ansible_aws_ssm_region: ap-northeast-2
-    ansible_aws_ssm_plugin: "/usr/local/bin/session-manager-plugin"
+    ansible_aws_ssm_plugin: "/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
     ansible_aws_ssm_bucket_sse_mode: AES256
     ansible_python_interpreter: /usr/bin/python3
-    vpn_source_hashes: {"vpn_aws_imds_bridge.py": "4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3", "vpn_aws_install_once.py": "a5b7757783e05c3a450b6880ef50c7a3132294dcc007d975739fc42b68a4af81", "vpn_aws_key_receiver.py": "b5307b9aabd9f60f7e6e3b8bf2cdde462fdc1d7a0d331f023f8887256e85774e", "vpn_aws_session_prepare.py": "080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205", "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415"}
+    vpn_source_hashes: {"vpn_aws_imds_bridge.py": "4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3", "vpn_aws_install_once.py": "a5b7757783e05c3a450b6880ef50c7a3132294dcc007d975739fc42b68a4af81", "vpn_aws_key_receiver.py": "b5307b9aabd9f60f7e6e3b8bf2cdde462fdc1d7a0d331f023f8887256e85774e", "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8", "vpn_aws_session_prepare.py": "080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205", "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415"}
     vpn_remote_modules:
       - vpn_aws_session_prepare.py
       - vpn_aws_imds_bridge.py
       - vpn_aws_install_once.py
       - vpn_aws_key_receiver.py
+      - vpn_aws_receiver_cleanup.py
 
   pre_tasks:
     - name: Controller에서 실행 조건과 실제 대상 확인
@@ -341,7 +342,7 @@
               - "{{ vpn_runtime_destination }}"
           changed_when: true
 
-        - name: 검토한 공개 프로그램 네 파일만 신규 전달
+        - name: 검토한 공개 프로그램 다섯 파일만 신규 전달
           ansible.builtin.copy:
             src: "{{ vpn_runtime_candidate_dir }}/{{ item }}"
             dest: "{{ vpn_runtime_destination }}/{{ item }}"
@@ -372,7 +373,7 @@
 
         - name: 완료 범위 안내
           ansible.builtin.debug:
-            msg: 공개 프로그램 네 파일 전달·확인 완료. 실제 VPN 키 공급·설정·서비스 시작·통신은 별도입니다.
+            msg: 공개 프로그램 다섯 파일 전달·확인 완료. 실제 VPN 키 공급·설정·서비스 시작·통신은 별도입니다.
 
       rescue:
         - name: 부분 전달 결과 확인 요청
