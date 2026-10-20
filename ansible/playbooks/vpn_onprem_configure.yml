@@ -126,13 +126,50 @@
     register: vpn_permanent
     changed_when: false
     no_log: true
+  - name: NetworkManager 관리 연결을 포함한 구역 보존 검사
+    ansible.builtin.command:
+      argv:
+      - /usr/bin/python3
+      - -I
+      - -B
+      - -c
+      - "\nimport json\nimport re\nimport subprocess\nimport sys\n\ndef normalize(text):\n    return \"\\\
+        n\".join(\n        line.rstrip()\n        for line in re.sub(r\" \\(active\\)\", \"\", text).splitlines()\n\
+        \    ).strip()\n\ndef matches(runtime, permanent, profile_zone, default_zone, actual_zone):\n  \
+        \  current = normalize(runtime)\n    saved = normalize(permanent)\n    if current == saved:\n  \
+        \      return True\n\n    effective = default_zone if profile_zone in (\"\", \"--\") else profile_zone\n\
+        \    if effective != \"public\" or actual_zone != \"public\":\n        return False\n\n    lines\
+        \ = current.splitlines()\n    if lines.count(\"public\") != 1:\n        return False\n\n    start\
+        \ = lines.index(\"public\") + 1\n    end = len(lines)\n    for index in range(start, len(lines)):\n\
+        \        if lines[index] and not lines[index][0].isspace():\n            end = index\n         \
+        \   break\n\n    positions = [\n        index for index in range(start, end)\n        if lines[index]\
+        \ == \"  interfaces: ens160\"\n    ]\n    if len(positions) != 1:\n        return False\n\n    lines[positions[0]]\
+        \ = \"  interfaces:\"\n    return \"\\n\".join(lines) == saved\n\ndef query(args):\n    return subprocess.run(\n\
+        \        args, capture_output=True, text=True, timeout=20, check=True,\n    ).stdout.strip()\n\n\
+        def main():\n    data = json.loads(sys.stdin.read(1000000))\n    runtime = data[\"runtime\"]\n \
+        \   permanent = data[\"permanent\"]\n\n    if normalize(runtime) == normalize(permanent):\n    \
+        \    print(\"기존 구역 설정 일치\")\n        return\n\n    active = query([\n        \"nmcli\", \"-t\",\
+        \ \"-f\", \"UUID,DEVICE\",\n        \"connection\", \"show\", \"--active\",\n    ])\n    uuids =\
+        \ []\n    for line in active.splitlines():\n        uuid, separator, device = line.partition(\"\
+        :\")\n        if separator and device == \"ens160\":\n            uuids.append(uuid)\n\n    if len(uuids)\
+        \ != 1:\n        raise ValueError()\n\n    profile_zone = query([\n        \"nmcli\", \"-g\", \"\
+        connection.zone\",\n        \"connection\", \"show\", \"uuid\", uuids[0],\n    ])\n    default_zone\
+        \ = query([\"firewall-cmd\", \"--get-default-zone\"])\n    actual_zone = query([\n        \"firewall-cmd\"\
+        , \"--get-zone-of-interface=ens160\",\n    ])\n\n    if not matches(runtime, permanent, profile_zone,\
+        \ default_zone, actual_zone):\n        raise ValueError()\n\n    print(\"NetworkManager 구역 연결과 나머지\
+        \ 방화벽 설정 일치\")\n\nif __name__ == \"__main__\":\n    try:\n        main()\n    except Exception:\n\
+        \        print(\"중단: 기존 방화벽 보존 조건을 확인해야 합니다.\")\n        raise SystemExit(2)\n"
+      stdin: '{{ {''runtime'': vpn_runtime.results[0].stdout, ''permanent'': vpn_permanent.results[0].stdout}
+        | to_json }}'
+    register: vpn_zone_guard
+    changed_when: false
+    no_log: true
   - name: 방화벽 다시 읽기 전 기존 설정 보존 조건 확인
     ansible.builtin.assert:
       that:
-      - (vpn_runtime.results[0].stdout | regex_replace(' \(active\)', '')) == (vpn_permanent.results[0].stdout | regex_replace('
-        \(active\)', ''))
-      - (vpn_runtime.results[1].stdout | regex_replace(' \(active\)', '')) == (vpn_permanent.results[1].stdout | regex_replace('
-        \(active\)', ''))
+      - vpn_zone_guard.rc == 0
+      - (vpn_runtime.results[1].stdout | regex_replace(' \(active\)', '')) == (vpn_permanent.results[1].stdout
+        | regex_replace(' \(active\)', ''))
       - vpn_runtime.results[2].stdout == vpn_permanent.results[2].stdout
       - vpn_runtime.results[3].stdout == vpn_permanent.results[3].stdout
       fail_msg: 실행 중 설정과 영구 설정이 다릅니다. 자동 적용하지 않고 기존 규칙 보존 방법을 먼저 검토합니다.
