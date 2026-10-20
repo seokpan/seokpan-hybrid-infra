@@ -1,0 +1,19 @@
+name: Presentation final link
+on:
+  pull_request:
+    paths:
+      - tools/cloud-prestart/finish_presentation_link.py
+      - tools/cloud-prestart/test_presentation_link.py
+      - tools/prestart-closeout/pod_db_observer.py
+      - .github/workflows/presentation-final-link.yml
+permissions:
+  contents: read
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -m unittest discover -s tools/cloud-prestart -p test_presentation_link.py -v
