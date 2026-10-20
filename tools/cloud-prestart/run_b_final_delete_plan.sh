@@ -6,14 +6,20 @@
   set -euo pipefail
   umask 077
   [[ "$(id -un)" == jth ]] || exit 1
+  taskMode=${1:---prepare-plan}
+  case "$taskMode" in
+    --prepare-plan|--apply-reviewed-plan) taskAuth=rosa ;;
+    --inventory|--delete-reviewed-snapshots) taskAuth=personal ;;
+    *) echo STOP_KNOWN_B_CLOSEOUT_MODE_REQUIRED; exit 1 ;;
+  esac
   taskRoot="$HOME/.local/share/seokpan-rosa-plan-inputs-5psj2l62"
   taskRun="$taskRoot/controller-run-bundle-K2Tx7HgB"
   taskHelper="$taskRoot/source/scripts/tf-session.sh"
   [[ "$(git hash-object "$taskHelper")" == 608a765e2ba40b472b2cb431223b48c396c00866 ]] || exit 1
-  [[ ! -e "$taskRun/b-final-delete-plan.json" ]] || {
+  if [[ "$taskMode" == --prepare-plan && -e "$taskRun/b-final-delete-plan.json" ]]; then
     echo STOP_EXISTING_DELETE_PLAN_REUSE_NO_REPEAT
     exit 1
-  }
+  fi
   taskWork=$(mktemp -d "$taskRoot/b-final-delete-auth-XXXXXXXX")
   trap 'unset RHCS_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN taskMfa' EXIT
   taskRosa=$(python3 -I - "$taskRun/today-recreate-dispatch-20261020.json" <<'PY'
@@ -38,9 +44,21 @@ PY
   read -r -s -p 'AWS MFA for B ROSA delete Plan only: ' taskMfa </dev/tty
   printf '\n'
   [[ "$taskMfa" =~ ^[0-9]{6}$ ]] || exit 1
-  source "$taskHelper" rosa <<<"$taskMfa" >"$taskWork/auth.private.log" 2>&1
+  source "$taskHelper" "$taskAuth" <<<"$taskMfa" >"$taskWork/auth.private.log" 2>&1
   unset taskMfa
-  # 실제 삭제는 하지 않습니다. 출력된 Plan을 검토한 뒤 별도로 승인합니다.
-  python3 -I "$taskRun/prestart-closeout/prepare_b_final_delete.py" --prepare-plan
+  case "$taskMode" in
+    --prepare-plan)
+      # Plan만 준비합니다. 실제 삭제는 하지 않습니다.
+      python3 -I "$taskRun/prestart-closeout/prepare_b_final_delete.py" --prepare-plan ;;
+    --apply-reviewed-plan)
+      # GitHub 보존과 새 Plan을 대조한 뒤 정확한 확인 문구를 요구합니다.
+      python3 -I "$taskRun/prestart-closeout/apply_b_final_delete.py" --apply-reviewed-plan </dev/tty ;;
+    --inventory)
+      # ROSA 삭제 이후 B 소유 자원만 읽습니다.
+      python3 -I "$taskRun/prestart-closeout/b_final_residuals.py" ;;
+    --delete-reviewed-snapshots)
+      # B Snapshot 네 개만 대조하고 별도의 확인 문구를 요구합니다.
+      python3 -I "$taskRun/prestart-closeout/b_final_residuals.py" --delete-reviewed-snapshots </dev/tty ;;
+  esac
 )
 

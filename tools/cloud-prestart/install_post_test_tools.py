@@ -54,7 +54,8 @@ def install():
     result={}
     # 고정된 종료 도구만 연결하고 기존 키 등록은 반복하지 않습니다.
     for name in ('public_hpa_export.py','finish_hpa_time_copy.py',
-                 'prepare_b_final_delete.py','run_b_final_delete_plan.sh'):
+                 'prepare_b_final_delete.py','apply_b_final_delete.py',
+                 'b_final_residuals.py','run_b_final_delete_plan.sh'):
         result[name]=adopt(BASE/name,raw(HERE/name))
     result['metadata_transport.py']=adopt(BASE/'metadata_transport.py',
         raw(HERE/'metadata_transport.py'),OLD_TRANSPORT_SHA)
