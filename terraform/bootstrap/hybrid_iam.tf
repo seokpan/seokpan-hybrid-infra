@@ -120,6 +120,7 @@ data "aws_iam_policy_document" "tf_foundation_hybrid" {
       "ec2:DescribeInstances",
       "ec2:DescribeInstanceAttribute",
       "ec2:DescribeInstanceStatus",
+      "ec2:DescribeInstanceTypes",
       "ec2:DescribeImages",
       "ec2:DescribeVolumes",
       "ec2:DescribeVolumeAttribute",
