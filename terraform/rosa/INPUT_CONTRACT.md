@@ -1,5 +1,7 @@
 # ROSA 후속 HCL 수신계약
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/blob/078b93184790231fbc3b0e03c9ce0b767ab39dab/execution/TJUNG03_FULL_REPOSITORY_AUDIT_20261021.md).
+
 이 문서는 승인된 **비밀값이 아닌 필요한 출력만 전달하는 경로**를 rosa HCL 구현에 연결하는 계약이다. PR #28의 HCL 변수·형식 검사·Root Lock은 병합된 Source이며, 설치 입력의 실제 소비·Plan/Apply·Ready와 Data Binding2개 적용은 [원 실행 #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)·[10/16 완결 결과 문서 PR](https://github.com/seokpan/seokpan-hybrid-docs/pull/134)에 연결한다. 계약/정적 검사와 실제 수락을 구분하며 최종 인계 metadata·재생성·전체 비용의 미충족 복합 조건은 유지한다. 보호 파일 위치·값을 공개 예시에 복사하지 않는다.
 
 - 작성/소비: 정태훈(tjung03)

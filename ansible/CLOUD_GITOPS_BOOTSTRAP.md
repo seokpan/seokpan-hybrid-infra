@@ -1,5 +1,7 @@
 # Cloud GitOps 최소 설치
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/blob/078b93184790231fbc3b0e03c9ce0b767ab39dab/execution/TJUNG03_FULL_REPOSITORY_AUDIT_20261021.md).
+
 ROSA 설치와 B01/B05 독립 검사는 완료된 상태에서 실행한다. Cloud에 GitOps가 없다는 실제 조회 결과를 이어받아 GitOps Operator만 설치한다.
 
 `scripts/bootstrap-cloud-gitops.py`는 Controller `jth`에서 기존 검증된 oc와 전용 kubeconfig를 사용한다. 기존 `ansible-playbook`이 필요하며 새 도구를 설치하지 않는다. 최초 설치 선언의 소유자는 Infra이고, 생성한 JSON 형식 Ansible playbook과 선언 원문은 Controller 보호 결과 폴더에 보존한다.
