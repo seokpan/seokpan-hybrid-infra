@@ -244,7 +244,7 @@ class Boundaries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             schema=Path(t)/'schema.json';schema.write_text(json.dumps({'schema':1,'database_url':'mysql+asyncmy://db_admin:private-password@rds.correct:3306/stone_game'}))
             schema.chmod(0o600)
-            c={'binding':{'cluster_id':'new0123456789','namespace_uid':'ns','application_uid':'app','normalized_source_sha256':'source'},
+            c={'binding':{'cluster_id':'new0123456789','namespace_uid':'ns','application_uid':'app','normalized_source_sha256':'a'*64},
                 'schema_credentials_file':str(schema),'database_host':'rds.correct','oc':'oc','personal_kubeconfig':'/private/k',
                 'api':'https://api.new.test:6443','backend_image':'image@sha256:approved','database_ca_uid':'ca'}
             changed=[False];calls=[]
@@ -263,7 +263,7 @@ class Boundaries(unittest.TestCase):
                 elif args[:2]==['get','pod']:v={'metadata':{'uid':'replacement' if changed[0] else 'pod'}}
                 else:raise AssertionError(args)
                 return types.SimpleNamespace(returncode=0,stdout=json.dumps(v).encode())
-            common=types.SimpleNamespace(digest=lambda x:'source',normalized=lambda x:x)
+            common=types.SimpleNamespace(digest=lambda x:'a'*64,normalized=lambda x:x)
             with patch.object(POD,'load_common',lambda c:common):
                 self.assertEqual(POD.sample(c,runner)['collector_pod_uid'],'pod')
                 changed[0]=True

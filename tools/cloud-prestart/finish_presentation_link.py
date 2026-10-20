@@ -207,7 +207,13 @@ def main():
             'source_sha256':binding['source_sha256'],'normalized_source_sha256':binding['normalized_source_sha256'],'expected_images':images,
             'expected_replicas':{'backend':2,'frontend':1},**window}
         if (fixed/'rolling-config.json').exists():
-            need(read(fixed/'rolling-config.json')==rolling,'OTHER_ROLLING_CONFIGURATION_PRESERVED')
+            previous=read(fixed/'rolling-config.json')
+            if previous!=rolling:
+                need(not (fixed/'rolling-work/before.json').exists() and not list((fixed/'rolling-work').glob('*.STARTED.json')),
+                     'OTHER_PREPARED_ROLLING_CONFIGURATION_PRESERVED')
+                backup=out/('unprepared-rolling-config-'+sha(previous)[:12]+'.json')
+                if not backup.exists():save(backup,previous)
+                save(fixed/'rolling-config.json',rolling)
         else:save(fixed/'rolling-config.json',rolling)
         measure=RUN/'app-measurement/tools/presentation-measurement'
         command=[sys.executable,'-I',str(measure/'rolling_control.py'),'prepare','--config',str(fixed/'rolling-config.json'),'--work',str(fixed/'rolling-work'),'--execute']
