@@ -29,7 +29,15 @@ class ExactMonitoringPermission(unittest.TestCase):
         names={p.name for p in root.glob('*.tf')}|{'.terraform.lock.hcl'}
         self.assertEqual(names,set(M.SOURCE_SHA256)|{'rosa_monitoring_restore.tf'})
         for name,expected in M.SOURCE_SHA256.items():
-            if name!='iam.tf':self.assertEqual(M.sha(root/name),expected)
+            if name=='hybrid_iam.tf' and M.sha(root/name)!=expected:
+                # PR104의 승인된 조회 권한 한 줄만 원 고정 소스와 구분한다.
+                # 실행 도구의 과거 소스 해시나 권한 수락 범위는 바꾸지 않는다.
+                text=(root/name).read_text(encoding='utf-8')
+                added='      "ec2:DescribeInstanceTypes",\n'
+                self.assertEqual(text.count(added),1)
+                historical=text.replace(added,'',1)
+                self.assertEqual(hashlib.sha256(historical.encode()).hexdigest(),expected)
+            elif name!='iam.tf':self.assertEqual(M.sha(root/name),expected)
         spec=importlib.util.spec_from_file_location('extended_restore',Path(__file__).with_name('rosa-monitoring-restore-permission.py'))
         r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
         text=(root/'iam.tf').read_text();self.assertEqual(text.count(r.NEW_SOURCE),1)
