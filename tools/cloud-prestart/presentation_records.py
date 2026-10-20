@@ -54,7 +54,7 @@ def main():
             argv=r['observer_start_argv'];source=Path(argv[2])
             need(argv[:2]==[sys.executable,'-I'] and argv[3:]==['--execute','--start-observers']
                  and source.name=='finish_presentation_link.py' and source.is_relative_to(ROOT)
-                 and hashlib.sha256(source.read_bytes().replace(b'\r\n',b'\n')).hexdigest()=='42104a4d7c2e63506f345c66d0d5553f5b1766139adbccb664232ec7cdeecc63',
+                 and hashlib.sha256(source.read_bytes().replace(b'\r\n',b'\n')).hexdigest()=='978d6b519333f48563bd9017153cda1d60ca414a0cc6036761dfc8ac7de62512',
                  'FIXED_PREPARATION_ENTRY_REQUIRED')
             return subprocess.run(argv,timeout=20).returncode
         stopped=stop(r)

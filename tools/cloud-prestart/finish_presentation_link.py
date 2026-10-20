@@ -62,6 +62,44 @@ def corrected_replica_source(source,workers):
         result['kustomize'].setdefault('patches',[]).append({'target':{'group':'apps','version':'v1','kind':'Deployment','name':name},'patch':json.dumps(patch,separators=(',',':'))})
     return result
 
+def tolerated(taint,tolerations):
+    for value in tolerations:
+        if value.get('effect') not in (None,'',taint.get('effect')):continue
+        if taint.get('effect')=='NoExecute' and value.get('tolerationSeconds') is not None:continue
+        operator=value.get('operator','Equal')
+        if operator=='Exists' and value.get('key','') in ('',taint['key']):return True
+        if operator=='Equal' and value.get('key')==taint['key'] and value.get('value','')==taint.get('value',''):return True
+    return False
+
+def choose_app_workers(nodes,pod_specs,preferred=()):
+    classified=[];eligible=[]
+    for node in nodes:
+        labels=node['metadata'].get('labels',{});spec=node.get('spec',{})
+        row={'node':node['metadata']['name'],'hostname':labels.get('kubernetes.io/hostname'),
+             'zone':labels.get('topology.kubernetes.io/zone'),
+             'roles':sorted(k.split('/',1)[1] for k in labels if k.startswith('node-role.kubernetes.io/')),
+             'taints':[{k:t[k] for k in ('key','value','effect') if k in t} for t in spec.get('taints',[])]}
+        reasons=[]
+        if any(role in row['roles'] for role in ('infra','master','control-plane')):reasons.append('INFRA_OR_CONTROL_PLANE')
+        if 'worker' not in row['roles']:reasons.append('NOT_A_WORKER')
+        if spec.get('unschedulable') or not any(x.get('type')=='Ready' and x.get('status')=='True' for x in node.get('status',{}).get('conditions',[])):reasons.append('NOT_READY_OR_CORDONED')
+        if not row['hostname'] or not row['zone']:reasons.append('TOPOLOGY_LABELS_MISSING')
+        for pod in pod_specs:
+            if any(labels.get(k)!=v for k,v in pod.get('nodeSelector',{}).items()):reasons.append('EXISTING_NODE_SELECTOR_MISMATCH')
+            if any(t.get('effect') in ('NoSchedule','NoExecute') and not tolerated(t,pod.get('tolerations',[])) for t in spec.get('taints',[])):
+                reasons.append('APP_UNTOLERATED_TAINT')
+        row['excluded_reasons']=sorted(set(reasons));row['eligible']=not reasons;classified.append(row)
+        if row['eligible']:eligible.append({k:row[k] for k in ('node','hostname','zone')})
+    zones=sorted({x['zone'] for x in eligible});selected=[]
+    if len(eligible)<3 or len(zones)<2:return selected,classified
+    ranked=sorted(eligible,key=lambda x:(x['node'] not in preferred,x['node']))
+    for zone in zones[:3]:selected.append(next(x for x in ranked if x['zone']==zone))
+    while len(selected)<3:
+        remaining=[x for x in ranked if x not in selected]
+        selected.append(min(remaining,key=lambda x:(sum(y['zone']==x['zone'] for y in selected),x['node'] not in preferred,x['node'])))
+    need(len({x['hostname'] for x in selected})==3,'UNIQUE_COMPUTE_HOSTNAMES_REQUIRED')
+    return selected,classified
+
 def correct_existing_profile(app,out,get,call,workers):
     record=out/'replica-correction.attempted.json'
     if record.exists():
@@ -187,10 +225,18 @@ def main():
             record=out/'replica-correction.attempted.json'
             if record.exists():workers=read(record)['workers']
             else:
-                worker_nodes=json.loads(call(['get','nodes','-l','node-role.kubernetes.io/worker','-o','json'],True))['items']
-                workers=[{'node':x['metadata']['name'],'hostname':x['metadata'].get('labels',{}).get('kubernetes.io/hostname'),
-                    'zone':x['metadata'].get('labels',{}).get('topology.kubernetes.io/zone')} for x in worker_nodes
-                    if not x.get('spec',{}).get('unschedulable') and any(z.get('type')=='Ready' and z.get('status')=='True' for z in x.get('status',{}).get('conditions',[]))]
+                selected_file=out/'app-worker-selection.json'
+                if selected_file.exists():
+                    selection=read(selected_file);workers=selection['selected'];r['worker_classification']=selection['classification']
+                else:
+                    worker_nodes=json.loads(call(['get','nodes','-l','node-role.kubernetes.io/worker','-o','json'],True))['items']
+                    pod_specs=[get('deployment',name,'seokpan-cloud')['spec']['template']['spec'] for name in ('backend','frontend')]
+                    placed=json.loads(call(['get','pods','-n','seokpan-cloud','-l','app.kubernetes.io/name in (backend,frontend)','-o','json']))['items']
+                    preferred=[x['spec']['nodeName'] for x in placed if x['spec'].get('nodeName') and not x['metadata'].get('deletionTimestamp')]
+                    workers,classification=choose_app_workers(worker_nodes,pod_specs,preferred)
+                    r['worker_classification']=classification
+                    need(len(workers)==3,'THREE_ELIGIBLE_APP_WORKERS_REQUIRED_NO_NEW_NODES')
+                    save(selected_file,{'selected':workers,'classification':classification,'new_nodes_created':0})
             r['existing_workers']=workers
         phase('REUSE_COMPLETED_READ_ACCESS' if a.resume_profile else 'REPAIR_EXACT_PRESENTATION_READ_ACCESS')
         def ensure(objects):

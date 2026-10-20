@@ -69,4 +69,35 @@ class ReplicaResume(unittest.TestCase):
             self.assertEqual(result['maximum_sampled_total_connections'],7)
             self.assertFalse(result['per_account_visibility_accepted']);self.assertFalse(result['continuous_peak_proven'])
 
+class WorkerSelection(unittest.TestCase):
+    def node(self,name,zone,infra=False,taints=()):
+        labels={'node-role.kubernetes.io/worker':'','kubernetes.io/hostname':name,'topology.kubernetes.io/zone':zone}
+        if infra:labels['node-role.kubernetes.io/infra']=''
+        return {'metadata':{'name':name,'labels':labels},'spec':{'taints':list(taints)},'status':{'conditions':[{'type':'Ready','status':'True'}]}}
+    def test_six_worker_labels_exclude_three_infra_nodes(self):
+        nodes=[self.node(role+str(i),'zone'+str(i),role=='infra') for i in range(3) for role in ('infra','app')]
+        selected,rows=P.choose_app_workers(nodes,[{},{}])
+        self.assertEqual({x['node'] for x in selected},{'app0','app1','app2'})
+        self.assertEqual(sum(x['eligible'] for x in rows),3)
+        self.assertTrue(all('INFRA_OR_CONTROL_PLANE' in x['excluded_reasons'] for x in rows if x['node'].startswith('infra')))
+    def test_six_compute_workers_select_one_per_az_prefer_existing_app_nodes(self):
+        nodes=[self.node(str(i)+str(j),'zone'+str(i)) for i in range(3) for j in range(2)]
+        selected,_=P.choose_app_workers(nodes,[{},{}],preferred=['11','21'])
+        self.assertEqual({x['node'] for x in selected},{'00','11','21'})
+        self.assertEqual(len({x['zone'] for x in selected}),3)
+    def test_untolerated_taints_and_cordon_are_not_app_capacity(self):
+        nodes=[self.node(str(i),'zone'+str(i)) for i in range(4)]
+        nodes[0]['spec']['taints']=[{'key':'dedicated','value':'infra','effect':'NoSchedule'}]
+        nodes[1]['spec']['unschedulable']=True
+        selected,rows=P.choose_app_workers(nodes,[{},{}])
+        self.assertEqual(selected,[])
+        self.assertIn('APP_UNTOLERATED_TAINT',rows[0]['excluded_reasons'])
+        self.assertIn('NOT_READY_OR_CORDONED',rows[1]['excluded_reasons'])
+    def test_taint_requires_both_app_tolerations(self):
+        taint={'key':'dedicated','value':'app','effect':'NoSchedule'}
+        nodes=[self.node(str(i),'zone'+str(i),taints=[taint]) for i in range(3)]
+        tol={'tolerations':[{'key':'dedicated','operator':'Equal','value':'app','effect':'NoSchedule'}]}
+        self.assertEqual(P.choose_app_workers(nodes,[tol,{}])[0],[])
+        self.assertEqual(len(P.choose_app_workers(nodes,[tol,tol])[0]),3)
+
 if __name__=='__main__':unittest.main()

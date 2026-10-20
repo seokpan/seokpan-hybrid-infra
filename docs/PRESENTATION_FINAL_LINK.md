@@ -6,7 +6,7 @@ PR103은 승인·병합됐다. Controller는 조회 권한 단계와 준비 Sync
 
 기존 cloud_launch.py의 Source 생성기는 kustomize.replicas에 Backend/Frontend 1을 설정한다. PR103의 Deployment patch replica2만으로는 이 최종 변환기의 count1을 바꾸지 못했다. 이번 재개는 실제 기존 Source·Backend1 Ready·동일 리소스가 이 원인과 일치할 때만 보완한다. 다른 실패이면 쓰지 않고 Pod 대기 이유를 출력한다.
 
-사용자가 기존 3개 EC2를 활용한 앱 분산을 요청했으므로 실제 Ready·스케줄 가능 Worker 3개와 2개 이상 AZ가 확인되면 BE3/FE3으로 준비한다. Worker가 정확히 3개가 아니거나 단일 AZ이면 자원을 추가하지 않고 중단한다.
+사용자가 기존 3개 EC2를 활용한 앱 분산을 요청했다. 실제 Controller에는 worker 라벨이 있는 Ready 노드6개(각 AZ2개)가 조회됐다. 이것만으로 앱용 Worker6개라고 단정하지 않는다. infra/master/control-plane 역할과 cordon·Ready 상태·앱이 수용하지 않는 NoSchedule/NoExecute taint·기존 nodeSelector를 분류한다. 앱을 배치할 수 있는 기존 노드 중3개를 AZ 분산과 현재 앱 배치 노드 우선으로 선택한다. 추가 노드를 만들거나 나머지 노드를 변경하지 않는다. 적격 노드가3개 미만이거나 단일 AZ이면 실제 제외 이유와 함께 중단한다.
 
 ## 변경 범위
 
