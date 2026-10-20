@@ -321,8 +321,29 @@ def main():
         staged=successes[0]
         if not (out/'app-stage-receipt.json').exists():P.write(out/'app-stage-receipt.json',staged)
         else:need(P.read(out/'app-stage-receipt.json')==staged,'EXISTING_APP_STAGE_RECEIPT_CHANGED')
+        observer=out/'stage-observer-started.json'
+        if not observer.exists():
+            env={k:v for k,v in os.environ.items() if not k.startswith(('AWS_','RHCS_'))}
+            P.write(observer,{'stage':'single','ledger':str(ledger),'seconds':600,'interval_seconds':2})
+            with (out/'stage-observer.private.log').open('wb') as log:
+                watcher=subprocess.Popen([sys.executable,'-I',str(repo/'tools/presentation-measurement/stage_clock.py'),
+                    'observe','--infra',str(repo),'--work',str(work),'--ledger',str(ledger),'--stage','single',
+                    '--kubeconfig',config['personal_kubeconfig'],'--oc',config['oc'],'--seconds','600','--interval','2'],
+                    stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+            P.write(out/'stage-observer-pid.json',{'pid':watcher.pid,'bounded_seconds':600})
+        console=Path(staged['console_file']).read_text()
+        need(console.count('const SYNC_NOW = false;')==1,'EXACT_REVIEWED_EXPLICIT_SYNC_SWITCH_REQUIRED')
+        enabled=console.replace('const SYNC_NOW = false;','const SYNC_NOW = true;',1)
+        console_file=out/'single-sync.console.js'
+        if not console_file.exists():
+            fd=os.open(console_file,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            with os.fdopen(fd,'w',encoding='utf-8') as f:f.write(enabled)
+        else:need(console_file.read_text()==enabled,'EXISTING_SYNC_CODE_CHANGED')
+        baseline=json.loads(console.split('const b = ',1)[1].split(';\n',1)[0])
         result={'status':'PASS_FRESH_SETUP_AND_APP_SOURCE_READY_FOR_EXPLICIT_SYNC','setup_receipt':str(out/'receipt.json'),
             'app_stage':staged,'stage_clock':str(ledger),'infrastructure_handoff':str(out/'infrastructure-handoff.json'),
+            'argo_origin':baseline['origin'],'sync_console_file':str(console_file),'sync_console_enabled':True,
+            'ready_observer_seconds':600,
             'current_operator_mapping':str(out/'current-operator-mapping.json'),
             'operator_mapping':[{'role':x['role'],'policy_name':x['policy_arn'].rsplit('/',1)[-1],
                 'current_expected_role_attached':x.get('current_expected_role_attached')} for x in infra['operator_attachments']],
@@ -345,7 +366,7 @@ def main():
         print('Private fresh setup directory: '+str(out),flush=True)
         if result['status'].startswith('PASS_'):
             print('ARGO_CONSOLE_CODE_BEGIN',flush=True)
-            print(Path(result['app_stage']['console_file']).read_text(),flush=True)
+            print(Path(result['sync_console_file']).read_text(),flush=True)
             print('ARGO_CONSOLE_CODE_END',flush=True)
     return 0 if result['status'].startswith('PASS_') else 2
 
