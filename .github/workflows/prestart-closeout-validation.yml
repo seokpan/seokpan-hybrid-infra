@@ -19,8 +19,8 @@ jobs:
           python-version: '3.9'
       - name: New helper boundaries only
         working-directory: tools/prestart-closeout
-        run: python -m unittest test_closeout test_read_sources test_known_inputs -v
+        run: python -m unittest test_closeout test_read_sources test_known_inputs test_pod_db_ca -v
       - name: Bash syntax and Python 3.9 syntax
         run: |
           bash -n tools/prestart-closeout/run.sh tools/prestart-closeout/stages.sh
-          python -m compileall -q tools/prestart-closeout
+          python -m compileall -q tools/prestart-closeout tools/cloud-prestart/resume_database_ca.py
