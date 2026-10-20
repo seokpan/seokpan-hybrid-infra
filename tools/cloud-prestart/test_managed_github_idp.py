@@ -51,6 +51,20 @@ class ManagedGitHub(unittest.TestCase):
         rendered['github']['clientSecret']['name'] = 'new-managed-generated-secret'
         self.assertEqual(M.public_provider(rendered), dict(M.public_provider(self.desired), type='GitHub'))
 
+    def test_openshift_empty_named_ca_reference_means_system_roots(self):
+        for ca in ({}, {'name': ''}):
+            provider = copy.deepcopy(self.provider)
+            provider['github']['hostname'] = ''
+            provider['github']['ca'] = ca
+            self.assertEqual(M.desired_provider(provider, 'only-synthetic-secret'), self.desired)
+
+    def test_named_or_malformed_ca_reference_is_not_silently_ignored(self):
+        for ca in ({'name': 'real-ca'}, {'other': ''}, 'invalid'):
+            provider = copy.deepcopy(self.provider)
+            provider['github']['ca'] = ca
+            with self.assertRaises(RuntimeError):
+                M.desired_provider(provider, 'only-synthetic-secret')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -44,8 +44,12 @@ def public_provider(provider):
 def desired_provider(provider, secret):
     need(provider.get('name') == NAME and provider.get('type') == 'GitHub', 'EXACT_ARCHIVED_GITHUB_PROVIDER_REQUIRED')
     github = provider['github']
-    need(github.get('clientID') == CLIENT and not github.get('hostname') and not github.get('ca'),
-         'EXISTING_PUBLIC_GITHUB_CLIENT_REQUIRED')
+    need(github.get('clientID') == CLIENT, 'EXISTING_GITHUB_CLIENT_ID_MISMATCH')
+    need(not github.get('hostname'), 'EXISTING_GITHUB_ENTERPRISE_HOST_REQUIRES_REVIEW')
+    # OpenShift의 빈 CA 참조 {"name":""}는 기본 시스템 인증서를 사용합니다.
+    ca = github.get('ca')
+    need(ca is None or (isinstance(ca, dict) and set(ca) <= {'name'} and ca.get('name', '') == ''),
+         'EXISTING_NAMED_OR_MALFORMED_GITHUB_CA_REQUIRES_REVIEW')
     organizations, teams = github.get('organizations') or [], github.get('teams') or []
     need(bool(organizations) != bool(teams), 'UNCHANGED_RESTRICTED_ORGANIZATION_OR_TEAM_REQUIRED')
     need(provider.get('mappingMethod') in ('claim', 'lookup', 'add'), 'EXISTING_IDENTITY_MAPPING_REQUIRED')
@@ -147,6 +151,12 @@ def main():
         secret = oc_read('get', 'secret', name, '-n', 'openshift-config')
         value = secret.get('data', {}).get('clientSecret')
         need(value and value == archived.get('data', {}).get('clientSecret'), 'SAME_EXISTING_GITHUB_SECRET_REQUIRED_NO_ROTATION')
+        report['provider_input_shape'] = {
+            'client_id_matches_existing_app': provider.get('github', {}).get('clientID') == CLIENT,
+            'hostname_empty': not provider.get('github', {}).get('hostname'),
+            'ca_reference_present': 'ca' in provider.get('github', {}),
+            'ca_name_empty': isinstance(provider.get('github', {}).get('ca'), dict)
+                             and provider['github']['ca'].get('name', '') == ''}
         wanted = desired_provider(provider, base64.b64decode(value, validate=True).decode())
         phase = 'CURRENT_ROSA_MANAGED_PROVIDER'
         rosa = config['auth']['rosa_cli']
