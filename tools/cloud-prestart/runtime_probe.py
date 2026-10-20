@@ -16,6 +16,26 @@ def need(ok, code):
         raise Stop(code)
 
 
+def data_admission(payload):
+    mode = payload.get('data_mode', 'migrated')
+    need(mode in ('migrated', 'fresh_test'), 'KNOWN_DATA_MODE_REQUIRED')
+    if mode == 'fresh_test':
+        need(payload.get('fresh_test_target_accepted') is True
+             and payload.get('legacy_targets_excluded') is True
+             and payload.get('target_database_host') == payload.get('database_host')
+             and payload.get('target_redis_host') == payload.get('redis_host')
+             and payload.get('reported_schema_revision') == '20260902_0002'
+             and all(isinstance(payload.get(k), str) and payload[k].strip() for k in
+                     ('fresh_target_evidence_ref', 'purpose_accounts_evidence_ref', 'schema_prepared_evidence_ref')),
+             'FRESH_TEST_ISOLATION_ACCOUNTS_SCHEMA_REQUIRED')
+        need(not payload.get('final_data_accepted') and not payload.get('all_old_writers_stopped'),
+             'FRESH_MODE_LEGACY_ASSERTIONS_REJECTED')
+    else:
+        need(payload.get('final_data_accepted') is True and payload.get('all_old_writers_stopped') is True,
+             'FINAL_DATA_AND_OLD_WRITER_HOLD_REQUIRED')
+    return mode
+
+
 def mode_admission(room_keys, active_games, inconsistent_results):
     # Existing room/task data needs case-specific reconciliation; never infer
     # safety from TTL, delete keys, or manufacture historical start intents.
@@ -39,6 +59,7 @@ async def bounded_room_scan(client, max_pages=100, max_keys=20000):
 
 
 async def assess(payload, connect, redis_factory):
+    data_mode = data_admission(payload)
     dsn = urlsplit(payload['schema_url'])
     need(dsn.scheme == 'mysql+asyncmy' and dsn.hostname == payload['database_host']
          and dsn.port == 3306 and unquote(dsn.path.lstrip('/')) == 'stone_game'
@@ -63,6 +84,12 @@ async def assess(payload, connect, redis_factory):
             await cur.execute('SELECT version_num FROM stone_game.alembic_version')
             versions = [v[0].decode() if isinstance(v[0], bytes) else v[0] for v in await cur.fetchall()]
             need(versions == ['20260902_0002'], 'SCHEMA_DIFFERENCE_NO_UPGRADE_OR_STAMP')
+            if data_mode == 'fresh_test':
+                # 실제 목표 DB에서 읽기만 수행하며 기존 데이터를 지우지 않는다.
+                for table in ('member', 'game', 'game_result', 'game_participant',
+                              'member_stats', 'move', 'rating_history'):
+                    await cur.execute('SELECT 1 FROM stone_game.' + table + ' LIMIT 1')
+                    need(not await cur.fetchall(), 'FRESH_TEST_DATABASE_NOT_EMPTY_NO_DELETE_OR_IMPORT')
             await cur.execute("SELECT COUNT(*) FROM stone_game.game WHERE status='IN_PROGRESS'")
             active = int((await cur.fetchone())[0])
             await cur.execute("SELECT COUNT(*) FROM stone_game.game g LEFT JOIN stone_game.game_result r "
@@ -84,14 +111,14 @@ async def assess(payload, connect, redis_factory):
             'schema_revision': versions[0], 'schema_check': 'READ_ALEMBIC_VERSION_NOT_UPGRADE',
             'mode_admission': mode, 'database_writes': 0, 'redis_writes': 0,
             'migration_upgrade_or_stamp': False, 'runtime_pool_tested': False,
+            'data_mode': data_mode, 'fresh_database_empty_verified': data_mode == 'fresh_test',
             'credential_values_printed': False}
 
 
 def main():
     try:
         payload = json.load(sys.stdin)
-        need(payload.get('final_data_accepted') is True and payload.get('all_old_writers_stopped') is True,
-             'FINAL_DATA_AND_OLD_WRITER_HOLD_REQUIRED')
+        data_admission(payload)
         import asyncmy
         from redis.asyncio import Redis
         result = asyncio.run(asyncio.wait_for(assess(payload, asyncmy.connect, Redis), 75))
@@ -105,3 +132,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

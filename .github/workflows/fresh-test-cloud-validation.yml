@@ -1,0 +1,28 @@
+name: Fresh test Cloud boundaries
+on:
+  pull_request:
+    paths:
+      - 'tools/cloud-readiness/accepted_sql_contract.py'
+      - 'tools/cloud-readiness/accepted_sql_probe.py'
+      - 'tools/cloud-readiness/post_import_new_cluster.py'
+      - 'tools/cloud-readiness/fresh-test-data-handoff.TEMPLATE.NOT_ACCEPTED.json'
+      - 'tools/cloud-prestart/**'
+      - 'tools/cloud-launch/cloud_launch.py'
+      - 'docs/FRESH_TEST_CLOUD_RUN.md'
+      - '.github/workflows/fresh-test-cloud-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fresh-data-boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: New fresh-data synthetic tests only
+        run: python -I tools/cloud-prestart/test_fresh_data.py -v
