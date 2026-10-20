@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 
 
@@ -302,15 +303,30 @@ def main():
                 schema_prepared_evidence_ref=str(out/'receipt.json')+'#schema',reported_schema_revision=result['reported_schema_revision'])
             temp=Path(config['final_data_handoff']+'.setup-new')
             P.write(temp,handoff);os.replace(temp,config['final_data_handoff'])
-            staged=P.Flow(config,work,prepare_data_pod=False,resume_readonly=True).stage('single')
-            if not (out/'app-stage-receipt.json').exists():P.write(out/'app-stage-receipt.json',staged)
-            else:need(P.read(out/'app-stage-receipt.json')==staged,'EXISTING_APP_STAGE_RECEIPT_CHANGED')
-            result={'status':'PASS_FRESH_SETUP_AND_APP_SOURCE_READY_FOR_EXPLICIT_SYNC','setup_receipt':str(out/'receipt.json'),
-                'app_stage':staged,'infrastructure_handoff':str(out/'infrastructure-handoff.json'),
-                'current_operator_mapping':str(out/'current-operator-mapping.json'),
-                'operator_mapping':[{'role':x['role'],'policy_name':x['policy_arn'].rsplit('/',1)[-1],
-                    'current_expected_role_attached':x.get('current_expected_role_attached')} for x in infra['operator_attachments']],
-                'sync_started':False,'application_started':False}
+        # The existing stage entry owns its lock and measures only stage_app, excluding SQL preparation.
+        repo=Path(d['source']).parents[2]
+        ledger=out/'single-clock.jsonl'
+        staged_process=subprocess.run([sys.executable,'-I',str(repo/'tools/presentation-measurement/stage_clock.py'),
+            'entry','--infra',str(repo),'--work',str(work),'--ledger',str(ledger),'--stage','single',
+            '--','--config',d['config'],'--execute','--resume-read-only'],capture_output=True,timeout=600)
+        (out/'stage-clock.private.log').write_bytes(staged_process.stdout+staged_process.stderr)
+        print(staged_process.stdout.decode(errors='replace'),end='',flush=True)
+        need(staged_process.returncode==0,'APP_STAGE_FAILED_DATA_SETUP_RECEIPT_PRESERVED')
+        rows=[]
+        for line in staged_process.stdout.decode().splitlines():
+            try:rows.append(json.loads(line))
+            except ValueError:pass
+        successes=[x for x in rows if isinstance(x,dict) and x.get('status')=='PASS_PRESTART_TO_MANUAL_SYNC_BOUNDARY']
+        need(len(successes)==1,'EXACT_APP_STAGE_BOUNDARY_RECEIPT_REQUIRED')
+        staged=successes[0]
+        if not (out/'app-stage-receipt.json').exists():P.write(out/'app-stage-receipt.json',staged)
+        else:need(P.read(out/'app-stage-receipt.json')==staged,'EXISTING_APP_STAGE_RECEIPT_CHANGED')
+        result={'status':'PASS_FRESH_SETUP_AND_APP_SOURCE_READY_FOR_EXPLICIT_SYNC','setup_receipt':str(out/'receipt.json'),
+            'app_stage':staged,'stage_clock':str(ledger),'infrastructure_handoff':str(out/'infrastructure-handoff.json'),
+            'current_operator_mapping':str(out/'current-operator-mapping.json'),
+            'operator_mapping':[{'role':x['role'],'policy_name':x['policy_arn'].rsplit('/',1)[-1],
+                'current_expected_role_attached':x.get('current_expected_role_attached')} for x in infra['operator_attachments']],
+            'sync_started':False,'application_started':False}
     except Exception as error:
         message=str(error)
         result={'status':'STOP_FRESH_DB_PREPARE','phase':phase,
