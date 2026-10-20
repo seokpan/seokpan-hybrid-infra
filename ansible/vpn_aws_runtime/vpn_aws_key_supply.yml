@@ -1,0 +1,143 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-20
+# 작성 내용: 전달·수신 준비 이후 암호화·신규 설치·임시 수신키 정리
+
+- name: 전체 키 공급의 명시적 실행 선택 확인
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    vpn_allow_key_supply: false
+    vpn_allow_runtime_deploy: false
+    vpn_allow_receiver_prepare: false
+  tasks:
+    - name: 실제 실행 전 세 가지 실행 선택 확인
+      ansible.builtin.assert:
+        that:
+          - vpn_allow_key_supply | bool
+          - vpn_allow_runtime_deploy | bool
+          - vpn_allow_receiver_prepare | bool
+        fail_msg: 프로그램 전달·수신 세션·키 공급의 별도 실행 선택이 필요합니다.
+
+- name: 기존 전달·수신 세션 호출 절차 재사용
+  ansible.builtin.import_playbook: vpn_aws_session_open.yml
+
+- name: 승인한 수신 세션에 키 신규 공급
+  hosts: vpn_aws
+  gather_facts: false
+  become: true
+  vars:
+    ansible_connection: community.aws.aws_ssm
+    ansible_aws_ssm_region: ap-northeast-2
+    ansible_aws_ssm_plugin: "/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
+    ansible_aws_ssm_bucket_sse_mode: AES256
+    ansible_python_interpreter: /usr/bin/python3
+    vpn_approved_target_file: ""
+
+  tasks:
+    - name: 기존 세션과 후속 프로그램 공급·암호화·설치
+      block:
+        - name: 기존 수신 세션 결과 확인
+          ansible.builtin.assert:
+            that:
+              - vpn_receiver_open is defined
+              - vpn_runtime_destination is defined
+              - groups['vpn_aws'] | length == 1
+
+        - name: 검토한 설치·정리 진입 프로그램만 신규 전달
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/{{ item }}"
+            dest: "{{ vpn_runtime_destination }}/{{ item }}"
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          loop:
+            - vpn_aws_install_entry.py
+            - vpn_aws_receiver_cleanup.py
+
+        - name: 설치·정리 프로그램의 실제 확인값 조회
+          ansible.builtin.stat:
+            path: "{{ vpn_runtime_destination }}/{{ item }}"
+            follow: false
+            checksum_algorithm: sha256
+          loop:
+            - vpn_aws_install_entry.py
+            - vpn_aws_receiver_cleanup.py
+          register: vpn_entry_files
+
+        - name: 신규 프로그램 확인값·권한 대조
+          ansible.builtin.assert:
+            that:
+              - item.stat.isreg | default(false)
+              - not (item.stat.islnk | default(false))
+              - item.stat.uid == 0
+              - item.stat.mode == '0600'
+              - item.stat.checksum == vpn_entry_hashes[item.item]
+          vars:
+            vpn_entry_hashes: {"vpn_aws_install_entry.py": "b4776651b3999073b883633bfb6b7dd77f8170954535b8c760ec703a2700b5dd", "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8"}
+          loop: "{{ vpn_entry_files.results }}"
+
+        # 독립 정리는 수신 세션 서비스 생성 시 이미 등록돼 있다.
+
+        - name: 컨트롤러에서 기존 암호문을 복구하고 전달용으로 암호화
+          delegate_to: localhost
+          become: false
+          vars:
+            ansible_connection: local
+          ansible.builtin.command:
+            argv:
+              - "{{ lookup('env', 'HOME') }}/.local/share/seokpan-hybrid/venv-vpn/bin/python"
+              - -I
+              - -B
+              - "{{ playbook_dir }}/vpn_aws_encrypt_entry.py"
+              - --apply
+              - "{{ vpn_approved_target_file }}"
+              - "{{ hostvars[inventory_hostname].ansible_host }}"
+            stdin: "{{ hostvars[inventory_hostname].vpn_receiver_open.challenge | to_json }}"
+          changed_when: false
+          register: vpn_key_envelope
+          no_log: true
+
+        - name: 서버 신원 대조 후 기존 함수로 신규 키 설치
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -I
+              - -B
+              - "{{ vpn_runtime_destination }}/vpn_aws_install_entry.py"
+              - --apply
+              - "{{ vpn_receiver_open.session_directory }}"
+            stdin: "{{ {'approved': (lookup('file', vpn_approved_target_file) | from_json), 'envelope': (vpn_key_envelope.stdout | from_json)} | to_json }}"
+          register: vpn_key_install
+          no_log: true
+
+        - name: 설치 결과 해석
+          ansible.builtin.assert:
+            that:
+              - (vpn_key_install.stdout | from_json)['신규 키 설치'] | bool
+          no_log: true
+
+      rescue:
+        - name: 부분 결과 보존 후 중단
+          ansible.builtin.fail:
+            msg: 키 설치·프로그램 전달이 일부 반영됐을 수 있습니다. 운영 키·설치 기록을 삭제하거나 자동 재실행하지 마세요.
+
+      always:
+        - name: 성공·실패와 관계없이 임시 RSA 수신키만 정리
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -I
+              - -B
+              - "{{ vpn_runtime_destination }}/vpn_aws_receiver_cleanup.py"
+              - --apply
+              - "{{ vpn_receiver_open.session_directory }}"
+          when: vpn_receiver_open is defined and vpn_runtime_destination is defined
+          no_log: true
+
+    - name: 완료 범위 안내
+      ansible.builtin.debug:
+        msg: 운영 키 신규 공급과 임시 RSA 수신키 정리를 확인했습니다. WireGuard 설정·서비스·터널·RDS 시험은 별도입니다.

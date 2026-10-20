@@ -1,0 +1,27 @@
+{
+  "purpose": "Git 사본의 원문 대조용. 운영 실행 승인 아님",
+  "files": {
+    "test_vpn_aws_imds_bridge.py": "4cb0f552da077997d7ee3a9dd6907ec59dff9a93e732333a8e48e8cdacc619fc",
+    "test_vpn_aws_install_once.py": "a1af803d58985635d9f62d31c872c46c81d36725c0f908b0d73d65eed725a49c",
+    "test_vpn_aws_key_envelope.py": "2cea42e62c8e6a3da21aa1cc88a3667a9e38394841c1a279d45ca687b71d16fd",
+    "test_vpn_aws_key_receiver.py": "61e344412a6cfda2c5d5e98025510a77644ab45d876e92ab3d44c6aabcefc41b",
+    "test_vpn_aws_runtime_integration.py": "4dad96d6d215fe7654dcfb58573d3df2d6db77611db0653fa7ddf5a555ee04d9",
+    "test_vpn_aws_session_prepare.py": "4a5724cc3d21e1adaac4aa421d0e294ba955e66a1c9f2e93310d45d80bf86677",
+    "test_vpn_aws_target_gate.py": "7d8981ad3bb2c4d448218137e63fc6a394be6c112098ad4aacee35bb6c2268c3",
+    "test_vpn_runtime_source_loader.py": "341dd669ffeb4c58348afb4abd2c0fe535c1ef3f052ff55d4b1f168ce8d40127",
+    "vpn_aws_encrypt_entry.py": "7e140ce5eb1e0115aeb068f7d2f57f85358e74e085d1daf3ab82b820b8fe77a5",
+    "vpn_aws_imds_bridge.py": "4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3",
+    "vpn_aws_install_entry.py": "b4776651b3999073b883633bfb6b7dd77f8170954535b8c760ec703a2700b5dd",
+    "vpn_aws_install_once.py": "a5b7757783e05c3a450b6880ef50c7a3132294dcc007d975739fc42b68a4af81",
+    "vpn_aws_key_envelope.py": "eb99d68acb91fd5440d86bcdfa0c5e3ee25975a71bc5cdf21c12168fdd609a62",
+    "vpn_aws_key_receiver.py": "b5307b9aabd9f60f7e6e3b8bf2cdde462fdc1d7a0d331f023f8887256e85774e",
+    "vpn_aws_key_supply.yml": "dee0549d3dd06f1e0c6e0944aea06604dfa14204ea6d8f8fda2a879dbc6ced22",
+    "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8",
+    "vpn_aws_runtime_deploy.yml": "6113d53ff0a8c02c0835086ee41ae33f5d7ff27459695a3a615ed293f146ec00",
+    "vpn_aws_session_open.yml": "3174a57d051cdc7d29b96c8e53291eaad3443cc8741337bc4e61a494a890766e",
+    "vpn_aws_session_prepare.py": "080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205",
+    "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415",
+    "test_vpn_session_lifecycle.py": "1729772d474202e9524494df0d7db9fc3c4303592f415bca443021ca05526c8f",
+    "README.md": "0ff5dde5131cd7f31d6ed3336b7fe1ec7d2f8ecf2a22f04d184f5ff14a43ba0e"
+  }
+}

@@ -1,0 +1,381 @@
+---
+# 작성자: 이유빈
+# 작성일: 2026-10-20
+# 작성 내용: 승인 대상에 공개 프로그램을 신규 전달하는 Ansible 실행 절차
+# 실제 실행 전 코드 리뷰·대상·작업창·개인 MFA 세션 확인이 필요하다.
+# 프로그램 파일만 전달한다. 개인키·서버 설정·서비스는 변경하지 않는다.
+
+- name: 승인한 AWS VPN 서버에 공개 프로그램 신규 전달
+  hosts: vpn_aws
+  gather_facts: false
+  become: true
+
+  vars:
+    vpn_allow_runtime_deploy: false
+    vpn_approved_target_file: ""
+    vpn_approved_transfer_bucket: ""
+    vpn_runtime_candidate_dir: "{{ playbook_dir }}"
+    ansible_connection: community.aws.aws_ssm
+    ansible_aws_ssm_region: ap-northeast-2
+    ansible_aws_ssm_plugin: "/usr/local/sessionmanagerplugin/bin/session-manager-plugin"
+    ansible_aws_ssm_bucket_sse_mode: AES256
+    ansible_python_interpreter: /usr/bin/python3
+    vpn_source_hashes: {"vpn_aws_imds_bridge.py": "4a49314f42dee2d8b9c8d1fa7cd88b7c9c9b810df962ecdebd4e16f5f4108ac3", "vpn_aws_install_once.py": "a5b7757783e05c3a450b6880ef50c7a3132294dcc007d975739fc42b68a4af81", "vpn_aws_key_receiver.py": "b5307b9aabd9f60f7e6e3b8bf2cdde462fdc1d7a0d331f023f8887256e85774e", "vpn_aws_receiver_cleanup.py": "01aea670993ce4676e3d1b94ddc8861ebee6f681741d8a113cf6dec7e03a75c8", "vpn_aws_session_prepare.py": "080402620c849683dee37be0ccd74dc00cf050e935ed2133ef3c88073078b205", "vpn_aws_target_gate.py": "7967c07f95de0144110d180705fc2c6a900f2318a58828f0fd0437752ca5c415"}
+    vpn_remote_modules:
+      - vpn_aws_session_prepare.py
+      - vpn_aws_imds_bridge.py
+      - vpn_aws_install_once.py
+      - vpn_aws_key_receiver.py
+      - vpn_aws_receiver_cleanup.py
+
+  pre_tasks:
+    - name: Controller에서 실행 조건과 실제 대상 확인
+      delegate_to: localhost
+      become: false
+      vars:
+        ansible_connection: local
+
+      block:
+        - name: 기본 차단과 단일 대상·전용 버킷 입력 검사
+          ansible.builtin.assert:
+            that:
+              - vpn_allow_runtime_deploy | bool
+              - groups['vpn_aws'] | length == 1
+              - hostvars[inventory_hostname].ansible_host is match('^i-([0-9a-f]{8}|[0-9a-f]{17})$')
+              - vpn_approved_target_file | length > 0
+              - vpn_approved_transfer_bucket | length > 0
+              - hostvars[inventory_hostname].ansible_aws_ssm_bucket_name == vpn_approved_transfer_bucket
+            fail_msg: 검토·실행 승인과 실제 EC2·전용 전달 버킷 입력이 필요합니다.
+
+        - name: 후보 코드·개인 세션·AWS 대상·버킷 보호 대조
+          ansible.builtin.command:
+            argv:
+              - "{{ lookup('env', 'HOME') }}/.local/share/seokpan-hybrid/venv-vpn/bin/python"
+              - -I
+              - -B
+              - -c
+              - |
+                import hashlib, json, os, stat, sys, types
+                from pathlib import Path
+
+                try:
+                    import boto3
+                    from botocore.config import Config
+
+                    base = Path(sys.argv[1])
+                    binding = Path(sys.argv[2])
+                    hashes = json.loads(sys.stdin.read())
+
+                    if not all(
+                        p.is_absolute()
+                        and not any(
+                            q.is_symlink()
+                            for q in (p, *p.parents)
+                        )
+                        for p in (base, binding)
+                    ):
+                        raise ValueError()
+
+                    info = base.stat()
+                    if (
+                        info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o700
+                    ):
+                        raise ValueError()
+
+                    data = {}
+                    for name, digest in hashes.items():
+                        p = base / name
+                        info = p.lstat()
+
+                        if (
+                            not stat.S_ISREG(info.st_mode)
+                            or info.st_uid != os.geteuid()
+                            or stat.S_IMODE(info.st_mode) != 0o600
+                        ):
+                            raise ValueError()
+
+                        data[name] = p.read_bytes()
+                        if (
+                            hashlib.sha256(data[name]).hexdigest()
+                            != digest
+                        ):
+                            raise ValueError()
+
+                    info = binding.stat()
+                    if (
+                        not stat.S_ISREG(info.st_mode)
+                        or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600
+                        or info.st_size > 16384
+                    ):
+                        raise ValueError()
+
+                    approved = json.loads(
+                        binding.read_text(encoding="utf-8")
+                    )
+                    if (
+                        approved.get("instance_id") != sys.argv[3]
+                        or approved.get("account_id")
+                        != "847835841591"
+                    ):
+                        raise ValueError()
+
+                    if not os.environ.get("AWS_SESSION_TOKEN"):
+                        raise ValueError()
+
+                    cfg = Config(
+                        connect_timeout=5,
+                        read_timeout=10,
+                        retries={"max_attempts": 0},
+                    )
+                    session = boto3.Session(
+                        region_name="ap-northeast-2"
+                    )
+                    sts = session.client("sts", config=cfg)
+                    identity = sts.get_caller_identity()
+
+                    if (
+                        identity.get("Arn")
+                        != "arn:aws:iam::847835841591:user/yb"
+                    ):
+                        raise ValueError()
+
+                    gate = types.ModuleType(
+                        "verified_target_gate"
+                    )
+                    exec(
+                        compile(
+                            data["vpn_aws_target_gate.py"],
+                            "vpn_aws_target_gate.py",
+                            "exec",
+                        ),
+                        gate.__dict__,
+                    )
+
+                    class CachedIdentity:
+                        def get_caller_identity(self):
+                            return identity
+
+                    gate.check_target(
+                        approved,
+                        CachedIdentity(),
+                        session.client("ec2", config=cfg),
+                        session.client("ssm", config=cfg),
+                    )
+
+                    bucket = sys.argv[4]
+                    s3 = session.client("s3", config=cfg)
+                    args = {
+                        "Bucket": bucket,
+                        "ExpectedBucketOwner":
+                            approved["account_id"],
+                    }
+
+                    location = s3.get_bucket_location(**args)
+                    if (
+                        location.get("LocationConstraint")
+                        != "ap-northeast-2"
+                    ):
+                        raise ValueError()
+
+                    blocks = s3.get_public_access_block(
+                        **args
+                    )["PublicAccessBlockConfiguration"]
+
+                    if not all(
+                        blocks.get(k) is True
+                        for k in (
+                            "BlockPublicAcls",
+                            "IgnorePublicAcls",
+                            "BlockPublicPolicy",
+                            "RestrictPublicBuckets",
+                        )
+                    ):
+                        raise ValueError()
+
+                    rules = s3.get_bucket_encryption(
+                        **args
+                    )["ServerSideEncryptionConfiguration"][
+                        "Rules"
+                    ]
+
+                    if not rules or not all(
+                        r.get(
+                            "ApplyServerSideEncryptionByDefault",
+                            {},
+                        ).get("SSEAlgorithm") == "AES256"
+                        for r in rules
+                    ):
+                        raise ValueError()
+
+                    policy = json.loads(
+                        s3.get_bucket_policy(**args)["Policy"]
+                    )
+                    statements = policy.get("Statement", [])
+                    if not isinstance(statements, list):
+                        raise ValueError()
+
+                    bucket_arn = "arn:aws:s3:::" + bucket
+                    tls_deny = False
+
+                    for statement in statements:
+                        actions = statement.get("Action", [])
+                        resources = statement.get("Resource", [])
+
+                        if isinstance(actions, str):
+                            actions = [actions]
+                        if isinstance(resources, str):
+                            resources = [resources]
+
+                        principal = statement.get("Principal")
+                        secure = (
+                            statement.get("Condition", {})
+                            .get("Bool", {})
+                            .get("aws:SecureTransport")
+                        )
+
+                        if (
+                            statement.get("Effect") == "Deny"
+                            and principal in (
+                                "*",
+                                {"AWS": "*"},
+                            )
+                            and any(
+                                a in ("*", "s3:*")
+                                for a in actions
+                            )
+                            and bucket_arn in resources
+                            and bucket_arn + "/*" in resources
+                            and (
+                                secure is False
+                                or secure == "false"
+                            )
+                        ):
+                            tls_deny = True
+
+                    if not tls_deny:
+                        raise ValueError()
+
+                    digest = hashlib.sha256(
+                        json.dumps(
+                            hashes,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest()
+
+                    print(json.dumps({
+                        "destination":
+                            "/opt/seokpan-vpn-runtime-"
+                            + digest[:16]
+                    }))
+
+                except Exception:
+                    print(
+                        "중단: 후보 코드·개인 세션·승인 대상·"
+                        "전용 버킷 보호 조건을 확인하세요."
+                    )
+                    raise SystemExit(2)
+              - "{{ vpn_runtime_candidate_dir }}"
+              - "{{ vpn_approved_target_file }}"
+              - "{{ hostvars[inventory_hostname].ansible_host }}"
+              - "{{ vpn_approved_transfer_bucket }}"
+            stdin: "{{ vpn_source_hashes | to_json }}"
+          changed_when: false
+          register: vpn_deploy_gate
+
+        - name: 검증한 버전별 신규 전달 위치 지정
+          ansible.builtin.set_fact:
+            vpn_runtime_destination: "{{ (vpn_deploy_gate.stdout | from_json).destination }}"
+
+  tasks:
+    - name: 공개 프로그램 신규 전달과 확인
+      block:
+        - name: 서버 의존성·보호 경로 확인 후 새 폴더 생성
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -I
+              - -B
+              - -c
+              - |
+                import os, re, stat, sys
+                from pathlib import Path
+
+                try:
+                    import cryptography
+
+                    if (
+                        os.geteuid() != 0
+                        or sys.version_info < (3, 9)
+                    ):
+                        raise ValueError()
+
+                    path = Path(sys.argv[1])
+                    parent = Path("/opt")
+                    info = parent.lstat()
+
+                    if (
+                        not stat.S_ISDIR(info.st_mode)
+                        or info.st_uid != 0
+                        or stat.S_IMODE(info.st_mode) & 0o022
+                    ):
+                        raise ValueError()
+
+                    if not re.fullmatch(
+                        r"/opt/seokpan-vpn-runtime-[0-9a-f]{16}",
+                        str(path),
+                    ):
+                        raise ValueError()
+
+                    os.mkdir(path, 0o700)
+                    os.chmod(path, 0o700)
+                    print("신규 프로그램 보호 폴더 생성 완료")
+
+                except Exception:
+                    print(
+                        "중단: root·Python·cryptography·"
+                        "신규 보호 폴더 조건을 확인하세요."
+                    )
+                    raise SystemExit(2)
+              - "{{ vpn_runtime_destination }}"
+          changed_when: true
+
+        - name: 검토한 공개 프로그램 다섯 파일만 신규 전달
+          ansible.builtin.copy:
+            src: "{{ vpn_runtime_candidate_dir }}/{{ item }}"
+            dest: "{{ vpn_runtime_destination }}/{{ item }}"
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          loop: "{{ vpn_remote_modules }}"
+
+        - name: 전달된 파일 확인값·소유자·권한 조회
+          ansible.builtin.stat:
+            path: "{{ vpn_runtime_destination }}/{{ item }}"
+            follow: false
+            checksum_algorithm: sha256
+          loop: "{{ vpn_remote_modules }}"
+          register: vpn_deployed_files
+
+        - name: 실제 전달 결과 대조
+          ansible.builtin.assert:
+            that:
+              - item.stat.isreg | default(false)
+              - not (item.stat.islnk | default(false))
+              - item.stat.uid == 0
+              - item.stat.mode == '0600'
+              - item.stat.checksum == vpn_source_hashes[item.item]
+            fail_msg: 전달 결과가 검토한 코드·소유자·권한과 다릅니다. 자동 재실행하지 마세요.
+          loop: "{{ vpn_deployed_files.results }}"
+
+        - name: 완료 범위 안내
+          ansible.builtin.debug:
+            msg: 공개 프로그램 다섯 파일 전달·확인 완료. 실제 VPN 키 공급·설정·서비스 시작·통신은 별도입니다.
+
+      rescue:
+        - name: 부분 전달 결과 확인 요청
+          ansible.builtin.fail:
+            msg: 전달 폴더나 파일이 남았을 수 있습니다. 자동 재실행·기존 폴더 삭제 없이 상태를 확인하세요.
