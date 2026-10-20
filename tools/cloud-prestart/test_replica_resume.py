@@ -1,4 +1,4 @@
-import copy,importlib.util,json,tempfile,unittest
+import copy,hashlib,importlib.util,json,tempfile,unittest
 from pathlib import Path
 HERE=Path(__file__).resolve().parent
 s=importlib.util.spec_from_file_location('replica_resume',HERE/'finish_presentation_link.py');P=importlib.util.module_from_spec(s);s.loader.exec_module(P)
@@ -55,5 +55,18 @@ class ReplicaResume(unittest.TestCase):
     def test_missing_workers_or_single_az_cannot_modify_source(self):
         for workers in (self.workers[:2],[dict(x,zone='one') for x in self.workers]):
             with self.assertRaisesRegex(RuntimeError,'THREE_READY_MULTI_AZ'):P.corrected_replica_source(self.source(),workers)
+
+    def test_recorder_starts_only_this_fixed_preparation_source(self):
+        digest=hashlib.sha256((HERE/'finish_presentation_link.py').read_bytes().replace(b'\r\n',b'\n')).hexdigest()
+        self.assertIn(digest,(HERE/'presentation_records.py').read_text())
+
+    def test_partial_db_rows_do_not_become_account_visibility(self):
+        spec=importlib.util.spec_from_file_location('records',HERE/'presentation_records.py');R=importlib.util.module_from_spec(spec);spec.loader.exec_module(R)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'samples.jsonl';path.write_text(json.dumps({'utc':'first','monotonic_ns':1,'sample':{'connections_total':7,'global_limit':68}})+'\n'+json.dumps({'utc':'second','sample':None})+'\n{')
+            result=R.summary(path)
+            self.assertEqual((result['valid_samples'],result['failed_samples'],result['incomplete_lines']),(1,1,1))
+            self.assertEqual(result['maximum_sampled_total_connections'],7)
+            self.assertFalse(result['per_account_visibility_accepted']);self.assertFalse(result['continuous_peak_proven'])
 
 if __name__=='__main__':unittest.main()

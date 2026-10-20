@@ -6,6 +6,7 @@ on:
       - tools/cloud-prestart/test_presentation_link.py
       - tools/cloud-prestart/test_replica_resume.py
       - tools/cloud-prestart/run_selected_presentation.ps1
+      - tools/cloud-prestart/presentation_records.py
       - tools/prestart-closeout/pod_db_observer.py
       - .github/workflows/presentation-final-link.yml
 permissions:
