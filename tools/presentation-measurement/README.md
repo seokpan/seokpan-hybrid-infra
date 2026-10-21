@@ -1,6 +1,8 @@
 # 발표 B 결과 확보용 새 계측 준비
 
-이 디렉터리는 2026-10-19에 전달받은 세 결과 요구를 위한 **별도 구현·연쇄 추적 검토·회귀 검증본**이다. 기존 PR85는 df71963으로 병합됐으며 이 새 계측의 승인을 포함하지 않는다. 기존 정상 측정기는 변경하지 않았다. 이 변경의 별도 리뷰와 실제 대상 인계 연결이 가동 전에 남는다. 전체 실행 연결·담당·판정은 [실행 문서](../../docs/PRESENTATION_MEASUREMENT_RUN.md)를 따른다. 이 문서의 명령은 지금 ROSA를 생성하거나 앱/시험을 시작하라는 뜻이 아니다.
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
+이 디렉터리는 2026-10-19에 전달받은 세 결과 요구를 위한 **별도 구현·연쇄 추적 검토·회귀 검증본**이다. 기존 PR85는 df71963으로 병합됐으며 이 새 계측의 승인을 포함하지 않는다. 기존 정상 측정기는 변경하지 않았다. 별도 PR89의 승인·병합 이후 실제 정상 Baseline은 완료했고 롤링은 준비 중 중단됐다. 완성된 단계별 배포 전환시간과 실제 롤링 결과는 미확보로 남긴다. 전체 실행 연결·담당·판정은 [실행 문서](../../docs/PRESENTATION_MEASUREMENT_RUN.md)를 따른다. 이 문서의 명령은 지금 ROSA를 생성하거나 앱/시험을 시작하라는 뜻이 아니다.
 
 ## 소스와 실행 환경
 

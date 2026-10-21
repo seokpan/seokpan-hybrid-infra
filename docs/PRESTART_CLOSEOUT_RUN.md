@@ -1,5 +1,7 @@
 # Cloud 기동 전 보조 계층의 실행 계약
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 ## 수락 범위
 
 PR89/90은 기존 앱 배포·정상/롤링·HPA·원본 제어 구현의 채택 범위다. 이 보조 계층의 게시·CI·리뷰·Controller 설치·실제 Run은 서로 구분한다. 이 문서는 새 ROSA 생성을 승인하지 않는다.

@@ -1,5 +1,7 @@
 # ROSA 보류 복원 뒤 Cloud 앱 기동 연결
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 이 도구는 **새 Data Pod → 목적 SQL → Schema·앱 모드 → 초기 Pool → 배포 Source → 명시 Sync → Ready 확인**을 연결한다. 실제 입력이 없으면 로컬 누락 목록만 출력한다. ROSA 재생성, Foundation/NAT/EIP/RDS 변경, Import, Migration upgrade/stamp, Redis 키 수정, 자동 Sync는 수행하지 않는다.
 
 ```mermaid

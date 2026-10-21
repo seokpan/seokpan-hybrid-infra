@@ -1,5 +1,7 @@
 # ROSA 실제 Plan 전 로컬 준비
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 목적은 병합된 `terraform/rosa`를 **본인의 실행 환경에서 확인하고, 실제 입력을 수신한 뒤 첫 Plan으로 넘길 준비**를 하는 것이다. 이 문서는 기존 도구를 사용한다. 별도 입력 검사기·새 State·Cloud 실행 경로를 만들지 않는다. 원 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)이며 실제 실행 조건은 [입력 계약](INPUT_CONTRACT.md)·[리뷰/실행 Gate](REVIEW_AND_EXECUTION_GATES.md)를 따른다.
 
 ## 1. 본인 변경을 보존하고 Source를 대조

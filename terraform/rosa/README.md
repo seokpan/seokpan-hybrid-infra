@@ -1,5 +1,7 @@
 # ROSA Classic Root — TH-10 구현·실행 계약
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 원본 작업은 [Infra #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)다. [PR #27](https://github.com/seokpan/seokpan-hybrid-infra/pull/27)의 [제한 입력·실행 인계 계약](INPUT_CONTRACT.md)을 소비하는 HCL이다. 작성/지정 실행은 정태훈, 기반 Network/IAM 리뷰는 이유빈이며 Data/Registry 전용 의미는 C/D와 대조한다. TH-11 관리·TH-12/13 실행·TH-16 재생성·TH-19 최종 보존/정리 책임은 원본 Issue와 계약에 유지한다. 공개 승인 [03 §3-F](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/03_DETAILED_DESIGN.md)와 [04](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/design/04_IMPLEMENTATION_READINESS.md)를 정적 Source로 연결한다. 개인 계획 TH-10은 별도 제공된 Project Source이며 공개 저장소에 게시되지 않은 근거다. 예시의 `INPUT_REQUIRED`를 임의 값으로 바꿔 실행하지 않는다.
 
 ## 완료된 실행 범위 — 2026-10-16

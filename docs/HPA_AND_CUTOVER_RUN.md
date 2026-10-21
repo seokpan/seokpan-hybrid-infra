@@ -1,5 +1,7 @@
 # 별도 HPA 부하와 원본 중지·Dump GO 실행 연결
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 ## 범위와 실행 위치
 
 이 문서는 준비된 코드의 실제 입력·명령·판정·재개를 연결한다. 문서 작성이나 PR 게시가 실제 HPA/부하/원본 중지/ROSA 생성 지시를 대신하지 않는다. 재생성은 보류다. #85의 기동/복원과 #89의 고정 Replica 정상/롤링 계측은 변경하지 않는다.

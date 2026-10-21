@@ -1,5 +1,7 @@
 # 새 테스트 데이터 우선 Cloud 기동
 
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 ## 선택한 경로
 
 이번 실행은 1차 회원/게임 데이터를 가져오지 않고 새 테스트 데이터로 Cloud 앱을 기동한다. `data_mode: fresh_test`를 명시한다. VPN·원본 Backend 중지·PR156·덤프 GO·최종 Import는 이 경로의 선행 조건이 아니다. 기존 이관 경로는 `migrated` 또는 기존 입력 형식으로 유지하며 그 경로의 중지·Import 근거를 생략하지 않는다.

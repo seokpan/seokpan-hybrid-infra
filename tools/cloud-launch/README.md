@@ -1,45 +1,45 @@
-# Cloud �������⵿������ ����
+# Cloud 앱 기동·측정 실행 계약
 
-���� ROSA ����/���� ���� ������ ����� �� ���� �����̴�. �غ��� �ĺ��� **���� ���� Source�� Argo inline Kustomize ����� ���� ��ü ����**�� �����, ���� Data/���� SQL/���� Schema ����� ���� �� �� ���� Application�� �ݿ��Ѵ�. ROSA ������DB ���硤Secret ���ޡ����� Deployment apply�� ���� �ʴ´�.
+> **B 전수 대조 후속 — 2026-10-21:** B ROSA와 전용 잔존 자원·Snapshot4개 정리는 완료했다. 아래는 종료된 실행의 도구 계약이며 현재 재생성·Sync·SQL·부하 요청이 아니다. 실제 결과는 [앱·정상 시험](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_RUNTIME_AND_PROJECT_CLOSEOUT_20261020.md), [HPA 분석](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md), [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)를 따른다.
 
-## �غ� �Ϸ�� ���� ���� ����
+## 범위와 고정 소스
 
-- ���� GitOps `c75a4b5e3b3b9bae4ea7d8a431962cb9ca7308d7`�� 13�� blob�� Ȯ���Ѵ�. App/���� �̹����� ���� SQL������ ������ �ٲ��� �ʴ´�.
-- Backend/Frontend 1/1 �� 2/1 �� 3/3�� ���� Argo Source��8/8/10�� ��ü ���𡤹��� ���� ����� �Բ� �����. target�� ���� PDB2���л� ������ �����Ѵ�. SA�� `seokpan-cloud-runtime`�̸� ���� �ӽ� Pull ������ ���� �ʴ´�.
-- �� �ּҴ� `https://seokpan.<�� ingress_domain>`���� ���Ѵ�. FE/API/WS Route�� Allowed Origins�� ���� Host�� ����ϹǷ� A�� Recovery Host�� ��ٸ��� �ʴ´�.
-- ������ Release�� COMPLETE�� **�ĺ� �Է�/���� �ϰ�**�̴�. ����/���� ����� NOT RUN���� �����. Source ������ ��Ÿ�� PASS�� �ٲ��� �ʴ´�.
-- Pool2/overflow0/���5�ʡ�WS5���� �̹� �ʱ� ���� �ĺ���. ���� ���࿡�� ������ �����ؾ� �ϸ� ���ɡ�Pool ���� ������ ���� ���� �����.
-- ����/����/��ǥ �ܰ�� �ڵ����� ���� �⵿���� �ʴ´�. ���� ������ ���� ���� ������ ���� �ܰ��� �ٰŷ� �����Ѵ�. ������ ���� ������ ������ ���� �ܰ迡�� ���� �����ϸ� ���� ���� ������ ���ʿ��ϰ� ��ٸ��� �ʴ´�.
+ROSA 생성·복원과 분리된 앱 Source 준비 도구다. Argo inline Kustomize Source와 전체 객체 선언을 준비하고 실제 Data·목적 계정·Schema 근거를 받은 뒤 Application Source를 연결한다. Source 준비·명시 Sync·Ready·업무 성공을 구분한다.
 
-## ���� ��ġ�� �ʿ��� ����
+- GitOps 고정 개정은 `c75a4b5e3b3b9bae4ea7d8a431962cb9ca7308d7`이다. 기본 계약10개와 추가3개 blob을 대조한다.
+- `single/shared/target`의 Backend/Frontend 수는1/1·2/1·3/3이다. 객체 수는8/8/10이며 target은 PDB와 분산 정책을 포함한다.
+- Runtime ServiceAccount는 `seokpan-cloud-runtime`이다. 과거 임시 Pull 참조를 다시 붙이지 않는다.
+- 새 ingress에서 같은 Host로 FE/API/WS를 연결한다. Recovery Host는 Cloud 준비의 공통 선행 조건이 아니다.
+- Release COMPLETE는 입력·선언 일관성 판정이다. 실제 업무·성능 성공이 아니다.
+- 준비 Pool은2, overflow0, timeout5초이며 WS timeout은5분이다. 준비 후보·실제 채택·실측을 구분한다.
+- 이번 실행은 `fresh_test`다. Import·원본 쓰기 중지·VPN은 별도 이관 경로의 조건이다. 목적 계정·TLS·Schema 조건은 유지한다. [선택한 경로](../../docs/FRESH_TEST_CLOUD_RUN.md).
 
-Controller `jth` �͹̳ο��� ���� Infra checkout�� ����Ѵ�. Python3��PyYAML6.0.2��Kustomize5.7.1�� ���� ���� `tjung03` kubeconfig�� �ʿ��ϴ�. Python�� �ʿ��� ���̺귯���� ���ٸ� Controller �غ� �ܰ迡�� ���� ����ȯ�濡 `requirements.txt`�� ��ġ�Ѵ�. ROSA ���� �� ���� ��ġ�� ��ٸ��� �ʴ´�. `--execute`�� ���� stage/readback�� ���� package �˻縸 �ϸ� ��Ʈ��ũ0�̴�.
+## 환경과 입력
 
-���� ����/������ `scripts/rosa-recreate-resume.sh`���� ������ �����Ѵ�. **�� ������ �Ʒ� ������ ����� ���ð� �ƴϴ�.** ���� ����� ������ �����Ѵ�. ���� Git���� �������̼��� �Է� Ʋ�� �����ϸ� ���� �Է�/����� ���� ��ȣ ���͸��� �д�.
+당시 Controller의 기존 Infra checkout, Python3·PyYAML6.0.2·Kustomize5.7.1과 개인 kubeconfig를 사용했다. ROSA 생성·복원 진입점은 `scripts/rosa-recreate-resume.sh`다. 실제 입력·Token·보호 결과물은 Git 밖에 둔다. 아래 경로는 형식 예시이며 현재 실행 요청이 아니다.
 
-## 1. ���� �� �� �ִ� ���� ��� ��ȸ
+## 1. 기존 입력 위치 조회
 
-�� ROSA ���� ������ �� ������ ���� ���� ����/���Ḹ �д´�. ������ص���AWS���α��� �˻縦 �ݺ����� �ʴ´�.
+기존 설정과 파일 위치만 읽는다. ROSA·AWS·SQL 검사는 실행하지 않는다.
 
 ```bash
 python3 -I tools/cloud-launch/cloud_launch.py inspect \
-  --config "$HOME/.local/share/seokpan-rosa-plan-inputs-5psj2l62/rosa-reconstruction-preparation-0kqodl8m/rosa-lifecycle.json" \
+  --config /private/rosa-lifecycle.json \
   --receipt /private/new-controller-input-index.json
 ```
 
-## 2. ���� ���� ��롤���� ���� Ȯ��
+## 2. 비용·가동시간 대조
 
-`launch-inputs.TEMPLATE.NOT_ACCEPTED.json`�� ��ȣ ��ġ�� �����ϰ� ���� �ڷῡ�� ���� ���� ä���. `352.31`�� A�� �� �ܿ�147.69���� ������ �ȳ� ���ذ��̸� �ǽð� û�� Ȯ�ΰ��� �ƴϴ�. �� �ֽ��� ������ ������ �� ���� ����. �̹ݿ�/������ �������ð��� ���� ������������ ����������/���� �ð� ������ �𸣸� null�� 0���� �ٲ��� �ʴ´�.
+`launch-inputs.TEMPLATE.NOT_ACCEPTED.json`을 별도 보호 위치에 복사해 실제 근거를 연결한다. 과거 안내 금액·계획액은 최신 청구 확정값이 아니다. 누락 비용·시간을0으로 바꾸지 않는다.
 
 ```bash
-# �� Cluster ���� ��� �־ ��� ����� ���� �����ϴ�. �ڿ� ���� ����.
 python3 -I tools/cloud-launch/cloud_launch.py budget \
   --inputs /private/launch-inputs.json --receipt /private/new-budget-estimate.json
 ```
 
-`���� �ȳ��� + �̹ݿ�/������ ���� + �ð��� ���� ���� �� (����~���� ���� �ð� + ���� �ð� ����) + ������ ����`�� ����450 ��ȹ���� ������ �ߴ��Ѵ�. 500 �ѵ��� �ø��� �ʴ´�. �̴� ���޵� ����ġ�� ���� ����̸� **�ǽð� ��� ���á��ڵ� �������ڵ� ���������� �� �Ϸ� ���� ����� �ƴϴ�.** ���� ���� �ð��� �߰� ������ ���߰�, ���Ÿ� ������ �� �ش� �������� ����/���� �Ǵ��� �����Ѵ�.
+기준금액·미반영 비용·시간당 추정과 사용/정리 시간을 합산해450달러 계획선을 대조한다.500달러 한도를 올리지 않는다. 추정 통과는 실시간 청구 보장·자동 종료·실제 종료 완료가 아니다.
 
-## 3. �� ���� ���� �� ���� ���� ���� ���� ����
+## 3. 고정 Source로 패키지 준비
 
 ```bash
 python3 -I tools/cloud-launch/cloud_launch.py prepare \
@@ -49,38 +49,30 @@ python3 -I tools/cloud-launch/cloud_launch.py prepare \
   --out /private/new-launch-package
 ```
 
-����� `single/shared/target.source.json`, `*.desired.json`, `*.release.json`, `package.json`�̴�. ���� ���뿡�� ConfigMap �ؽÿ� Backend ������ �����ϸ�, ���� Data ��й�ȣ�� CA/Token ���� �аų� ���� �ʴ´�. 13�� ���� ������ �ٲ���ų� ���� Host/�� ID/��ȣ ��ü UID�� ������ �غ� �ߴ��Ѵ�.
+각 단계의 `source.json`·`desired.json`·`release.json`과 `package.json`을 만든다. 실제 비밀번호·CA·Token을 읽거나 출력하지 않는다. 원본 blob이 다르면 최신 파일로 자동 대체하지 않는다.
 
-## 4. ���� Data ��� �� Application ���� ����
+## 4. 실제 Data 근거와 Source 연결
 
-`execution-evidence.TEMPLATE.NOT_ACCEPTED.json`���� ���� ���� ��� ������ ��ġ�� �ִ´�. �� �������� A/D���� �䱸���� �ʴ´�.
-
-- ���� final-data-handoff: ������ ������ ����/����������/Schema�� ���� �� ���� ���� ���.
-- ���� post_import_new_cluster ���/target: �̹� �� Cluster�� ���� ���� �б� ����. SQL�� �ٽ� �����Ű�� ������ �ƴϴ�.
-- Migration current `20260902_0002`�� ���� �ٰ�. Schema ���̰� ������ upgrade�� �ݺ����� �ʴ´�.
-- captured ��ȯ/���� ������ �з��� �ʱ� Pool �ĺ� ������ ���� ����. ���� Redis Ű�� �ϰ� �����ϰų� ��带 ���� �����Ű�� �ʴ´�.
+`execution-evidence.TEMPLATE.NOT_ACCEPTED.json`에 기존 결과의 경로를 연결한다. `fresh_test`는 현재 빈 Schema 관측·목적 계정/TLS·Schema 준비·앱 모드를 확인한다. 별도 이관 경로는 최종 Import/비교 근거를 요구한다. Migration current `20260902_0002`와 Pool·상태 전환 근거를 연결하며 완료한 SQL·upgrade를 반복하지 않는다.
 
 ```bash
-# ���� ���� ���� ������ ���� ���� �˻縸 �Ѵ�.
+# 기본 호출은 로컬 패키지만 확인한다.
 python3 -I tools/cloud-launch/cloud_launch.py stage \
   --package /private/new-launch-package --stage single \
   --evidence /private/execution-evidence.json \
   --kubeconfig /private/current-personal-kubeconfig \
   --receipt /private/new-stage-single.json
-
-# ���� �� ������ �����ϱ�� �� �ڿ��� ���� ���ɿ� --execute �߰�.
-# --execute�� Application Source ���Ÿ� �ϸ� Sync/�� �⵿�� ���� �ʴ´�.
 ```
 
-���� ������ API/Namespace����ȣ ��ü4�� UID������ ��ü��App ����/���� ������ Ȯ���ϰ� UID/resourceVersion/spec�� �������� Source�� patch�Ѵ�. ���� kubeconfig�� ������ �ڰ����� ��ü�ϰų� ������ �߰����� �ʴ´�. ���� ǥ�� �� ����/timeout�̸� ���� marker/�α׸� �����ϰ� ������� �����Ѵ�. ���� ������ �� receipt �̸����� �ٲپ� ������ ��õ����� �ʴ´�.
+위 명령에서 --execute를 생략하면 로컬 패키지 무결성만 확인한다. --evidence와 --kubeconfig로 지정한 파일을 읽거나 Data·목적 계정·TLS·Schema·현재 클러스터를 검사하지 않는다. 해당 실행 근거와 현재 대상 대조는 --execute 분기에서 수행한다.
 
-## 5. �� Argo Console���� ��ü ���� �� �� ���� �⵿
+당시 별도 허가된 Source 연결에만 `--execute`를 사용했다. API·Namespace·보호 객체 UID·개인 계정과 Application을 대조한 뒤 UID/resourceVersion/spec 조건부 패치를 수행한다. Source 연결은 Sync·앱 기동이 아니다. 결과 불명·timeout에서 변경 명령을 자동 재시도하지 않는다.
 
-stage ���� receipt�� `console_file`�� �� Argo ȭ���� ������ ������ Console�� �ٿ� �ִ´�. �⺻ `SYNC_NOW = false`�� GET �񱳻��̴�. �̹� �� Ȱ�� ������ ���ϴ� ���̸� ���� �� ���� ���� ���� �ݺ��� �ƴϴ�.
+## 5. Argo 명시 비교와 Sync
 
-���� �ش� �ܰ� �⵿�� ������ �� `SYNC_NOW = true`�� �ٲپ� �����ϰ� Ȯ��â�� �����Ѵ�. �񱳰� �ٸ��� POST���� �ʴ´�. ��ġ�ϸ� ����8�� �Ǵ�10���� Sync ��û�ϸ� prune=false��retry0�̴�. ���� ����� ��û �����̸� ���� Ready/���� ������ �ƴϴ�. 504/���� ��Ȯ�� �� ���������� �ʴ´�. ���� ������ session�� ���� ǥ���� ���´�. ����/�ٸ� ������������ �ߺ� ������� �����ϴ� ��ġ�� �ƴϹǷ� ���� Application operation���� �����Ѵ�.
+stage receipt의 `console_file`을 해당 Argo 브라우저 Console에서 사용한다. `SYNC_NOW = false`는 GET 비교만 수행한다. 당시 실제 기동을 선택한 경우에만 `true`와 확인창 승인을 사용했다. Source·전체 객체가 일치해야 지정8개 또는10개만 Sync하며 prune=false, retry0을 유지한다. 제출 성공은 Ready나 외부 업무 성공이 아니다.
 
-## 6. ���� Ready Ȯ�ΰ� ���� �Է� ����
+## 6. Ready와 측정 입력
 
 ```bash
 python3 -I tools/cloud-launch/cloud_launch.py readback \
@@ -89,9 +81,7 @@ python3 -I tools/cloud-launch/cloud_launch.py readback \
   --receipt /private/new-single-ready.json
 ```
 
-���� Source/8~10�� inventory��Synced/Healthy��Deployment ����/���� �̹����� ����/���� Replica��Route Admitted�� �д´�. ������� `PASS_CLOUD_STAGE_READY_NOT_BUSINESS_ACCEPTANCE`��. HTTP/������Pool ������WS������ ���¸� �� ��ȸ������ �Ϸ����� �ʴ´�.
-
-��ǥ ���� ������ ������ �� ���� �������� ���� ���� ���� �Է��� �����.
+같은 Source·객체·Synced/Healthy·이미지/설정·Replica·Route Admitted를 대조한다. `PASS_CLOUD_STAGE_READY_NOT_BUSINESS_ACCEPTANCE`는 외부 업무 성공과 다르다.
 
 ```bash
 python3 -I tools/cloud-launch/cloud_launch.py measurement \
@@ -100,28 +90,12 @@ python3 -I tools/cloud-launch/cloud_launch.py measurement \
   --normal-business-ref RUN_ACTUAL_NORMAL_BUSINESS \
   --receipt /private/new-measurement-plan.json
 
-# ���� ���� ���� ������ ���� �Է� �˻�. ������/HTTP ����.
 node tools/cloud-measurement/run-cloud-measurement.mjs \
   --plan /private/new-measurement-plan.json
-
-# ���� ���� ���� �ÿ��� --execute --out /private/new-measurement-results �߰�.
 ```
 
-shared/target�� `--stage`�� �ٲٰ� ���� readback/���� ���� �ٰŸ� execution-evidence�� �����Ѵ�. target�� ���� ����/�ٸ� Pod ������ ������ �߰��Ѵ�. �ܰ躰 �� ������ ����ϸ� ���� ����� ����� �ʴ´�. �̹� ������ �ռ� ȸ���� ���� API�� ���� ���� �� �ִ�.
+정상6클라이언트·준비60초·관측180초와 별도 롤링/HPA 분모를 합치지 않는다. 최초 실행 시각을 놓쳤다면 나중에 계산으로 복원하지 않는다. 실행은 종료됐으며 명령 예시를 재실행하지 않는다.
 
-## ��ǥ�� �켱 �� ����
+## 문서 정정 범위
 
-1. ���� ���� ���� ª�� �ÿ�: �α��Ρ��桤��������ǥ������ ��� �ݿ�. ���� UI �ػ� ���� ����� ����.
-2. ���� 6Ŭ���̾�Ʈ/2��: �غ�60��+����180�ʿ��� HTTP p95/ù �õ� ����������ǥ ���ۡ�peer WS/UI p95������ ó������ǥ����/�ڿ� ����. ����/����/�� �غ�/���� �ð��� ��4�� ���̴�.
-3. �̹� �ʼ� �����/�������� �ڿ������� ����� ���� �ܰ躰 �ҿ�ð������� �� ���� ��������� ��� ���. �� ��ġ�� �������� �ٽ� ����/��������� �ʴ´�.
-
-12�� �߰�����ð����ִ� ����� �����پ��� ��֡���ü DR�� �켱 ���� ������ �߰����� �ʴ´�. ���� �̿Ϸ� �׸��� PARTIAL/NOT RUN���� ����� ��ü HA/DR/���� ���� �ϷḦ �������� �ʴ´�. ���� ��ǥ ����/�����̵�� �����̸� �� ����� �̹� ��� ���࿡�� ���� Ȯ���� ���ž��̴�.
-
-## ���� �� �ʿ��� �Է¸�
-
-- ���� Foundation �Է�/��¡�Data ���� �ڷ��� ��ȣ ��ġ/����, NAT/RDS/���� ����� ���� �غ� ����. ���� ��û�� �ݺ����� �ʴ´�.
-- ���� ��� ���� �ٰſ� ����/���� ���� �ð�, �̹ݿ�/���������� �ð� ����.
-- �� ROSA ID/API/Ingress��Namespace/Secret/CA UID������ kubeconfig. �ּҴ� ���⼭ �ڵ� �����Ѵ�.
-- ���� Data/���� SQL/Migration current��captured ��ȯ/Pool ���ð� �ܰ躰 ���� ���� ����� ���� ����/�ٰ�.
-
-Ű/��й�ȣ/Token�� ä���̳� Git�� ������ �ʴ´�. ���� �غ�� ���� ��������� �⵿��HTTP/WSS��������� ��� ������ ���� ���Ű� �ƴϴ�.
+최초 PR85에서 저장된 깨진 한글을 현재 코드·입력 계약에 맞는 UTF-8 한국어로 다시 작성했다. 실행 코드·고정 Source·이미지·기존 성공/실패 기록은 변경하지 않았다. 원본 바이트는 Git 이력에 남는다.

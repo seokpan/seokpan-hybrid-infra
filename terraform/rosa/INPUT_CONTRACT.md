@@ -1,5 +1,9 @@
 # ROSA 후속 HCL 수신계약
 
+> **잔여 체크 표현 정리 — 2026-10-21:** 미체크 문구는 실제 수행/미수행 사실을 바꾸지 않고 일반 기록 또는 재사용 조건으로 표시했다. [변경 전 체크 원문](https://github.com/seokpan/seokpan-hybrid-infra/blob/12b1425b9fe02e2e05824a1c92fb3fdf62e5a3a6/terraform/rosa/INPUT_CONTRACT.md)은 해당 고정 커밋에 보존한다. 현재 실행 대기나 전체 목표 달성률이 아니며 [원 계획별 변경·최종 판정·영향](https://github.com/seokpan/seokpan-hybrid-docs/pull/140)을 따른다.
+
+> **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
+
 이 문서는 승인된 **비밀값이 아닌 필요한 출력만 전달하는 경로**를 rosa HCL 구현에 연결하는 계약이다. PR #28의 HCL 변수·형식 검사·Root Lock은 병합된 Source이며, 설치 입력의 실제 소비·Plan/Apply·Ready와 Data Binding2개 적용은 [원 실행 #25](https://github.com/seokpan/seokpan-hybrid-infra/issues/25)·[10/16 완결 결과 문서 PR](https://github.com/seokpan/seokpan-hybrid-docs/pull/134)에 연결한다. 계약/정적 검사와 실제 수락을 구분하며 최종 인계 metadata·재생성·전체 비용의 미충족 복합 조건은 유지한다. 보호 파일 위치·값을 공개 예시에 복사하지 않는다.
 
 - 작성/소비: 정태훈(tjung03)
@@ -42,12 +46,12 @@ App 설정용 DB/Redis Endpoint·CA·Secret 논리 참조는 그 소비 작업�
 
 [A의 #23 답변](https://github.com/seokpan/seokpan-hybrid-infra/issues/23#issuecomment-5951505800)은 Worker ECR Pull을 별도 미완료로 남겼다. Registry/CI 권한 PR #21 병합·Bootstrap Apply 보고와 구분한다.
 
-- [ ] 실제 Classic Worker Role·Prefix·공유 Cluster 범위와 지원 연결 방식을 A/B가 대조했다.
-- [ ] 지정 FE/BE ECR Pull Policy와 Attachment의 단일 foundation Owner·필요 출력·후속 PR 범위를 확인했다.
-- [ ] rosa 서비스/기반 조회에 필요한 목적 Role 권한 차이를 A 소유 bootstrap 변경과 리뷰·인계했다. Backend 권한만으로 실행 준비가 완료됐다고 기록하지 않았다.
-- [ ] Data SG 본체·기반 Rule과 rosa 종속 Binding의 Resource/Owner 경계를 확인했다.
-- [ ] Cluster 삭제 전 Binding 해제·기반 보존, 새 Worker SG 연결과 foundation/rosa 양쪽 정상 Plan의 T19/IM-03 Case를 연결했다.
-- [ ] 새 Worker/캐시 없는 Pull, 12시간 이상 지속 사용 뒤 새 Pull, Clean Recreate 후 Pull을 T21에 연결했다. 미수행 Case는 NOT RUN/PARTIAL로 남겼다.
+- 실제 Classic Worker Role·Prefix·공유 Cluster 범위와 지원 연결 방식을 A/B가 대조했다.
+- 지정 FE/BE ECR Pull Policy와 Attachment의 단일 foundation Owner·필요 출력·후속 PR 범위를 확인했다.
+- rosa 서비스/기반 조회에 필요한 목적 Role 권한 차이를 A 소유 bootstrap 변경과 리뷰·인계했다. Backend 권한만으로 실행 준비가 완료됐다고 기록하지 않았다.
+- Data SG 본체·기반 Rule과 rosa 종속 Binding의 Resource/Owner 경계를 확인했다.
+- Cluster 삭제 전 Binding 해제·기반 보존, 새 Worker SG 연결과 foundation/rosa 양쪽 정상 Plan의 T19/IM-03 Case를 연결했다.
+- 새 Worker/캐시 없는 Pull, 12시간 이상 지속 사용 뒤 새 Pull, Clean Recreate 후 Pull을 T21에 연결했다. 미수행 Case는 NOT RUN/PARTIAL로 남겼다.
 
 현재 Policy/Attachment 구현·Apply·Pull 검증은 이 체크리스트의 작성으로 완료되지 않는다. 필요한 제품/Resource 충돌이 실제로 발견되면 승인 기준을 자동 변경하지 않고 근거·영향·변경 결정을 원래 작업 기록에 연결한다.
 
