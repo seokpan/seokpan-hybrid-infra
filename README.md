@@ -1,5 +1,7 @@
 # seokpan-hybrid-infra
 
+> **잔여 체크 표현 정리 — 2026-10-21:** 미체크 문구는 실제 수행/미수행 사실을 바꾸지 않고 일반 기록 또는 재사용 조건으로 표시했다. [변경 전 체크 원문](https://github.com/seokpan/seokpan-hybrid-infra/blob/12b1425b9fe02e2e05824a1c92fb3fdf62e5a3a6/README.md)은 해당 고정 커밋에 보존한다. 현재 실행 대기나 전체 목표 달성률이 아니며 [원 계획별 변경·최종 판정·영향](https://github.com/seokpan/seokpan-hybrid-docs/pull/140)을 따른다.
+
 > **B 전수 대조 후속 — 2026-10-21:** [최종 종료](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/B_ROSA_FINAL_CLOSEOUT_20261021.md)와 [실제 시험 결과](https://github.com/seokpan/seokpan-hybrid-docs/blob/main/execution/HPA_ATTEMPT04_VERIFIED_RESULTS_20261021.md)를 우선한다. B ROSA·정확한 소유 범위 잔존 자원·Snapshot4개 정리는 완료다. 아래 절차·입력 대기·명령은 작성 당시 기록 또는 재사용 계약이며 현재 재실행 요청이 아니다. A 자원과 다른 담당의 종료는 판정하지 않는다. [전체 대조](https://github.com/seokpan/seokpan-hybrid-docs/pull/140).
 
 석판(Seokpan) 2차 프로젝트 — **B1: Cloud Primary + On-Prem Restore-based Recovery** 인프라 저장소
@@ -225,7 +227,7 @@ cd ../.. && source scripts/tf-session.sh clear
 
 후속 foundation / rosa 서비스·IAM 권한 변경 PR 확인 항목:
 
-- [ ] `terraform/bootstrap/iam.tf`의 현재 권한 설명과 이 README의 Role 권한 표를 같은 PR에서 갱신하고, 실제 Policy와 대조합니다. ROSA 서비스 권한 추가 시 위 표의 ‘아직 없음’도 함께 수정합니다.
+- `terraform/bootstrap/iam.tf`의 현재 권한 설명과 이 README의 Role 권한 표를 같은 PR에서 갱신하고, 실제 Policy와 대조합니다. ROSA 서비스 권한 추가 시 위 표의 ‘아직 없음’도 함께 수정합니다.
 
 ## 버전 기준
 
